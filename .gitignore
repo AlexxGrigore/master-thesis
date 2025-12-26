@@ -3,5 +3,4 @@ paint_workspace/
 metadata_only/
 scenarios/
 paint_data/
-outputs/training_loss.png
-outputs/motor_predictor_model.pt
+outputs/
