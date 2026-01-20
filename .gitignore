@@ -1,6 +1,4 @@
-tutorials/
-paint_workspace/
-metadata_only/
+paint_dataset/
 scenarios/
-paint_data/
-outputs/
+*.png
+*.h5

@@ -1,0 +1,2 @@
+[2026-01-20 18:13:01][artist.runtime][INFO] - reconstruct_kinematic started
+[2026-01-20 18:13:03][artist.runtime][INFO] - reconstruct_kinematic finished in 1.450s
