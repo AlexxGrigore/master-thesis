@@ -347,7 +347,7 @@ print(f"\nUsing device: {device}")
 
 if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
-    print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_mem / 1e9:.2f} GB")
+    print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
 
 
 # ===================================================================
