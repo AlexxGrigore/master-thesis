@@ -6,6 +6,7 @@ from collections import defaultdict
 
 import h5py
 import matplotlib
+import numpy as np
 import pandas as pd
 import torch
 from matplotlib import pyplot as plt
@@ -104,13 +105,19 @@ def evaluate_flux_accuracy(
 ) -> dict:
     """
     Evaluate flux image prediction accuracy after kinematic reconstruction.
+    Errors are reported in both meters and milliradians (mrad).
     """
     from artist.util.utils import get_center_of_mass
     from artist.util import index_mapping
 
     all_pixel_losses = []
-    all_focal_spot_errors = []
+    all_focal_spot_errors_m = []
+    all_focal_spot_errors_mrad = []
     results_per_heliostat = {}
+
+    # Reference target center (mean over all target areas) used for distance computation.
+    # All heliostats aim at roughly the same tower, so this is a good approximation.
+    reference_target = scenario.target_areas.centers[:, :3].mean(dim=0).to(device)
 
     for heliostat_group in scenario.heliostat_field.heliostat_groups:
         (
@@ -178,7 +185,27 @@ def evaluate_flux_accuracy(
         )
 
         focal_spot_error = torch.norm(predicted_focal_spots[:, :3] - focal_spots[:, :3], dim=1)
-        all_focal_spot_errors.extend(focal_spot_error.cpu().tolist())
+        all_focal_spot_errors_m.extend(focal_spot_error.cpu().tolist())
+
+        # Compute per-heliostat distances to the reference target for mrad conversion.
+        active_indices = torch.where(active_heliostats_mask.bool())[0]
+        active_positions = heliostat_group.positions[active_indices, :3].to(device)
+        distances = torch.norm(active_positions - reference_target.unsqueeze(0), dim=1)
+
+        # Build name -> distance lookup for per-heliostat results.
+        name_to_distance = {
+            heliostat_group.names[idx.item()]: dist.item()
+            for idx, dist in zip(active_indices, distances)
+        }
+
+        # Repeat distances to match number of focal spot error samples
+        # (there may be multiple measurements per heliostat).
+        num_active = active_indices.shape[0]
+        num_focal_spots = focal_spot_error.shape[0]
+        samples_per_heliostat = max(num_focal_spots // num_active, 1)
+        distances_per_sample = distances.repeat_interleave(samples_per_heliostat)[:num_focal_spots]
+        focal_spot_error_mrad = (focal_spot_error / distances_per_sample) * 1000.0
+        all_focal_spot_errors_mrad.extend(focal_spot_error_mrad.cpu().tolist())
 
         heliostat_names = [
             name for name, _, _ in heliostat_data_mapping
@@ -186,17 +213,30 @@ def evaluate_flux_accuracy(
         ]
         for i, name in enumerate(heliostat_names):
             if i < len(pixel_loss):
+                fse_m = focal_spot_error[i].item() if i < len(focal_spot_error) else None
+                dist_m = name_to_distance.get(name)
+                fse_mrad = (fse_m / dist_m * 1000.0) if (fse_m is not None and dist_m) else None
                 results_per_heliostat[name] = {
                     "pixel_mse": pixel_loss[i].item(),
-                    "focal_spot_error_m": focal_spot_error[i].item() if i < len(focal_spot_error) else None,
+                    "focal_spot_error_m": fse_m,
+                    "focal_spot_error_mrad": fse_mrad,
+                    "distance_to_target_m": dist_m,
                 }
 
+    def _safe_mean(lst):
+        return sum(lst) / len(lst) if lst else float("inf")
+
     metrics = {
-        "mean_pixel_mse": sum(all_pixel_losses) / len(all_pixel_losses) if all_pixel_losses else float("inf"),
-        "mean_focal_spot_error_m": sum(all_focal_spot_errors) / len(all_focal_spot_errors) if all_focal_spot_errors else float("inf"),
-        "max_focal_spot_error_m": max(all_focal_spot_errors) if all_focal_spot_errors else float("inf"),
-        "min_focal_spot_error_m": min(all_focal_spot_errors) if all_focal_spot_errors else float("inf"),
+        "mean_pixel_mse": _safe_mean(all_pixel_losses),
+        "mean_focal_spot_error_m": _safe_mean(all_focal_spot_errors_m),
+        "max_focal_spot_error_m": max(all_focal_spot_errors_m) if all_focal_spot_errors_m else float("inf"),
+        "min_focal_spot_error_m": min(all_focal_spot_errors_m) if all_focal_spot_errors_m else float("inf"),
+        "mean_focal_spot_error_mrad": _safe_mean(all_focal_spot_errors_mrad),
+        "max_focal_spot_error_mrad": max(all_focal_spot_errors_mrad) if all_focal_spot_errors_mrad else float("inf"),
+        "min_focal_spot_error_mrad": min(all_focal_spot_errors_mrad) if all_focal_spot_errors_mrad else float("inf"),
         "num_samples_evaluated": len(all_pixel_losses),
+        "all_errors_m": all_focal_spot_errors_m,
+        "all_errors_mrad": all_focal_spot_errors_mrad,
         "per_heliostat": results_per_heliostat,
     }
     return metrics
@@ -298,6 +338,37 @@ def visualize_flux_comparison(
                 break
 
     print(f"Visualized {samples_visualized} flux comparison images")
+
+
+def plot_tracking_error_histogram(
+    errors_mrad: list[float],
+    output_path: pathlib.Path,
+    title: str = "Tracking Error Distribution",
+) -> None:
+    """
+    Plot a histogram of tracking errors in mrad with a Gaussian fit overlay.
+    Mirrors the style used in Tristan's paper.
+
+    Parameters
+    ----------
+    errors_mrad : list[float]
+        All per-sample tracking errors in milliradians.
+    output_path : pathlib.Path
+        Where to save the PNG.
+    title : str
+        Plot title.
+    """
+    errors = np.array(errors_mrad)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.hist(errors, bins=30, edgecolor="black", alpha=0.7, color="steelblue")
+    ax.set_xlabel("Tracking Error (mrad)", fontsize=13)
+    ax.set_ylabel("Absolute Frequency", fontsize=13)
+    ax.set_title(title, fontsize=14)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved tracking error histogram to {output_path}")
 
 
 # ===================================================================
@@ -427,20 +498,20 @@ scheduler_parameters = {
     config_dictionary.gamma: 0.9,
     config_dictionary.min: 1e-6,
     config_dictionary.max: 1e-3,
-    config_dictionary.reduce_factor: 0.1,
-    config_dictionary.patience: 5,
+    config_dictionary.reduce_factor: 0.5,   # less aggressive than 0.1 over 100 epochs
+    config_dictionary.patience: 10,          # wait longer before reducing LR
     config_dictionary.threshold: 1e-4,
-    config_dictionary.cooldown: 3,
+    config_dictionary.cooldown: 5,           # longer cooldown after each LR reduction
 }
 
 optimization_configuration = {
     config_dictionary.initial_learning_rate: 0.0005,
     config_dictionary.tolerance: 0.0001,
-    config_dictionary.max_epoch: 20,
+    config_dictionary.max_epoch: 100,
     config_dictionary.batch_size: 8,
-    config_dictionary.log_step: 5,
+    config_dictionary.log_step: 10,          # log every 10 epochs
     config_dictionary.early_stopping_delta: 1e-5,
-    config_dictionary.early_stopping_patience: 7,
+    config_dictionary.early_stopping_patience: 20,  # allow more epochs before stopping
     config_dictionary.scheduler: scheduler,
     config_dictionary.scheduler_parameters: scheduler_parameters,
 }
@@ -576,10 +647,10 @@ print("\n" + "=" * 60)
 print("TEST SET EVALUATION RESULTS")
 print("=" * 60)
 print(f"Number of samples evaluated: {test_metrics['num_samples_evaluated']}")
-print(f"Mean pixel MSE: {test_metrics['mean_pixel_mse']:.6f}")
-print(f"Mean focal spot error: {test_metrics['mean_focal_spot_error_m']:.4f} m")
-print(f"Min focal spot error: {test_metrics['min_focal_spot_error_m']:.4f} m")
-print(f"Max focal spot error: {test_metrics['max_focal_spot_error_m']:.4f} m")
+print(f"Mean pixel MSE:              {test_metrics['mean_pixel_mse']:.6f}")
+print(f"Mean focal spot error:       {test_metrics['mean_focal_spot_error_m']:.4f} m  |  {test_metrics['mean_focal_spot_error_mrad']:.2f} mrad")
+print(f"Min focal spot error:        {test_metrics['min_focal_spot_error_m']:.4f} m  |  {test_metrics['min_focal_spot_error_mrad']:.2f} mrad")
+print(f"Max focal spot error:        {test_metrics['max_focal_spot_error_m']:.4f} m  |  {test_metrics['max_focal_spot_error_mrad']:.2f} mrad")
 print("=" * 60)
 
 # Display per-heliostat results
@@ -593,6 +664,14 @@ if test_metrics["per_heliostat"]:
 # ===================================================================
 # Visualize Flux Comparisons
 # ===================================================================
+
+print("\nGenerating tracking error histogram...")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+plot_tracking_error_histogram(
+    errors_mrad=test_metrics["all_errors_mrad"],
+    output_path=OUTPUT_DIR / "tracking_error_histogram.png",
+    title="Heliostat Tracking Error Distribution (Test Set)",
+)
 
 print("\nGenerating flux comparison visualizations...")
 
@@ -613,35 +692,46 @@ visualize_flux_comparison(
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# ---- Kinematic parameters ----
 print("\nSaving optimized kinematic parameters...")
-kinematic_params_dir = OUTPUT_DIR / "kinematic_parameters"
-kinematic_params_dir.mkdir(parents=True, exist_ok=True)
-
-all_kinematic_params = {}
+all_kinematic_params_json = {}
 for group_index, heliostat_group in enumerate(scenario.heliostat_field.heliostat_groups):
     group_name = f"group_{group_index}"
-    group_params = {
-        "rotation_deviation_parameters": heliostat_group.kinematic.rotation_deviation_parameters.detach().cpu(),
-        "actuator_parameters": heliostat_group.kinematic.actuators.optimizable_parameters.detach().cpu(),
+    all_kinematic_params_json[group_name] = {
         "heliostat_names": heliostat_group.names,
+        "rotation_deviation_parameters": heliostat_group.kinematic.rotation_deviation_parameters.detach().cpu().tolist(),
+        "actuator_parameters": heliostat_group.kinematic.actuators.optimizable_parameters.detach().cpu().tolist(),
     }
-    all_kinematic_params[group_name] = group_params
-    torch.save(group_params, kinematic_params_dir / f"{group_name}_kinematic_params.pt")
 
-torch.save(all_kinematic_params, OUTPUT_DIR / "all_kinematic_parameters.pt")
-print(f"Saved kinematic parameters to {OUTPUT_DIR / 'all_kinematic_parameters.pt'}")
+kinematic_params_file = OUTPUT_DIR / "all_kinematic_parameters.json"
+with open(kinematic_params_file, "w") as f:
+    json.dump(all_kinematic_params_json, f, indent=2)
+print(f"Saved kinematic parameters to {kinematic_params_file}")
 
-# Save metrics
+# ---- Final training losses ----
+loss_values = final_loss_per_heliostat.tolist()
+losses_json = {
+    "per_heliostat_index": {
+        str(i): (None if v == float("inf") else v)
+        for i, v in enumerate(loss_values)
+    },
+    "summary": {
+        "num_trained": int(len(valid_losses)),
+        "mean": float(valid_losses.mean().item()),
+        "min": float(valid_losses.min().item()),
+        "max": float(valid_losses.max().item()),
+        "std": float(valid_losses.std().item()),
+    },
+}
+losses_file = OUTPUT_DIR / "final_loss_per_heliostat.json"
+with open(losses_file, "w") as f:
+    json.dump(losses_json, f, indent=2)
+print(f"Saved final losses to {losses_file}")
+
+# ---- Test metrics ----
 metrics_file = OUTPUT_DIR / "test_metrics.json"
 with open(metrics_file, "w") as f:
-    serializable_metrics = {k: v for k, v in test_metrics.items() if k != "per_heliostat"}
-    serializable_metrics["per_heliostat"] = test_metrics["per_heliostat"]
-    json.dump(serializable_metrics, f, indent=2)
-
+    json.dump(test_metrics, f, indent=2)
 print(f"Saved metrics to {metrics_file}")
-
-# Save final losses
-torch.save(final_loss_per_heliostat, OUTPUT_DIR / "final_loss_per_heliostat.pt")
-print(f"Saved final losses to {OUTPUT_DIR / 'final_loss_per_heliostat.pt'}")
 
 print("\nDone!")
