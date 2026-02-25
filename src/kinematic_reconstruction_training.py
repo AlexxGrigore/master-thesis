@@ -1,3 +1,4 @@
+import datetime
 import json
 import logging
 import pathlib
@@ -12,13 +13,12 @@ import torch
 from matplotlib import pyplot as plt
 
 import paint.util.paint_mappings as paint_mappings
-from artist.core.heliostat_ray_tracer import HeliostatRayTracer
-from artist.core.kinematic_reconstructor import KinematicReconstructor
 from artist.core.loss_functions import FocalSpotLoss
 from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
 from artist.scenario.scenario import Scenario
 from artist.util import config_dictionary, set_logger_config
 from artist.util.environment_setup import get_device, setup_distributed_environment
+from artist_extensions.kinematic_reconstructors import WortbergKinematicReconstructor
 
 # Set random seeds for reproducibility
 torch.manual_seed(42)
@@ -384,11 +384,20 @@ if IS_ON_DAIC:
     BENCHMARK_DIR = pathlib.Path("/tudelft.net/staff-umbrella/StudentsCVlab/agrigore/src/paint_benchmarks")
 else:
     BASE_DIR = pathlib.Path.cwd().parent
-    BENCHMARK_DIR = BASE_DIR / "src" / "paint_benchmarks"
+    BENCHMARK_DIR = BASE_DIR / "datasets" / "paint_benchmarks"
 
 BENCHMARK_NAME = "benchmark_split-balanced_train-10_validation-30"
 SCENARIO_PATH = BASE_DIR / "scenarios" / "all_heliostats_scenario" / "all_heliostats_scenario.h5"
-OUTPUT_DIR = BASE_DIR / "src" / "kinematic_reconstruction_results"
+_run_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+OUTPUT_DIR = BASE_DIR / "outputs" / f"kin_recon_{_run_timestamp}"
+
+# Attach a file handler to the ARTIST logger so all training logs are persisted.
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+_log_file_handler = logging.FileHandler(OUTPUT_DIR / "training.log")
+_log_file_handler.setFormatter(
+    logging.Formatter("[%(asctime)s][%(name)s][%(levelname)s] - %(message)s")
+)
+logging.getLogger("artist").addHandler(_log_file_handler)
 
 BENCHMARK_CSV = BENCHMARK_DIR / "splits" / f"{BENCHMARK_NAME}.csv"
 CALIBRATION_PROPERTIES_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "calibration_properties"
@@ -509,7 +518,7 @@ optimization_configuration = {
     config_dictionary.tolerance: 0.0001,
     config_dictionary.max_epoch: 100,
     config_dictionary.batch_size: 8,
-    config_dictionary.log_step: 10,          # log every 10 epochs
+    config_dictionary.log_step: 5,           # log every 5 epochs
     config_dictionary.early_stopping_delta: 1e-5,
     config_dictionary.early_stopping_patience: 20,  # allow more epochs before stopping
     config_dictionary.scheduler: scheduler,
@@ -547,7 +556,7 @@ try:
             print(f"GPU memory allocated: {torch.cuda.memory_allocated(device) / 1e9:.2f} GB")
             print(f"GPU memory reserved: {torch.cuda.memory_reserved(device) / 1e9:.2f} GB")
 
-        kinematic_reconstructor = KinematicReconstructor(
+        kinematic_reconstructor = WortbergKinematicReconstructor(
             ddp_setup=ddp_setup,
             scenario=scenario,
             data=data,
