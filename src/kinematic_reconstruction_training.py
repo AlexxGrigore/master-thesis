@@ -13,6 +13,7 @@ import torch
 from matplotlib import pyplot as plt
 
 import paint.util.paint_mappings as paint_mappings
+from artist.core.heliostat_ray_tracer import HeliostatRayTracer
 from artist.core.loss_functions import FocalSpotLoss
 from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
 from artist.scenario.scenario import Scenario
