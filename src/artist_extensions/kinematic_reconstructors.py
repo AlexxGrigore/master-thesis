@@ -8,6 +8,8 @@ stay thin and only deal with data loading and configuration.
 """
 
 import logging
+from collections import deque
+from typing import Deque
 
 import torch
 
@@ -18,6 +20,32 @@ from artist.util import config_dictionary, index_mapping
 from artist.util.environment_setup import get_device
 
 log = logging.getLogger(__name__)
+
+
+class EarlyStopping:
+    """Local EarlyStopping for compatibility with older ARTIST installs."""
+
+    def __init__(self, window_size=10, patience=20, min_improvement=1e-4, relative=True, eps=1e-8):
+        self.window_size = window_size
+        self.patience = patience
+        self.min_improvement = min_improvement
+        self.relative = relative
+        self.eps = eps
+        self.loss_history: Deque[float] = deque(maxlen=window_size)
+        self.counter = 0
+
+    def step(self, loss: float) -> bool:
+        self.loss_history.append(loss)
+        if len(self.loss_history) < self.window_size:
+            return False
+        improvement = self.loss_history[0] - self.loss_history[-1]
+        if self.relative:
+            improvement /= max(abs(self.loss_history[0]), self.eps)
+        if improvement > self.min_improvement:
+            self.counter = 0
+        else:
+            self.counter += 1
+        return self.counter >= self.patience
 
 
 class WortbergKinematicReconstructor(KinematicReconstructor):
@@ -303,7 +331,7 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
 
     def _setup_early_stopper(self):
         """Build and return the early stopping instance."""
-        return learning_rate_schedulers.EarlyStopping(
+        return EarlyStopping(
             window_size=self.optimization_configuration[config_dictionary.early_stopping_window],
             patience=self.optimization_configuration[config_dictionary.early_stopping_patience],
             min_improvement=self.optimization_configuration[config_dictionary.early_stopping_delta],
