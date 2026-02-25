@@ -7,3 +7,4 @@ src/paint_benchmarks/
 src/paint_benchmarks-old/
 datasets/*
 outputs/*
+src/paint_files/*
