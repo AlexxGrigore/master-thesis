@@ -519,6 +519,7 @@ optimization_configuration = {
     config_dictionary.max_epoch: 100,
     config_dictionary.batch_size: 8,
     config_dictionary.log_step: 5,           # log every 5 epochs
+    config_dictionary.early_stopping_window: 10,
     config_dictionary.early_stopping_delta: 1e-5,
     config_dictionary.early_stopping_patience: 20,  # allow more epochs before stopping
     config_dictionary.scheduler: scheduler,
