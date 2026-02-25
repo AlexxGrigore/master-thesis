@@ -397,7 +397,7 @@ _log_file_handler = logging.FileHandler(OUTPUT_DIR / "training.log")
 _log_file_handler.setFormatter(
     logging.Formatter("[%(asctime)s][%(name)s][%(levelname)s] - %(message)s")
 )
-logging.getLogger("artist").addHandler(_log_file_handler)
+logging.getLogger().addHandler(_log_file_handler)
 
 BENCHMARK_CSV = BENCHMARK_DIR / "splits" / f"{BENCHMARK_NAME}.csv"
 CALIBRATION_PROPERTIES_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "calibration_properties"
