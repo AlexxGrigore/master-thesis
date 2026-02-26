@@ -1,0 +1,205 @@
+import logging
+import pathlib
+from collections import defaultdict
+
+import pandas as pd
+import torch
+from artist.core.heliostat_ray_tracer import HeliostatRayTracer
+from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
+from artist.scenario.scenario import Scenario
+from artist.util import index_mapping
+from artist.util.utils import get_center_of_mass
+
+log = logging.getLogger(__name__)
+
+
+def build_heliostat_data_mapping(
+    benchmark_csv: pathlib.Path,
+    calibration_properties_dir: pathlib.Path,
+    flux_image_dir: pathlib.Path,
+    split: str = "train",
+) -> list[tuple[str, list[pathlib.Path], list[pathlib.Path]]]:
+    """
+    Build the heliostat_data_mapping from the benchmark CSV file.
+
+    Parameters
+    ----------
+    benchmark_csv : pathlib.Path
+        Path to the benchmark split CSV file.
+    calibration_properties_dir : pathlib.Path
+        Base directory containing calibration properties JSON files.
+    flux_image_dir : pathlib.Path
+        Base directory containing flux image PNG files.
+    split : str
+        Which split to use: "train", "validation", or "test".
+
+    Returns
+    -------
+    list[tuple[str, list[pathlib.Path], list[pathlib.Path]]]
+        List of tuples (heliostat_name, calibration_paths, flux_paths).
+    """
+    df = pd.read_csv(benchmark_csv)
+    df_split = df[df["Split"] == split]
+
+    log.info(f"Building heliostat_data_mapping for split '{split}'")
+    log.info(f"Total samples in split: {len(df_split)}")
+
+    heliostat_groups = defaultdict(list)
+    for _, row in df_split.iterrows():
+        measurement_id = row["Id"]
+        heliostat_id = row["HeliostatId"]
+        heliostat_groups[heliostat_id].append(measurement_id)
+
+    log.info(f"Number of unique heliostats: {len(heliostat_groups)}")
+
+    heliostat_data_mapping = []
+    for heliostat_id, measurement_ids in sorted(heliostat_groups.items()):
+        calibration_paths = []
+        flux_paths = []
+
+        for mid in measurement_ids:
+            cal_path = calibration_properties_dir / split / f"{mid}-calibration-properties.json"
+            flux_path = flux_image_dir / split / f"{mid}-flux.png"
+
+            if cal_path.exists() and flux_path.exists():
+                calibration_paths.append(cal_path)
+                flux_paths.append(flux_path)
+
+        if calibration_paths:
+            heliostat_data_mapping.append((heliostat_id, calibration_paths, flux_paths))
+
+    log.info(f"Built mapping for {len(heliostat_data_mapping)} heliostats")
+
+    return heliostat_data_mapping
+
+
+def evaluate_flux_accuracy(
+    scenario: Scenario,
+    heliostat_data_mapping: list[tuple[str, list[pathlib.Path], list[pathlib.Path]]],
+    data_parser: PaintCalibrationDataParser,
+    device: torch.device,
+    bitmap_resolution: torch.Tensor = torch.tensor([256, 256]),
+    ray_tracing_batch_size: int = 32,
+) -> dict:
+    """
+    Evaluate flux image prediction accuracy after kinematic reconstruction.
+
+    Returns a dict with min/mean/max focal spot errors in mrad, the sample
+    count, per-heliostat mrad errors, and the raw error list (needed for
+    histogram plotting but not persisted to JSON).
+    """
+    all_focal_spot_errors_m = []
+    all_focal_spot_errors_mrad = []
+    results_per_heliostat = {}
+
+    # Reference target center (mean over all target areas) used for distance computation.
+    # All heliostats aim at roughly the same tower, so this is a good approximation.
+    reference_target = scenario.target_areas.centers[:, :3].mean(dim=0).to(device)
+
+    for heliostat_group in scenario.heliostat_field.heliostat_groups:
+        (
+            measured_flux,
+            focal_spots,
+            incident_ray_directions,
+            _,
+            active_heliostats_mask,
+            target_area_mask,
+        ) = data_parser.parse_data_for_reconstruction(
+            heliostat_data_mapping=heliostat_data_mapping,
+            heliostat_group=heliostat_group,
+            scenario=scenario,
+            bitmap_resolution=bitmap_resolution,
+            device=device,
+        )
+
+        if active_heliostats_mask.sum() == 0:
+            continue
+
+        heliostat_group.activate_heliostats(
+            active_heliostats_mask=active_heliostats_mask,
+            device=device,
+        )
+
+        heliostat_group.align_surfaces_with_incident_ray_directions(
+            aim_points=scenario.target_areas.centers[target_area_mask],
+            incident_ray_directions=incident_ray_directions,
+            active_heliostats_mask=active_heliostats_mask,
+            device=device,
+        )
+
+        ray_tracer = HeliostatRayTracer(
+            scenario=scenario,
+            heliostat_group=heliostat_group,
+            blocking_active=False,
+            batch_size=min(heliostat_group.number_of_active_heliostats, ray_tracing_batch_size),
+            bitmap_resolution=bitmap_resolution.to(device),
+        )
+
+        predicted_flux = ray_tracer.trace_rays(
+            incident_ray_directions=incident_ray_directions,
+            active_heliostats_mask=active_heliostats_mask,
+            target_area_mask=target_area_mask,
+            device=device,
+        )
+
+        target_centers = scenario.target_areas.centers[target_area_mask]
+        target_widths = scenario.target_areas.dimensions[target_area_mask][
+            :, index_mapping.target_area_width
+        ]
+        target_heights = scenario.target_areas.dimensions[target_area_mask][
+            :, index_mapping.target_area_height
+        ]
+
+        predicted_focal_spots = get_center_of_mass(
+            bitmaps=predicted_flux,
+            target_centers=target_centers,
+            target_widths=target_widths,
+            target_heights=target_heights,
+            device=device,
+        )
+
+        focal_spot_error = torch.norm(predicted_focal_spots[:, :3] - focal_spots[:, :3], dim=1)
+        all_focal_spot_errors_m.extend(focal_spot_error.cpu().tolist())
+
+        # Compute per-heliostat distances to the reference target for mrad conversion.
+        active_indices = torch.where(active_heliostats_mask.bool())[0]
+        active_positions = heliostat_group.positions[active_indices, :3].to(device)
+        distances = torch.norm(active_positions - reference_target.unsqueeze(0), dim=1)
+
+        # Build name -> distance lookup for per-heliostat results.
+        name_to_distance = {
+            heliostat_group.names[idx.item()]: dist.item()
+            for idx, dist in zip(active_indices, distances)
+        }
+
+        # Repeat distances to match number of focal spot error samples
+        # (there may be multiple measurements per heliostat).
+        num_active = active_indices.shape[0]
+        num_focal_spots = focal_spot_error.shape[0]
+        samples_per_heliostat = max(num_focal_spots // num_active, 1)
+        distances_per_sample = distances.repeat_interleave(samples_per_heliostat)[:num_focal_spots]
+        focal_spot_error_mrad = (focal_spot_error / distances_per_sample) * 1000.0
+        all_focal_spot_errors_mrad.extend(focal_spot_error_mrad.cpu().tolist())
+
+        heliostat_names = [
+            name for name, _, _ in heliostat_data_mapping
+            if name in heliostat_group.names
+        ]
+        for i, name in enumerate(heliostat_names):
+            if i < len(focal_spot_error):
+                fse_m = focal_spot_error[i].item()
+                dist_m = name_to_distance.get(name)
+                fse_mrad = (fse_m / dist_m * 1000.0) if dist_m else None
+                results_per_heliostat[name] = {"focal_spot_error_mrad": fse_mrad}
+
+    def _safe_mean(lst):
+        return sum(lst) / len(lst) if lst else float("inf")
+
+    return {
+        "mean_focal_spot_error_mrad": _safe_mean(all_focal_spot_errors_mrad),
+        "min_focal_spot_error_mrad": min(all_focal_spot_errors_mrad) if all_focal_spot_errors_mrad else float("inf"),
+        "max_focal_spot_error_mrad": max(all_focal_spot_errors_mrad) if all_focal_spot_errors_mrad else float("inf"),
+        "num_samples_evaluated": len(all_focal_spot_errors_m),
+        "all_errors_mrad": all_focal_spot_errors_mrad,  # kept in memory for histogram; not saved to JSON
+        "per_heliostat": results_per_heliostat,
+    }

@@ -70,7 +70,7 @@ BENCHMARK_CSV = BENCHMARK_DIR / "splits" / f"{BENCHMARK_NAME}.csv"
 CALIBRATION_PROPERTIES_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "calibration_properties"
 FLUX_IMAGE_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "flux_image"
 
-SAMPLE_LIMIT_PER_HELIOSTAT = 8
+SAMPLE_LIMIT_PER_HELIOSTAT = 10
 CENTROID_METHOD = paint_mappings.UTIS_KEY
 
 print(f"\nRunning on DAIC: {IS_ON_DAIC}")
@@ -157,61 +157,93 @@ print(f"Number of heliostat groups: {number_of_heliostat_groups}")
 
 
 # ===================================================================
-# Optimization Configuration
-# ===================================================================
-
-scheduler = config_dictionary.reduce_on_plateau
-scheduler_parameters = {
-    config_dictionary.gamma: 0.9,
-    config_dictionary.min: 1e-6,
-    config_dictionary.max: 1e-3,
-    config_dictionary.reduce_factor: 0.5,
-    config_dictionary.patience: 10,
-    config_dictionary.threshold: 1e-4,
-    config_dictionary.cooldown: 5,
-}
-
-optimization_configuration = {
-    config_dictionary.initial_learning_rate: 0.0005,
-    config_dictionary.tolerance: 0.0001,
-    config_dictionary.max_epoch: 100,
-    config_dictionary.batch_size: 8,
-    config_dictionary.log_step: 5,
-    config_dictionary.early_stopping_window: 10,
-    config_dictionary.early_stopping_delta: 1e-5,
-    config_dictionary.early_stopping_patience: 20,
-    config_dictionary.scheduler: scheduler,
-    config_dictionary.scheduler_parameters: scheduler_parameters,
-}
-
-print("\nOptimization configuration:")
-for key, value in optimization_configuration.items():
-    if key != config_dictionary.scheduler_parameters:
-        print(f"  {key}: {value}")
-
-
-# ===================================================================
 # Experiments to Run
 # ===================================================================
 #
-# Add one entry per experiment: loss_name -> factory(scenario) -> Loss.
+# Each entry defines: loss_factory, reconstructor_cls, and its own
+# optimization_configuration tuned for that loss's scale and dynamics.
 #
 # Note: only FocalSpotLoss is directly compatible with WortbergKinematicReconstructor,
 # which uses focal spot centroids as ground truth. Pixel-based losses
 # (PixelLoss, KLDivergenceLoss) require WortbergPixelReconstructor.
 
 EXPERIMENTS = {
+    # Was still declining at epoch 100 with LR never reduced — needs more epochs
+    # and a higher initial LR to converge faster.
     "focal_spot_loss": {
         "loss_factory": lambda scenario: FocalSpotLoss(scenario=scenario),
         "reconstructor_cls": WortbergKinematicReconstructor,
+        "optimization_configuration": {
+            config_dictionary.initial_learning_rate: 0.001,
+            config_dictionary.tolerance: 0.0001,
+            config_dictionary.max_epoch: 300,
+            config_dictionary.batch_size: 8,
+            config_dictionary.log_step: 5,
+            config_dictionary.early_stopping_window: 10,
+            config_dictionary.early_stopping_delta: 1e-5,
+            config_dictionary.early_stopping_patience: 20,
+            config_dictionary.scheduler: config_dictionary.reduce_on_plateau,
+            config_dictionary.scheduler_parameters: {
+                config_dictionary.gamma: 0.9,
+                config_dictionary.min: 1e-6,
+                config_dictionary.max: 1e-2,
+                config_dictionary.reduce_factor: 0.5,
+                config_dictionary.patience: 10,
+                config_dictionary.threshold: 1e-4,
+                config_dictionary.cooldown: 5,
+            },
+        },
     },
+    # Loss scale ~7700x larger than focal spot — needs a much higher LR.
+    # Early stopping fired at epoch 46 before any real progress; relax it.
     "pixel_loss": {
         "loss_factory": lambda scenario: PixelLoss(scenario=scenario),
         "reconstructor_cls": WortbergPixelReconstructor,
+        "optimization_configuration": {
+            config_dictionary.initial_learning_rate: 0.005,
+            config_dictionary.tolerance: 0.0001,
+            config_dictionary.max_epoch: 300,
+            config_dictionary.batch_size: 8,
+            config_dictionary.log_step: 5,
+            config_dictionary.early_stopping_window: 10,
+            config_dictionary.early_stopping_delta: 1e-5,
+            config_dictionary.early_stopping_patience: 60,
+            config_dictionary.scheduler: config_dictionary.reduce_on_plateau,
+            config_dictionary.scheduler_parameters: {
+                config_dictionary.gamma: 0.9,
+                config_dictionary.min: 1e-6,
+                config_dictionary.max: 5e-2,
+                config_dictionary.reduce_factor: 0.5,
+                config_dictionary.patience: 10,
+                config_dictionary.threshold: 1e-4,
+                config_dictionary.cooldown: 5,
+            },
+        },
     },
+    # Loss oscillated wildly — LR too high. Lower it and reduce more aggressively.
     "kl_divergence_loss": {
         "loss_factory": lambda _: KLDivergenceLoss(),
         "reconstructor_cls": WortbergPixelReconstructor,
+        "optimization_configuration": {
+            config_dictionary.initial_learning_rate: 0.0001,
+            config_dictionary.tolerance: 0.0001,
+            config_dictionary.max_epoch: 300,
+            config_dictionary.batch_size: 8,
+            config_dictionary.log_step: 5,
+            config_dictionary.early_stopping_window: 10,
+            config_dictionary.early_stopping_delta: 1e-5,
+            config_dictionary.early_stopping_patience: 20,
+            config_dictionary.scheduler: config_dictionary.reduce_on_plateau,
+            config_dictionary.scheduler_parameters: {
+                config_dictionary.gamma: 0.9,
+                config_dictionary.min: 1e-6,
+                config_dictionary.max: 1e-3,
+                config_dictionary.reduce_factor: 0.3,
+                config_dictionary.patience: 10,
+                config_dictionary.threshold: 1e-4,
+                config_dictionary.cooldown: 5,
+            },
+        },
     },
 }
 
@@ -234,6 +266,12 @@ try:
             print(f"EXPERIMENT: {loss_name}")
             print("=" * 60)
             try:
+                opt_cfg = exp_config["optimization_configuration"]
+                print("  Optimization config:")
+                for key, value in opt_cfg.items():
+                    if key != config_dictionary.scheduler_parameters:
+                        print(f"    {key}: {value}")
+
                 metrics = run_experiment(
                     loss_name=loss_name,
                     loss_fn_factory=exp_config["loss_factory"],
@@ -245,7 +283,7 @@ try:
                     test_mapping=test_mapping,
                     train_data_parser=train_data_parser,
                     eval_data_parser=eval_data_parser,
-                    optimization_configuration=optimization_configuration,
+                    optimization_configuration=opt_cfg,
                     output_dir=OUTPUT_DIR,
                     save_figures=IS_ON_DAIC,
                 )
