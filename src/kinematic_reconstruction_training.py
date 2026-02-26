@@ -14,12 +14,15 @@ from matplotlib import pyplot as plt
 
 import paint.util.paint_mappings as paint_mappings
 from artist.core.heliostat_ray_tracer import HeliostatRayTracer
-from artist.core.loss_functions import FocalSpotLoss
+from artist.core.loss_functions import FocalSpotLoss, KLDivergenceLoss, PixelLoss
 from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
 from artist.scenario.scenario import Scenario
 from artist.util import config_dictionary, set_logger_config
 from artist.util.environment_setup import get_device, setup_distributed_environment
-from artist_extensions.kinematic_reconstructors import WortbergKinematicReconstructor
+from artist_extensions.kinematic_reconstructors import (
+    WortbergKinematicReconstructor,
+    WortbergPixelReconstructor,
+)
 
 # Set random seeds for reproducibility
 torch.manual_seed(42)
@@ -27,6 +30,7 @@ torch.cuda.manual_seed(42)
 
 # Setup logging
 set_logger_config()
+logging.getLogger().setLevel(logging.INFO)  # allow INFO from artist_extensions.*
 log = logging.getLogger(__name__)
 
 print("Imports completed successfully!")
@@ -341,6 +345,233 @@ def visualize_flux_comparison(
     print(f"Visualized {samples_visualized} flux comparison images")
 
 
+def plot_training_curves(log_file: pathlib.Path, output_dir: pathlib.Path) -> None:
+    """
+    Parse training.log and save a loss + learning-rate curve plot.
+
+    Looks for log lines of the form (written every log_step epochs):
+        Rank: 0, Epoch: {epoch}, Loss: {loss}, LR: {lr}
+    Each heliostat group produces one such sequence, separated by
+    'Kinematic reconstructed.' markers.
+    """
+    import re
+
+    line_pattern = re.compile(
+        r"Rank:\s*0\s*,\s*Epoch:\s*(\d+),\s*Loss:\s*([\d.eE+\-]+),\s*LR:\s*([\d.eE+\-]+)"
+    )
+
+    if not log_file.exists():
+        print(f"Log file not found at {log_file}; skipping training curve plot.")
+        return
+
+    groups_data: list[dict] = []
+    current: dict = {"epochs": [], "losses": [], "lrs": []}
+
+    with open(log_file) as fh:
+        for line in fh:
+            m = line_pattern.search(line)
+            if m:
+                epoch, loss, lr = int(m.group(1)), float(m.group(2)), float(m.group(3))
+                current["epochs"].append(epoch)
+                current["losses"].append(loss)
+                current["lrs"].append(lr)
+            elif "Kinematic reconstructed." in line and current["epochs"]:
+                groups_data.append(current)
+                current = {"epochs": [], "losses": [], "lrs": []}
+
+    if current["epochs"]:
+        groups_data.append(current)
+
+    if not groups_data:
+        print("No training curve data found in log file; skipping plot.")
+        return
+
+    n_groups = len(groups_data)
+    print(f"Plotting training curves for {n_groups} heliostat group(s).")
+
+    fig, (ax_loss, ax_lr) = plt.subplots(2, 1, figsize=(10, 8))
+
+    individual = n_groups <= 10
+    for i, gd in enumerate(groups_data):
+        alpha = 0.8 if individual else 0.15
+        label = f"Group {i}" if individual else "_nolegend_"
+        ax_loss.plot(gd["epochs"], gd["losses"], alpha=alpha, linewidth=1, label=label)
+        ax_lr.plot(gd["epochs"], gd["lrs"], alpha=alpha, linewidth=1, label=label)
+
+    if not individual:
+        max_common = min(len(gd["epochs"]) for gd in groups_data)
+        if max_common > 0:
+            common_epochs = groups_data[0]["epochs"][:max_common]
+            mean_losses = np.mean([gd["losses"][:max_common] for gd in groups_data], axis=0)
+            mean_lrs = np.mean([gd["lrs"][:max_common] for gd in groups_data], axis=0)
+            ax_loss.plot(common_epochs, mean_losses, color="black", linewidth=2, label="Mean")
+            ax_lr.plot(common_epochs, mean_lrs, color="black", linewidth=2, label="Mean")
+
+    ax_loss.set_xlabel("Epoch")
+    ax_loss.set_ylabel("Loss")
+    ax_loss.set_yscale("log")
+    ax_loss.set_title("Training Loss (log scale)")
+    ax_loss.grid(True, which="both", alpha=0.3)
+    ax_loss.legend(fontsize=8, ncol=min(n_groups, 5))
+
+    ax_lr.set_xlabel("Epoch")
+    ax_lr.set_ylabel("Learning Rate")
+    ax_lr.set_yscale("log")
+    ax_lr.set_title("Learning Rate Schedule")
+    ax_lr.grid(True, which="both", alpha=0.3)
+    if individual:
+        ax_lr.legend(fontsize=8, ncol=min(n_groups, 5))
+
+    plt.tight_layout()
+    out_path = output_dir / "training_curves.png"
+    plt.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved training curves to {out_path}")
+
+
+def run_experiment(
+    loss_name: str,
+    loss_fn_factory,
+    reconstructor_cls,
+    ddp_setup: dict,
+    device: torch.device,
+    scenario_path: pathlib.Path,
+    train_mapping: list,
+    test_mapping: list,
+    train_data_parser,
+    eval_data_parser,
+    optimization_configuration: dict,
+    output_dir: pathlib.Path,
+) -> dict:
+    """
+    Run one training + evaluation experiment for a given loss function.
+
+    Each call reloads the scenario from disk (fresh kinematic parameters),
+    trains with the provided loss, evaluates on the test set, and saves all
+    outputs to output_dir / loss_name.
+
+    Returns the test metrics dict from evaluate_flux_accuracy.
+    """
+    exp_dir = output_dir / loss_name
+    exp_dir.mkdir(parents=True, exist_ok=True)
+
+    # Per-experiment log file — only this experiment's training logs go here.
+    exp_log_handler = logging.FileHandler(exp_dir / "training.log")
+    exp_log_handler.setFormatter(
+        logging.Formatter("[%(asctime)s][%(name)s][%(levelname)s] - %(message)s")
+    )
+    logging.getLogger().addHandler(exp_log_handler)
+
+    try:
+        log.info(f"=== Starting experiment: {loss_name} ===")
+
+        # Reload scenario so every experiment starts from the same
+        # un-optimised kinematic parameters.
+        with h5py.File(scenario_path, "r") as scenario_file:
+            scenario = Scenario.load_scenario_from_hdf5(
+                scenario_file=scenario_file, device=device
+            )
+
+        print(f"  Heliostats: {scenario.heliostat_field.number_of_heliostats_per_group.sum().item()}")
+
+        data = {
+            config_dictionary.data_parser: train_data_parser,
+            config_dictionary.heliostat_data_mapping: train_mapping,
+        }
+
+        reconstructor = reconstructor_cls(
+            ddp_setup=ddp_setup,
+            scenario=scenario,
+            data=data,
+            optimization_configuration=optimization_configuration,
+            reconstruction_method=config_dictionary.kinematic_reconstruction_raytracing,
+        )
+
+        loss_definition = loss_fn_factory(scenario)
+        print(f"  Loss: {loss_definition.__class__.__name__}")
+
+        final_loss_per_heliostat = reconstructor.reconstruct_kinematic(
+            loss_definition=loss_definition, device=device
+        )
+
+        plot_training_curves(log_file=exp_dir / "training.log", output_dir=exp_dir)
+
+        # ---- Final training loss distribution ----
+        valid_losses = final_loss_per_heliostat[final_loss_per_heliostat != float("inf")]
+        if len(valid_losses) > 0:
+            print(f"  Train — mean loss: {valid_losses.mean().item():.6f}, "
+                  f"min: {valid_losses.min().item():.6f}, max: {valid_losses.max().item():.6f}")
+            fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+            axes[0].hist(valid_losses.detach().cpu().numpy(), bins=30, edgecolor="black", alpha=0.7)
+            axes[0].set_xlabel("Final Loss")
+            axes[0].set_ylabel("Count")
+            axes[0].set_title(f"Final Loss Distribution — {loss_name}")
+            axes[0].axvline(valid_losses.mean().item(), color="red", linestyle="--",
+                            label=f"Mean: {valid_losses.mean().item():.4f}")
+            axes[0].legend()
+            sorted_losses = valid_losses.detach().cpu().numpy()
+            sorted_losses.sort()
+            axes[1].plot(sorted_losses, marker="o", markersize=3, linestyle="-", alpha=0.7)
+            axes[1].set_xlabel("Heliostat Index (sorted)")
+            axes[1].set_ylabel("Final Loss")
+            axes[1].set_title("Sorted Final Losses")
+            plt.tight_layout()
+            plt.savefig(exp_dir / "loss_distribution.png", dpi=150)
+            plt.close(fig)
+
+        # ---- Test evaluation ----
+        test_metrics = evaluate_flux_accuracy(
+            scenario=scenario,
+            heliostat_data_mapping=test_mapping,
+            data_parser=eval_data_parser,
+            device=device,
+        )
+
+        print(f"  Test  — mean focal spot error: "
+              f"{test_metrics['mean_focal_spot_error_m']:.4f} m  |  "
+              f"{test_metrics['mean_focal_spot_error_mrad']:.2f} mrad")
+
+        # ---- Tracking error histogram ----
+        plot_tracking_error_histogram(
+            errors_mrad=test_metrics["all_errors_mrad"],
+            output_path=exp_dir / "tracking_error_histogram.png",
+            title=f"Heliostat Tracking Error — {loss_name} (Test Set)",
+        )
+
+        # ---- Flux visualizations ----
+        visualize_flux_comparison(
+            scenario=scenario,
+            heliostat_data_mapping=test_mapping,
+            data_parser=eval_data_parser,
+            device=device,
+            output_dir=exp_dir / "visualizations",
+            num_samples=5,
+            save_figures=IS_ON_DAIC,
+        )
+
+        # ---- Save kinematic parameters ----
+        all_kinematic_params_json = {}
+        for group_index, heliostat_group in enumerate(scenario.heliostat_field.heliostat_groups):
+            all_kinematic_params_json[f"group_{group_index}"] = {
+                "heliostat_names": heliostat_group.names,
+                "rotation_deviation_parameters": heliostat_group.kinematic.rotation_deviation_parameters.detach().cpu().tolist(),
+                "actuator_parameters": heliostat_group.kinematic.actuators.optimizable_parameters.detach().cpu().tolist(),
+            }
+        with open(exp_dir / "all_kinematic_parameters.json", "w") as f:
+            json.dump(all_kinematic_params_json, f, indent=2)
+
+        # ---- Save test metrics ----
+        with open(exp_dir / "test_metrics.json", "w") as f:
+            json.dump(test_metrics, f, indent=2)
+
+        log.info(f"=== Experiment '{loss_name}' done: {test_metrics['mean_focal_spot_error_mrad']:.2f} mrad ===")
+        return test_metrics
+
+    finally:
+        logging.getLogger().removeHandler(exp_log_handler)
+        exp_log_handler.close()
+
+
 def plot_tracking_error_histogram(
     errors_mrad: list[float],
     output_path: pathlib.Path,
@@ -482,15 +713,8 @@ print(f"Centroid method: {CENTROID_METHOD}")
 
 
 # ===================================================================
-# Setup Data Dictionary & Load Scenario
+# Load Scenario Metadata
 # ===================================================================
-
-data = {
-    config_dictionary.data_parser: train_data_parser,
-    config_dictionary.heliostat_data_mapping: train_mapping,
-}
-
-print("\nData dictionary created")
 
 print(f"Loading scenario from: {SCENARIO_PATH}")
 number_of_heliostat_groups = Scenario.get_number_of_heliostat_groups_from_hdf5(
@@ -534,10 +758,37 @@ for key, value in optimization_configuration.items():
 
 
 # ===================================================================
-# Run Kinematic Reconstruction
+# Experiments to Run
+# ===================================================================
+#
+# Add one entry per experiment: loss_name -> factory(scenario) -> Loss.
+#
+# Note: only FocalSpotLoss is directly compatible with the current training
+# loop, which uses focal spot centroids as ground truth. Pixel-based losses
+# (PixelLoss, KLDivergenceLoss) require measured flux bitmaps as ground
+# truth and need a different reconstructor variant.
+
+EXPERIMENTS = {
+    "focal_spot_loss": {
+        "loss_factory": lambda scenario: FocalSpotLoss(scenario=scenario),
+        "reconstructor_cls": WortbergKinematicReconstructor,
+    },
+    "pixel_loss": {
+        "loss_factory": lambda scenario: PixelLoss(scenario=scenario),
+        "reconstructor_cls": WortbergPixelReconstructor,
+    },
+    "kl_divergence_loss": {
+        "loss_factory": lambda _: KLDivergenceLoss(),
+        "reconstructor_cls": WortbergPixelReconstructor,
+    },
+}
+
+
+# ===================================================================
+# Run Experiments
 # ===================================================================
 
-final_loss_per_heliostat = None
+all_results: dict[str, dict] = {}
 
 try:
     with setup_distributed_environment(
@@ -546,203 +797,72 @@ try:
     ) as ddp_setup:
         device = ddp_setup[config_dictionary.device]
 
-        with h5py.File(SCENARIO_PATH, "r") as scenario_file:
-            scenario = Scenario.load_scenario_from_hdf5(
-                scenario_file=scenario_file, device=device
-            )
-
-        print("Scenario loaded successfully")
-        print(f"Number of heliostats in scenario: {scenario.heliostat_field.number_of_heliostat_groups}")
-
-        if torch.cuda.is_available():
-            print(f"GPU memory allocated: {torch.cuda.memory_allocated(device) / 1e9:.2f} GB")
-            print(f"GPU memory reserved: {torch.cuda.memory_reserved(device) / 1e9:.2f} GB")
-
-        kinematic_reconstructor = WortbergKinematicReconstructor(
-            ddp_setup=ddp_setup,
-            scenario=scenario,
-            data=data,
-            optimization_configuration=optimization_configuration,
-            reconstruction_method=config_dictionary.kinematic_reconstruction_raytracing,
-        )
-
-        loss_definition = FocalSpotLoss(scenario=scenario)
-
-        print("\nStarting kinematic reconstruction...")
-
-        final_loss_per_heliostat = kinematic_reconstructor.reconstruct_kinematic(
-            loss_definition=loss_definition, device=device
-        )
-
-    print("\nReconstruction complete!")
+        for loss_name, exp_config in EXPERIMENTS.items():
+            print(f"\n{'=' * 60}")
+            print(f"EXPERIMENT: {loss_name}")
+            print("=" * 60)
+            try:
+                metrics = run_experiment(
+                    loss_name=loss_name,
+                    loss_fn_factory=exp_config["loss_factory"],
+                    reconstructor_cls=exp_config["reconstructor_cls"],
+                    ddp_setup=ddp_setup,
+                    device=device,
+                    scenario_path=SCENARIO_PATH,
+                    train_mapping=train_mapping,
+                    test_mapping=test_mapping,
+                    train_data_parser=train_data_parser,
+                    eval_data_parser=eval_data_parser,
+                    optimization_configuration=optimization_configuration,
+                    output_dir=OUTPUT_DIR,
+                )
+                all_results[loss_name] = metrics
+            except Exception as exp_e:
+                print(f"ERROR in experiment '{loss_name}': {exp_e}")
+                traceback.print_exc()
+                # Continue with remaining experiments
 
 except Exception as e:
     print("\n" + "=" * 60)
-    print("ERROR: Training crashed!")
+    print("ERROR: Experiment runner crashed!")
     print("=" * 60)
-    print(f"Error type: {type(e).__name__}")
-    print(f"Error message: {str(e)}")
-    print("=" * 60)
-
-    if torch.cuda.is_available():
-        try:
-            print(f"\nGPU memory allocated: {torch.cuda.memory_allocated(device) / 1e9:.2f} GB")
-            print(f"GPU memory reserved: {torch.cuda.memory_reserved(device) / 1e9:.2f} GB")
-            print("Attempting to clear GPU cache...")
-            torch.cuda.empty_cache()
-            print("GPU cache cleared")
-        except Exception:
-            print("Could not retrieve GPU memory information")
-
-    print("\nFull traceback:")
     traceback.print_exc()
     raise
 
 
 # ===================================================================
-# Analyze Training Results
+# Comparison Summary
 # ===================================================================
 
-print(f"\nFinal loss per heliostat shape: {final_loss_per_heliostat.shape}")
+if all_results:
+    print("\n" + "=" * 60)
+    print("EXPERIMENT COMPARISON SUMMARY")
+    print("=" * 60)
+    header = f"{'Loss Function':<30} {'Mean (mrad)':>12} {'Min (mrad)':>11} {'Max (mrad)':>11} {'N':>6}"
+    print(header)
+    print("-" * len(header))
+    for loss_name, metrics in all_results.items():
+        print(
+            f"{loss_name:<30} "
+            f"{metrics['mean_focal_spot_error_mrad']:>12.2f} "
+            f"{metrics['min_focal_spot_error_mrad']:>11.2f} "
+            f"{metrics['max_focal_spot_error_mrad']:>11.2f} "
+            f"{metrics['num_samples_evaluated']:>6}"
+        )
+    print("=" * 60)
 
-valid_losses = final_loss_per_heliostat[final_loss_per_heliostat != float("inf")]
-
-if len(valid_losses) > 0:
-    print(f"\nTraining Results:")
-    print(f"  Number of trained heliostats: {len(valid_losses)}")
-    print(f"  Mean loss: {valid_losses.mean().item():.6f}")
-    print(f"  Min loss: {valid_losses.min().item():.6f}")
-    print(f"  Max loss: {valid_losses.max().item():.6f}")
-    print(f"  Std loss: {valid_losses.std().item():.6f}")
-
-    # Plot loss distribution
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-
-    axes[0].hist(valid_losses.detach().cpu().numpy(), bins=30, edgecolor="black", alpha=0.7)
-    axes[0].set_xlabel("Final Loss")
-    axes[0].set_ylabel("Count")
-    axes[0].set_title("Distribution of Final Losses")
-    axes[0].axvline(valid_losses.mean().item(), color="red", linestyle="--", label=f"Mean: {valid_losses.mean().item():.4f}")
-    axes[0].legend()
-
-    sorted_losses = valid_losses.detach().cpu().numpy()
-    sorted_losses.sort()
-    axes[1].plot(sorted_losses, marker="o", markersize=3, linestyle="-", alpha=0.7)
-    axes[1].set_xlabel("Heliostat Index (sorted)")
-    axes[1].set_ylabel("Final Loss")
-    axes[1].set_title("Sorted Final Losses")
-
-    plt.tight_layout()
-    if IS_ON_DAIC:
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        plt.savefig(OUTPUT_DIR / "loss_distribution.png", dpi=150)
-        print(f"Saved loss distribution plot to {OUTPUT_DIR / 'loss_distribution.png'}")
-    else:
-        plt.show()
-
-
-# ===================================================================
-# Evaluate on Test Set
-# ===================================================================
-
-print("\nEvaluating on test set...")
-
-test_metrics = evaluate_flux_accuracy(
-    scenario=scenario,
-    heliostat_data_mapping=test_mapping,
-    data_parser=eval_data_parser,
-    device=device,
-)
-
-print("\n" + "=" * 60)
-print("TEST SET EVALUATION RESULTS")
-print("=" * 60)
-print(f"Number of samples evaluated: {test_metrics['num_samples_evaluated']}")
-print(f"Mean pixel MSE:              {test_metrics['mean_pixel_mse']:.6f}")
-print(f"Mean focal spot error:       {test_metrics['mean_focal_spot_error_m']:.4f} m  |  {test_metrics['mean_focal_spot_error_mrad']:.2f} mrad")
-print(f"Min focal spot error:        {test_metrics['min_focal_spot_error_m']:.4f} m  |  {test_metrics['min_focal_spot_error_mrad']:.2f} mrad")
-print(f"Max focal spot error:        {test_metrics['max_focal_spot_error_m']:.4f} m  |  {test_metrics['max_focal_spot_error_mrad']:.2f} mrad")
-print("=" * 60)
-
-# Display per-heliostat results
-if test_metrics["per_heliostat"]:
-    per_heliostat_df = pd.DataFrame.from_dict(test_metrics["per_heliostat"], orient="index")
-    per_heliostat_df = per_heliostat_df.sort_values("focal_spot_error_m")
-    print("\nPer-heliostat results (sorted by focal spot error):")
-    print(per_heliostat_df.to_string())
-
-
-# ===================================================================
-# Visualize Flux Comparisons
-# ===================================================================
-
-print("\nGenerating tracking error histogram...")
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-plot_tracking_error_histogram(
-    errors_mrad=test_metrics["all_errors_mrad"],
-    output_path=OUTPUT_DIR / "tracking_error_histogram.png",
-    title="Heliostat Tracking Error Distribution (Test Set)",
-)
-
-print("\nGenerating flux comparison visualizations...")
-
-visualize_flux_comparison(
-    scenario=scenario,
-    heliostat_data_mapping=test_mapping,
-    data_parser=eval_data_parser,
-    device=device,
-    output_dir=OUTPUT_DIR / "visualizations",
-    num_samples=5,
-    save_figures=IS_ON_DAIC,
-)
-
-
-# ===================================================================
-# Save Results
-# ===================================================================
-
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-# ---- Kinematic parameters ----
-print("\nSaving optimized kinematic parameters...")
-all_kinematic_params_json = {}
-for group_index, heliostat_group in enumerate(scenario.heliostat_field.heliostat_groups):
-    group_name = f"group_{group_index}"
-    all_kinematic_params_json[group_name] = {
-        "heliostat_names": heliostat_group.names,
-        "rotation_deviation_parameters": heliostat_group.kinematic.rotation_deviation_parameters.detach().cpu().tolist(),
-        "actuator_parameters": heliostat_group.kinematic.actuators.optimizable_parameters.detach().cpu().tolist(),
+    summary = {
+        name: {
+            "mean_focal_spot_error_mrad": m["mean_focal_spot_error_mrad"],
+            "min_focal_spot_error_mrad": m["min_focal_spot_error_mrad"],
+            "max_focal_spot_error_mrad": m["max_focal_spot_error_mrad"],
+            "mean_focal_spot_error_m": m["mean_focal_spot_error_m"],
+            "num_samples_evaluated": m["num_samples_evaluated"],
+        }
+        for name, m in all_results.items()
     }
-
-kinematic_params_file = OUTPUT_DIR / "all_kinematic_parameters.json"
-with open(kinematic_params_file, "w") as f:
-    json.dump(all_kinematic_params_json, f, indent=2)
-print(f"Saved kinematic parameters to {kinematic_params_file}")
-
-# ---- Final training losses ----
-loss_values = final_loss_per_heliostat.tolist()
-losses_json = {
-    "per_heliostat_index": {
-        str(i): (None if v == float("inf") else v)
-        for i, v in enumerate(loss_values)
-    },
-    "summary": {
-        "num_trained": int(len(valid_losses)),
-        "mean": float(valid_losses.mean().item()),
-        "min": float(valid_losses.min().item()),
-        "max": float(valid_losses.max().item()),
-        "std": float(valid_losses.std().item()),
-    },
-}
-losses_file = OUTPUT_DIR / "final_loss_per_heliostat.json"
-with open(losses_file, "w") as f:
-    json.dump(losses_json, f, indent=2)
-print(f"Saved final losses to {losses_file}")
-
-# ---- Test metrics ----
-metrics_file = OUTPUT_DIR / "test_metrics.json"
-with open(metrics_file, "w") as f:
-    json.dump(test_metrics, f, indent=2)
-print(f"Saved metrics to {metrics_file}")
+    with open(OUTPUT_DIR / "experiment_comparison.json", "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"\nSaved comparison to {OUTPUT_DIR / 'experiment_comparison.json'}")
 
 print("\nDone!")

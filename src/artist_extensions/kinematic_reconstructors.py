@@ -88,7 +88,7 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
             heliostat_mapping = self.data[config_dictionary.heliostat_data_mapping]
 
             (
-                _,
+                measured_flux,
                 focal_spots_measured,
                 incident_ray_directions,
                 _,
@@ -102,6 +102,11 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
             )
 
             if active_heliostats_mask.sum() > 0:
+                ground_truth, reduction_dims = self._get_ground_truth_and_reduction_dims(
+                    measured_flux=measured_flux,
+                    focal_spots_measured=focal_spots_measured,
+                )
+
                 optimizer, initial_actuator_initial_angle, initial_actuator_offset = (
                     self._setup_optimizer(heliostat_group, device)
                 )
@@ -153,9 +158,9 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
 
                     loss_per_sample = loss_definition(
                         prediction=flux_distributions,
-                        ground_truth=focal_spots_measured[sample_indices_for_local_rank],
+                        ground_truth=ground_truth[sample_indices_for_local_rank],
                         target_area_mask=target_area_mask[sample_indices_for_local_rank],
-                        reduction_dimensions=(index_mapping.focal_spots,),
+                        reduction_dimensions=reduction_dims,
                         device=device,
                     )
 
@@ -310,6 +315,18 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
             relative=True,
         )
 
+    def _get_ground_truth_and_reduction_dims(
+        self,
+        measured_flux: torch.Tensor,
+        focal_spots_measured: torch.Tensor,
+    ) -> tuple[torch.Tensor, tuple]:
+        """Return (ground_truth, reduction_dimensions) for the loss call.
+
+        Default: focal spot centroids, compatible with FocalSpotLoss.
+        Override in subclasses to use a different ground truth type.
+        """
+        return focal_spots_measured, (index_mapping.focal_spots,)  # measured_flux unused by default
+
     def _apply_deviation_bounds(self, heliostat_group, initial_actuator_initial_angle, initial_actuator_offset):
         """
         Clamp all optimised parameters to their Table 5.3 deviation bounds.
@@ -338,3 +355,22 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
                 initial_actuator_offset - self._BOUND_ACTUATOR_OFFSET_M,
                 initial_actuator_offset + self._BOUND_ACTUATOR_OFFSET_M,
             )
+
+
+class WortbergPixelReconstructor(WortbergKinematicReconstructor):
+    """
+    Variant of WortbergKinematicReconstructor that uses measured flux bitmaps
+    as ground truth instead of focal spot centroids.
+
+    This makes it compatible with pixel-based loss functions such as
+    PixelLoss and KLDivergenceLoss, which compare full flux images rather
+    than centroid positions.
+    """
+
+    def _get_ground_truth_and_reduction_dims(
+        self,
+        measured_flux: torch.Tensor,
+        focal_spots_measured: torch.Tensor,
+    ) -> tuple[torch.Tensor, tuple]:
+        """Return measured flux bitmaps and spatial reduction dims."""
+        return measured_flux, (index_mapping.batched_bitmap_e, index_mapping.batched_bitmap_u)  # focal_spots_measured unused
