@@ -53,6 +53,7 @@ else:
 
 BENCHMARK_NAME = "benchmark_split-balanced_train-10_validation-30"
 SCENARIO_PATH = BASE_DIR / "scenarios" / "all_heliostats_scenario" / "all_heliostats_scenario.h5"
+DEFLECTOMETRY_AVAILABILITY_JSON = BASE_DIR / "src" / "utils" / "deflectometry_availability.json"
 _run_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 OUTPUT_DIR = BASE_DIR / "outputs" / f"defl_kr_{_run_timestamp}"
 
@@ -105,6 +106,7 @@ train_mapping = build_heliostat_data_mapping(
     flux_image_dir=FLUX_IMAGE_DIR,
     split="train",
     deflectometry_only=True,
+    deflectometry_available_json=DEFLECTOMETRY_AVAILABILITY_JSON,
 )
 
 test_mapping = build_heliostat_data_mapping(
@@ -113,6 +115,7 @@ test_mapping = build_heliostat_data_mapping(
     flux_image_dir=FLUX_IMAGE_DIR,
     split="test",
     deflectometry_only=True,
+    deflectometry_available_json=DEFLECTOMETRY_AVAILABILITY_JSON,
 )
 
 print(f"\nTrain mapping (deflectometry only): {len(train_mapping)} heliostats")

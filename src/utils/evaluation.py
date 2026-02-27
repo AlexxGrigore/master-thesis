@@ -1,3 +1,4 @@
+import json
 import logging
 import pathlib
 from collections import defaultdict
@@ -20,6 +21,7 @@ def build_heliostat_data_mapping(
     flux_image_dir: pathlib.Path,
     split: str = "train",
     deflectometry_only: bool = False,
+    deflectometry_available_json: pathlib.Path | None = None,
 ) -> list[tuple[str, list[pathlib.Path], list[pathlib.Path]]]:
     """
     Build the heliostat_data_mapping from the benchmark CSV file.
@@ -35,9 +37,14 @@ def build_heliostat_data_mapping(
     split : str
         Which split to use: "train", "validation", or "test".
     deflectometry_only : bool
-        If True, only include heliostats that have deflectometry data available
-        (i.e., where the ``DeflectometryAvailable`` column is True/1).
-        Defaults to False (all heliostats are included).
+        If True, only include heliostats that have deflectometry data available.
+        Requires either a ``DeflectometryAvailable`` column in the CSV or a
+        ``deflectometry_available_json`` mapping file. Defaults to False.
+    deflectometry_available_json : pathlib.Path or None
+        Path to a JSON file mapping heliostat IDs to booleans
+        (``{"AA23": true, "AA24": false, ...}``). Used as a fallback when
+        ``deflectometry_only=True`` and the CSV lacks a
+        ``DeflectometryAvailable`` column.
 
     Returns
     -------
@@ -49,12 +56,18 @@ def build_heliostat_data_mapping(
 
     if deflectometry_only:
         deflectometry_col = "DeflectometryAvailable"
-        if deflectometry_col not in df_split.columns:
+        if deflectometry_col in df_split.columns:
+            df_split = df_split[df_split[deflectometry_col].astype(bool)]
+        elif deflectometry_available_json is not None:
+            with open(deflectometry_available_json) as f:
+                availability: dict[str, bool] = json.load(f)
+            df_split = df_split[df_split["HeliostatId"].map(availability).fillna(False)]
+        else:
             raise ValueError(
-                f"Column '{deflectometry_col}' not found in benchmark CSV. "
+                f"deflectometry_only=True but column '{deflectometry_col}' not found in "
+                f"benchmark CSV and no deflectometry_available_json was provided. "
                 f"Available columns: {list(df_split.columns)}"
             )
-        df_split = df_split[df_split[deflectometry_col].astype(bool)]
         log.info(f"Filtered to heliostats with deflectometry data. Remaining samples: {len(df_split)}")
 
     log.info(f"Building heliostat_data_mapping for split '{split}'")
