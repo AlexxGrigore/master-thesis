@@ -14,4 +14,4 @@ cd /home/nfs/agrigore/projects/githubProjects/master-thesis/src
 apptainer exec --nv \
     --bind /tudelft.net:/tudelft.net \
     /tudelft.net/staff-umbrella/StudentsCVlab/agrigore/artist-local.sif \
-    python kr_training_defl_only/main.py
+    python kl_training_defl_only/main.py
