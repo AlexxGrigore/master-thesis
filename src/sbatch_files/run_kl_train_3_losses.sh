@@ -1,13 +1,13 @@
 #!/bin/bash
 #SBATCH --job-name=kinematic_training
-#SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/src/logs/output_%j.log
-#SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/src/logs/error_%j.log
+#SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/output_%j.log
+#SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/error_%j.log
 #SBATCH --time=1:00:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:a40:1
 
-mkdir -p /home/nfs/agrigore/projects/githubProjects/master-thesis/src/logs
+mkdir -p /home/nfs/agrigore/projects/githubProjects/master-thesis/logs
 
 cd /home/nfs/agrigore/projects/githubProjects/master-thesis/src
 
