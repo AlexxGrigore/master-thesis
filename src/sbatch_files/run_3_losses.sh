@@ -14,4 +14,4 @@ cd /home/nfs/agrigore/projects/githubProjects/master-thesis/src
 apptainer exec --nv \
     --bind /tudelft.net:/tudelft.net \
     /tudelft.net/staff-umbrella/StudentsCVlab/agrigore/artist-local.sif \
-    python kinematic_reconstruction_training.py
+    python kinematic_reconstruction_training/main.py
