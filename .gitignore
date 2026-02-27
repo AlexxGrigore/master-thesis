@@ -9,3 +9,6 @@ datasets/*
 outputs/*
 src/paint_files/*
 logs/*
+src/utils/__pycache__/*
+src/artist_extensions/__pycache__/*
+src/runtime_log.txt
