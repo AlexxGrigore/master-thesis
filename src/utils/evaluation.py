@@ -2,6 +2,7 @@ import logging
 import pathlib
 from collections import defaultdict
 
+import numpy as np
 import pandas as pd
 import torch
 from artist.core.heliostat_ray_tracer import HeliostatRayTracer
@@ -18,6 +19,7 @@ def build_heliostat_data_mapping(
     calibration_properties_dir: pathlib.Path,
     flux_image_dir: pathlib.Path,
     split: str = "train",
+    deflectometry_only: bool = False,
 ) -> list[tuple[str, list[pathlib.Path], list[pathlib.Path]]]:
     """
     Build the heliostat_data_mapping from the benchmark CSV file.
@@ -32,6 +34,10 @@ def build_heliostat_data_mapping(
         Base directory containing flux image PNG files.
     split : str
         Which split to use: "train", "validation", or "test".
+    deflectometry_only : bool
+        If True, only include heliostats that have deflectometry data available
+        (i.e., where the ``DeflectometryAvailable`` column is True/1).
+        Defaults to False (all heliostats are included).
 
     Returns
     -------
@@ -40,6 +46,16 @@ def build_heliostat_data_mapping(
     """
     df = pd.read_csv(benchmark_csv)
     df_split = df[df["Split"] == split]
+
+    if deflectometry_only:
+        deflectometry_col = "DeflectometryAvailable"
+        if deflectometry_col not in df_split.columns:
+            raise ValueError(
+                f"Column '{deflectometry_col}' not found in benchmark CSV. "
+                f"Available columns: {list(df_split.columns)}"
+            )
+        df_split = df_split[df_split[deflectometry_col].astype(bool)]
+        log.info(f"Filtered to heliostats with deflectometry data. Remaining samples: {len(df_split)}")
 
     log.info(f"Building heliostat_data_mapping for split '{split}'")
     log.info(f"Total samples in split: {len(df_split)}")
@@ -84,9 +100,9 @@ def evaluate_flux_accuracy(
     """
     Evaluate flux image prediction accuracy after kinematic reconstruction.
 
-    Returns a dict with min/mean/max focal spot errors in mrad, the sample
-    count, per-heliostat mrad errors, and the raw error list (needed for
-    histogram plotting but not persisted to JSON).
+    Returns a dict with min/mean/median/max focal spot errors in mrad, the
+    sample count, per-heliostat mrad errors, and the raw error list (needed
+    for histogram plotting but not persisted to JSON).
     """
     all_focal_spot_errors_m = []
     all_focal_spot_errors_mrad = []
@@ -195,8 +211,12 @@ def evaluate_flux_accuracy(
     def _safe_mean(lst):
         return sum(lst) / len(lst) if lst else float("inf")
 
+    def _safe_median(lst):
+        return float(np.median(lst)) if lst else float("inf")
+
     return {
         "mean_focal_spot_error_mrad": _safe_mean(all_focal_spot_errors_mrad),
+        "median_focal_spot_error_mrad": _safe_median(all_focal_spot_errors_mrad),
         "min_focal_spot_error_mrad": min(all_focal_spot_errors_mrad) if all_focal_spot_errors_mrad else float("inf"),
         "max_focal_spot_error_mrad": max(all_focal_spot_errors_mrad) if all_focal_spot_errors_mrad else float("inf"),
         "num_samples_evaluated": len(all_focal_spot_errors_m),

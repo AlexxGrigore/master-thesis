@@ -33,7 +33,7 @@ from artist_extensions.kinematic_reconstructors import (
     WortbergKinematicReconstructor,
     WortbergPixelReconstructor,
 )
-from evaluation import build_heliostat_data_mapping
+from utils.evaluation import build_heliostat_data_mapping
 from experiment import run_experiment
 
 # Set random seeds for reproducibility
@@ -308,13 +308,14 @@ if all_results:
     print("\n" + "=" * 60)
     print("EXPERIMENT COMPARISON SUMMARY")
     print("=" * 60)
-    header = f"{'Loss Function':<30} {'Mean (mrad)':>12} {'Min (mrad)':>11} {'Max (mrad)':>11} {'N':>6}"
+    header = f"{'Loss Function':<30} {'Mean (mrad)':>12} {'Median (mrad)':>14} {'Min (mrad)':>11} {'Max (mrad)':>11} {'N':>6}"
     print(header)
     print("-" * len(header))
     for loss_name, metrics in all_results.items():
         print(
             f"{loss_name:<30} "
             f"{metrics['mean_focal_spot_error_mrad']:>12.2f} "
+            f"{metrics['median_focal_spot_error_mrad']:>14.2f} "
             f"{metrics['min_focal_spot_error_mrad']:>11.2f} "
             f"{metrics['max_focal_spot_error_mrad']:>11.2f} "
             f"{metrics['num_samples_evaluated']:>6}"
@@ -324,6 +325,7 @@ if all_results:
     summary = {
         name: {
             "mean_focal_spot_error_mrad": m["mean_focal_spot_error_mrad"],
+            "median_focal_spot_error_mrad": m["median_focal_spot_error_mrad"],
             "min_focal_spot_error_mrad": m["min_focal_spot_error_mrad"],
             "max_focal_spot_error_mrad": m["max_focal_spot_error_mrad"],
             "num_samples_evaluated": m["num_samples_evaluated"],

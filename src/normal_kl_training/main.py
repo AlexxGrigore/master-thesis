@@ -30,7 +30,7 @@ from artist.scenario.scenario import Scenario
 from artist.util import config_dictionary, set_logger_config
 from artist.util.environment_setup import get_device, setup_distributed_environment
 from artist_extensions.kinematic_reconstructors import WortbergKinematicReconstructor
-from evaluation import build_heliostat_data_mapping
+from utils.evaluation import build_heliostat_data_mapping
 from experiment import run_experiment
 
 # Set random seeds for reproducibility
@@ -230,16 +230,18 @@ except Exception as e:
 print("\n" + "=" * 60)
 print("RESULT")
 print("=" * 60)
-print(f"  Mean focal spot error: {metrics['mean_focal_spot_error_mrad']:.2f} mrad")
-print(f"  Min focal spot error:  {metrics['min_focal_spot_error_mrad']:.2f} mrad")
-print(f"  Max focal spot error:  {metrics['max_focal_spot_error_mrad']:.2f} mrad")
-print(f"  Samples evaluated:     {metrics['num_samples_evaluated']}")
+print(f"  Mean focal spot error:   {metrics['mean_focal_spot_error_mrad']:.2f} mrad")
+print(f"  Median focal spot error: {metrics['median_focal_spot_error_mrad']:.2f} mrad")
+print(f"  Min focal spot error:    {metrics['min_focal_spot_error_mrad']:.2f} mrad")
+print(f"  Max focal spot error:    {metrics['max_focal_spot_error_mrad']:.2f} mrad")
+print(f"  Samples evaluated:       {metrics['num_samples_evaluated']}")
 print("=" * 60)
 
 with open(OUTPUT_DIR / "results.json", "w") as f:
     json.dump(
         {
             "mean_focal_spot_error_mrad": metrics["mean_focal_spot_error_mrad"],
+            "median_focal_spot_error_mrad": metrics["median_focal_spot_error_mrad"],
             "min_focal_spot_error_mrad": metrics["min_focal_spot_error_mrad"],
             "max_focal_spot_error_mrad": metrics["max_focal_spot_error_mrad"],
             "num_samples_evaluated": metrics["num_samples_evaluated"],

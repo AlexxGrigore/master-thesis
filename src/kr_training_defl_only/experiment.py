@@ -9,8 +9,8 @@ from matplotlib import pyplot as plt
 from artist.scenario.scenario import Scenario
 from artist.util import config_dictionary
 
-from evaluation import evaluate_flux_accuracy
-from plotting import (
+from utils.evaluation import evaluate_flux_accuracy
+from utils.plotting import (
     _style_ax,
     FONT_LABEL,
     FONT_LEGEND,
@@ -144,7 +144,8 @@ def run_experiment(
             device=device,
         )
 
-        print(f"  Test  — mean focal spot error: {test_metrics['mean_focal_spot_error_mrad']:.2f} mrad")
+        print(f"  Test  — mean focal spot error:   {test_metrics['mean_focal_spot_error_mrad']:.2f} mrad")
+        print(f"  Test  — median focal spot error: {test_metrics['median_focal_spot_error_mrad']:.2f} mrad")
 
         # ---- Tracking error histogram ----
         plot_tracking_error_histogram(
@@ -178,6 +179,7 @@ def run_experiment(
         # ---- Save test metrics ----
         metrics_to_save = {
             "mean_focal_spot_error_mrad": test_metrics["mean_focal_spot_error_mrad"],
+            "median_focal_spot_error_mrad": test_metrics["median_focal_spot_error_mrad"],
             "min_focal_spot_error_mrad": test_metrics["min_focal_spot_error_mrad"],
             "max_focal_spot_error_mrad": test_metrics["max_focal_spot_error_mrad"],
             "num_samples_evaluated": test_metrics["num_samples_evaluated"],
