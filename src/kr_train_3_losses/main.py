@@ -34,7 +34,7 @@ from artist_extensions.kinematic_reconstructors import (
     WortbergPixelReconstructor,
 )
 from utils.evaluation import build_heliostat_data_mapping
-from experiment import run_experiment
+from experiment import run_experiment, save_comparison_report
 
 # Set random seeds for reproducibility
 torch.manual_seed(42)
@@ -57,7 +57,7 @@ else:
 BENCHMARK_NAME = "benchmark_split-balanced_train-10_validation-30"
 SCENARIO_PATH = BASE_DIR / "scenarios" / "all_heliostats_scenario" / "all_heliostats_scenario.h5"
 _run_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-OUTPUT_DIR = BASE_DIR / "outputs" / f"kin_recon_{_run_timestamp}"
+OUTPUT_DIR = BASE_DIR / "outputs" / f"kr_loss_comparison_{_run_timestamp}"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 _log_file_handler = logging.FileHandler(OUTPUT_DIR / "training.log")
@@ -304,36 +304,6 @@ except Exception as e:
 # Comparison Summary
 # ===================================================================
 
-if all_results:
-    print("\n" + "=" * 60)
-    print("EXPERIMENT COMPARISON SUMMARY")
-    print("=" * 60)
-    header = f"{'Loss Function':<30} {'Mean (mrad)':>12} {'Median (mrad)':>14} {'Min (mrad)':>11} {'Max (mrad)':>11} {'N':>6}"
-    print(header)
-    print("-" * len(header))
-    for loss_name, metrics in all_results.items():
-        print(
-            f"{loss_name:<30} "
-            f"{metrics['mean_focal_spot_error_mrad']:>12.2f} "
-            f"{metrics['median_focal_spot_error_mrad']:>14.2f} "
-            f"{metrics['min_focal_spot_error_mrad']:>11.2f} "
-            f"{metrics['max_focal_spot_error_mrad']:>11.2f} "
-            f"{metrics['num_samples_evaluated']:>6}"
-        )
-    print("=" * 60)
-
-    summary = {
-        name: {
-            "mean_focal_spot_error_mrad": m["mean_focal_spot_error_mrad"],
-            "median_focal_spot_error_mrad": m["median_focal_spot_error_mrad"],
-            "min_focal_spot_error_mrad": m["min_focal_spot_error_mrad"],
-            "max_focal_spot_error_mrad": m["max_focal_spot_error_mrad"],
-            "num_samples_evaluated": m["num_samples_evaluated"],
-        }
-        for name, m in all_results.items()
-    }
-    with open(OUTPUT_DIR / "experiment_comparison.json", "w") as f:
-        json.dump(summary, f, indent=2)
-    print(f"\nSaved comparison to {OUTPUT_DIR / 'experiment_comparison.json'}")
+save_comparison_report(all_results, OUTPUT_DIR)
 
 print("\nDone!")
