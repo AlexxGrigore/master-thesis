@@ -18,7 +18,6 @@ if IS_ON_DAIC:
     matplotlib.use("Agg")
 
 import datetime
-import json
 import logging
 import traceback
 
@@ -236,19 +235,5 @@ print(f"  Min focal spot error:    {metrics['min_focal_spot_error_mrad']:.2f} mr
 print(f"  Max focal spot error:    {metrics['max_focal_spot_error_mrad']:.2f} mrad")
 print(f"  Samples evaluated:       {metrics['num_samples_evaluated']}")
 print("=" * 60)
-
-with open(OUTPUT_DIR / "results.json", "w") as f:
-    json.dump(
-        {
-            "mean_focal_spot_error_mrad": metrics["mean_focal_spot_error_mrad"],
-            "median_focal_spot_error_mrad": metrics["median_focal_spot_error_mrad"],
-            "min_focal_spot_error_mrad": metrics["min_focal_spot_error_mrad"],
-            "max_focal_spot_error_mrad": metrics["max_focal_spot_error_mrad"],
-            "num_samples_evaluated": metrics["num_samples_evaluated"],
-        },
-        f,
-        indent=2,
-    )
-print(f"\nSaved results to {OUTPUT_DIR / 'results.json'}")
 
 print("\nDone!")

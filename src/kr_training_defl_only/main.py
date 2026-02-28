@@ -18,7 +18,6 @@ if IS_ON_DAIC:
     matplotlib.use("Agg")
 
 import datetime
-import json
 import logging
 import traceback
 
@@ -52,8 +51,7 @@ else:
     BENCHMARK_DIR = BASE_DIR / "datasets" / "paint_benchmarks"
 
 BENCHMARK_NAME = "benchmark_split-balanced_train-10_validation-30"
-SCENARIO_PATH = BASE_DIR / "scenarios" / "all_heliostats_scenario" / "all_heliostats_scenario.h5"
-DEFLECTOMETRY_AVAILABILITY_JSON = BASE_DIR / "src" / "utils" / "deflectometry_availability.json"
+SCENARIO_PATH = BASE_DIR / "scenarios" / "deflectometry_scenario" / "deflectometry_scenario.h5"
 _run_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 OUTPUT_DIR = BASE_DIR / "outputs" / f"defl_kr_{_run_timestamp}"
 
@@ -95,18 +93,16 @@ if torch.cuda.is_available():
 
 
 # ===================================================================
-# Build Heliostat Data Mappings (deflectometry heliostats only)
+# Build Heliostat Data Mappings
 # ===================================================================
 
-print("\nBuilding heliostat data mappings (deflectometry heliostats only)...")
+print("\nBuilding heliostat data mappings...")
 
 train_mapping = build_heliostat_data_mapping(
     benchmark_csv=BENCHMARK_CSV,
     calibration_properties_dir=CALIBRATION_PROPERTIES_DIR,
     flux_image_dir=FLUX_IMAGE_DIR,
     split="train",
-    deflectometry_only=True,
-    deflectometry_available_json=DEFLECTOMETRY_AVAILABILITY_JSON,
 )
 
 test_mapping = build_heliostat_data_mapping(
@@ -114,12 +110,10 @@ test_mapping = build_heliostat_data_mapping(
     calibration_properties_dir=CALIBRATION_PROPERTIES_DIR,
     flux_image_dir=FLUX_IMAGE_DIR,
     split="test",
-    deflectometry_only=True,
-    deflectometry_available_json=DEFLECTOMETRY_AVAILABILITY_JSON,
 )
 
-print(f"\nTrain mapping (deflectometry only): {len(train_mapping)} heliostats")
-print(f"Test mapping  (deflectometry only): {len(test_mapping)} heliostats")
+print(f"\nTrain mapping: {len(train_mapping)} heliostats")
+print(f"Test mapping:  {len(test_mapping)} heliostats")
 
 print("\nSample of train mapping:")
 for heliostat_id, cal_paths, flux_paths in train_mapping[:3]:
@@ -241,19 +235,5 @@ print(f"  Min focal spot error:    {metrics['min_focal_spot_error_mrad']:.2f} mr
 print(f"  Max focal spot error:    {metrics['max_focal_spot_error_mrad']:.2f} mrad")
 print(f"  Samples evaluated:       {metrics['num_samples_evaluated']}")
 print("=" * 60)
-
-with open(OUTPUT_DIR / "results.json", "w") as f:
-    json.dump(
-        {
-            "mean_focal_spot_error_mrad": metrics["mean_focal_spot_error_mrad"],
-            "median_focal_spot_error_mrad": metrics["median_focal_spot_error_mrad"],
-            "min_focal_spot_error_mrad": metrics["min_focal_spot_error_mrad"],
-            "max_focal_spot_error_mrad": metrics["max_focal_spot_error_mrad"],
-            "num_samples_evaluated": metrics["num_samples_evaluated"],
-        },
-        f,
-        indent=2,
-    )
-print(f"\nSaved results to {OUTPUT_DIR / 'results.json'}")
 
 print("\nDone!")
