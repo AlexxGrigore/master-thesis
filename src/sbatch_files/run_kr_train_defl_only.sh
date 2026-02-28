@@ -4,7 +4,7 @@
 #SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/error_%j.log
 #SBATCH --time=0:30:00
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=16G
+#SBATCH --mem=8G
 #SBATCH --gres=gpu:a40:1
 
 mkdir -p /home/nfs/agrigore/projects/githubProjects/master-thesis/logs
