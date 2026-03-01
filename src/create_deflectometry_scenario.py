@@ -115,11 +115,14 @@ def build_deflectometry_heliostat_list(
     availability_json: pathlib.Path,
 ) -> list[tuple[str, pathlib.Path, pathlib.Path]]:
     """Return (name, properties_path, deflectometry_path) for every heliostat
-    that is marked as True in availability_json and has the required files on disk."""
+    that has deflectometry data AND appears in the benchmark dataset."""
     with open(availability_json) as f:
-        availability: dict[str, bool] = json.load(f)
+        availability: dict[str, dict] = json.load(f)
 
-    deflectometry_names = {name for name, has in availability.items() if has}
+    deflectometry_names = {
+        name for name, info in availability.items()
+        if info["has_deflectometry"] and info["in_benchmark"]
+    }
     result = []
 
     for name in sorted(deflectometry_names):
