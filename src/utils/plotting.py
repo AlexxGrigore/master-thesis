@@ -248,8 +248,20 @@ def visualize_flux_comparison(
         )
 
         for i in range(min(len(predicted_flux), num_samples - samples_visualized)):
-            pred = predicted_flux[i].cpu().detach().numpy()
+            pred_raw = predicted_flux[i].cpu().detach().numpy()
             meas = measured_flux[i].cpu().detach().numpy()
+
+            # Normalize predicted flux to [0, 1] by matching total energy to the measured image.
+            # The ray tracer returns physical intensity units (with 1/r² attenuation) that are
+            # orders of magnitude smaller than the [0, 1]-normalised measured flux, so plotting
+            # both on the same colour scale would make the prediction appear completely black.
+            pred_sum = pred_raw.sum()
+            meas_sum = meas.sum()
+            if pred_sum > 0 and meas_sum > 0:
+                pred = pred_raw * (meas_sum / pred_sum)
+            else:
+                pred = pred_raw  # fall back to raw values if one image is empty
+
             diff = pred - meas
 
             # Shared colour scale for predicted / measured
@@ -266,7 +278,7 @@ def visualize_flux_comparison(
             )
 
             im0 = axes[0].imshow(pred, cmap="inferno", vmin=0, vmax=vmax_flux)
-            axes[0].set_title("Predicted Flux", fontsize=FONT_LABEL, fontweight="bold")
+            axes[0].set_title("Predicted Flux (energy-normalised)", fontsize=FONT_LABEL, fontweight="bold")
             axes[0].axis("off")
             cb0 = plt.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.03)
             cb0.ax.tick_params(labelsize=FONT_TICK)

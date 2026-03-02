@@ -1,2 +1,0 @@
-[2026-03-01 23:23:21,348][artist.util.environment_setup][INFO] - No device type provided. The device will default to GPU based on availability and OS, otherwise to CPU.
-[2026-03-01 23:23:21,348][artist.util.environment_setup][WARNING] - Setting device to CPU. ARTIST only supports CPU for MacOS.
