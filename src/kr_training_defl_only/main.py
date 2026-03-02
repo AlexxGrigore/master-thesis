@@ -133,12 +133,12 @@ train_data_parser = PaintCalibrationDataParser(
 )
 
 eval_data_parser = PaintCalibrationDataParser(
-    sample_limit=10,
+    sample_limit=30,
     centroid_extraction_method=CENTROID_METHOD,
 )
 
 print(f"\nTrain parser sample limit: {SAMPLE_LIMIT_PER_HELIOSTAT}")
-print(f"Eval parser sample limit: 10")
+print(f"Eval parser sample limit: 30")
 print(f"Centroid method: {CENTROID_METHOD}")
 
 
@@ -158,15 +158,15 @@ print(f"Number of heliostat groups: {number_of_heliostat_groups}")
 # ===================================================================
 
 optimization_configuration = {
-    config_dictionary.initial_learning_rate: 0.001,
+    config_dictionary.initial_learning_rate: 0.002,  # base LR; translation/position groups get 5×
     config_dictionary.tolerance: 0.0001,
-    config_dictionary.max_epoch: 300,
+    config_dictionary.max_epoch: 500,
     config_dictionary.batch_size: 8,
     config_dictionary.log_step: 5,
     config_dictionary.early_stopping_window: 10,
     config_dictionary.early_stopping_delta: 1e-5,
-    config_dictionary.early_stopping_patience: 20,
-    config_dictionary.scheduler: config_dictionary.reduce_on_plateau,
+    config_dictionary.early_stopping_patience: 40,  # cosine annealing is slow to converge near end
+    config_dictionary.scheduler: config_dictionary.reduce_on_plateau,  # unused; CosineAnnealingLR applied instead
     config_dictionary.scheduler_parameters: {
         config_dictionary.gamma: 0.9,
         config_dictionary.min: 1e-6,

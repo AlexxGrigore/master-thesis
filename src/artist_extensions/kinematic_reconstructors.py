@@ -342,31 +342,40 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
         kinematic._initial_actuator_initial_angle = initial_actuator_initial_angle
         kinematic._initial_actuator_offset = initial_actuator_offset
 
+        base_lr = float(self.optimization_configuration[config_dictionary.initial_learning_rate])
+        # Large-scale parameters (±0.05 m bounds) get 5× the base LR;
+        # small-scale parameters (±0.005 rad/m bounds) use the base LR directly.
+        lr_large = base_lr * 5.0
+        lr_small = base_lr
+
         optimizer_params = [
-            kinematic.translation_deviation_parameters,
-            kinematic.rotation_deviation_parameters,
-            kinematic.actuators.optimizable_parameters,
-            kinematic.actuators.non_optimizable_parameters,
+            {"params": kinematic.translation_deviation_parameters, "lr": lr_large},
+            {"params": kinematic.rotation_deviation_parameters, "lr": lr_small},
+            {"params": kinematic.actuators.optimizable_parameters, "lr": lr_small},
+            {"params": kinematic.actuators.non_optimizable_parameters, "lr": lr_small},
         ]
         if self.train_position_deviation:
-            optimizer_params.append(kinematic._base_position_deviation)
+            optimizer_params.append(
+                {"params": kinematic._base_position_deviation, "lr": lr_large}
+            )
 
-        optimizer = torch.optim.Adam(
-            optimizer_params,
-            lr=float(self.optimization_configuration[config_dictionary.initial_learning_rate]),
-        )
+        optimizer = torch.optim.Adam(optimizer_params, lr=base_lr)
 
         return optimizer, initial_actuator_initial_angle, initial_actuator_offset
 
     def _setup_scheduler(self, optimizer):
-        """Build and return the learning rate scheduler."""
-        scheduler_fn = getattr(
-            learning_rate_schedulers,
-            self.optimization_configuration[config_dictionary.scheduler],
-        )
-        return scheduler_fn(
-            optimizer=optimizer,
-            parameters=self.optimization_configuration[config_dictionary.scheduler_parameters],
+        """Build and return a cosine annealing scheduler.
+
+        Decays all param-group LRs from their initial values to eta_min over
+        T_max epochs, regardless of whether the loss plateaus.  This avoids
+        the stalling problem of ReduceLROnPlateau when the loss declines very
+        slowly but never triggers the patience threshold.
+        """
+        T_max = self.optimization_configuration[config_dictionary.max_epoch]
+        return torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=T_max,
+            eta_min=1e-6,
         )
 
     def _setup_early_stopper(self):
