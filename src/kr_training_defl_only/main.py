@@ -47,7 +47,7 @@ if IS_ON_DAIC:
     BASE_DIR = pathlib.Path("/home/nfs/agrigore/projects/githubProjects/master-thesis")
     BENCHMARK_DIR = pathlib.Path("/tudelft.net/staff-umbrella/StudentsCVlab/agrigore/src/paint_benchmarks")
 else:
-    BASE_DIR = pathlib.Path.cwd().parent
+    BASE_DIR = pathlib.Path(__file__).parent.parent.parent
     BENCHMARK_DIR = BASE_DIR / "datasets" / "paint_benchmarks"
 
 BENCHMARK_NAME = "benchmark_split-balanced_train-10_validation-30"

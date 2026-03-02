@@ -66,7 +66,9 @@ def run_experiment(
         # un-optimised kinematic parameters.
         with h5py.File(scenario_path, "r") as scenario_file:
             scenario = Scenario.load_scenario_from_hdf5(
-                scenario_file=scenario_file, device=device
+                scenario_file=scenario_file,
+                device=device,
+                number_of_surface_points_per_facet=torch.tensor([25, 25]),
             )
 
         print(f"  Heliostats: {scenario.heliostat_field.number_of_heliostats_per_group.sum().item()}")
