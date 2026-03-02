@@ -1,3 +1,4 @@
+import collections
 import csv
 import json
 import logging
@@ -8,7 +9,7 @@ import numpy as np
 import torch
 from matplotlib import pyplot as plt
 from artist.scenario.scenario import Scenario
-from artist.util import config_dictionary
+from artist.util import config_dictionary, index_mapping
 
 from utils.evaluation import evaluate_flux_accuracy
 from utils.plotting import (
@@ -24,6 +25,239 @@ from utils.plotting import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _plot_convergence_curves(
+    history: list,
+    output_dir: pathlib.Path,
+    bounds: dict,
+) -> None:
+    """
+    Plot parameter convergence curves from reconstructor._convergence_history.
+
+    One PNG per heliostat group with four rows:
+      1. Training loss
+      2. Joint translation and rotation deviation magnitudes
+      3. Base position deviation magnitudes (δe, δn, δu)
+      4. Actuator parameter deviation magnitudes (aᵢ, cᵢ)
+    """
+    if not history:
+        return
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    by_group = collections.defaultdict(list)
+    for entry in history:
+        by_group[entry["group"]].append(entry)
+
+    for group_idx, entries in sorted(by_group.items()):
+        epochs = [e["epoch"] for e in entries]
+
+        fig, axes = plt.subplots(4, 1, figsize=(10, 16), sharex=True)
+        fig.patch.set_facecolor("white")
+        fig.suptitle(
+            f"Parameter Convergence — Group {group_idx}",
+            fontsize=FONT_TITLE,
+            fontweight="bold",
+        )
+
+        # --- Row 0: Loss ---
+        axes[0].plot(
+            epochs, [e["loss"] for e in entries],
+            color="steelblue", linewidth=1.5,
+        )
+        axes[0].grid(**GRID_KW)
+        _style_ax(axes[0], "", "Loss", "Training Loss")
+
+        # --- Row 1: Joint translation and rotation deviations ---
+        axes[1].plot(
+            epochs, [e["translation_deviation_mean_abs"] for e in entries],
+            color="steelblue", linewidth=1.5, label="Translation (9 params)",
+        )
+        axes[1].plot(
+            epochs, [e["rotation_deviation_mean_abs"] for e in entries],
+            color="darkorange", linewidth=1.5, label="Rotation (4 params)",
+        )
+        axes[1].axhline(
+            bounds["translation"], color="steelblue", linestyle="--",
+            linewidth=1.0, alpha=0.5, label=f"Trans. bound ±{bounds['translation']} m",
+        )
+        axes[1].axhline(
+            bounds["rotation"], color="darkorange", linestyle="--",
+            linewidth=1.0, alpha=0.5, label=f"Rot. bound ±{bounds['rotation']} rad",
+        )
+        axes[1].legend(fontsize=FONT_LEGEND, framealpha=0.85)
+        axes[1].grid(**GRID_KW)
+        _style_ax(axes[1], "", "Mean |deviation|", "Joint Deviations")
+
+        # --- Row 2: Base position deviations ---
+        axes[2].plot(
+            epochs, [e["base_pos_dev_e_mean_abs"] for e in entries],
+            color="steelblue", linewidth=1.5, label="δe (East)",
+        )
+        axes[2].plot(
+            epochs, [e["base_pos_dev_n_mean_abs"] for e in entries],
+            color="darkorange", linewidth=1.5, label="δn (North)",
+        )
+        axes[2].plot(
+            epochs, [e["base_pos_dev_u_mean_abs"] for e in entries],
+            color="seagreen", linewidth=1.5, label="δu (Up)",
+        )
+        axes[2].axhline(
+            bounds["base_position"], color="gray", linestyle="--",
+            linewidth=1.0, alpha=0.5, label=f"Bound ±{bounds['base_position']} m",
+        )
+        axes[2].legend(fontsize=FONT_LEGEND, framealpha=0.85)
+        axes[2].grid(**GRID_KW)
+        _style_ax(axes[2], "", "Mean |deviation| (m)", "Base Position Deviations")
+
+        # --- Row 3: Actuator deviations ---
+        axes[3].plot(
+            epochs, [e["actuator_angle_dev_mean_abs"] for e in entries],
+            color="steelblue", linewidth=1.5, label="aᵢ (initial angle)",
+        )
+        axes[3].plot(
+            epochs, [e["actuator_offset_dev_mean_abs"] for e in entries],
+            color="darkorange", linewidth=1.5, label="cᵢ (offset)",
+        )
+        axes[3].axhline(
+            bounds["actuator_angle"], color="steelblue", linestyle="--",
+            linewidth=1.0, alpha=0.5, label=f"Angle bound ±{bounds['actuator_angle']} rad",
+        )
+        axes[3].axhline(
+            bounds["actuator_offset"], color="darkorange", linestyle="--",
+            linewidth=1.0, alpha=0.5, label=f"Offset bound ±{bounds['actuator_offset']} m",
+        )
+        axes[3].legend(fontsize=FONT_LEGEND, framealpha=0.85)
+        axes[3].grid(**GRID_KW)
+        _style_ax(axes[3], "Epoch", "Mean |deviation|", "Actuator Deviations")
+
+        plt.tight_layout()
+        plt.savefig(
+            output_dir / f"convergence_group_{group_idx}.png",
+            dpi=150, bbox_inches="tight",
+        )
+        plt.close(fig)
+
+
+def _plot_parameter_histograms(
+    scenario,
+    output_dir: pathlib.Path,
+    bounds: dict,
+) -> None:
+    """
+    Plot final-value histograms and bound saturation for all kinematic parameters.
+
+    One sub-directory ``param_histograms/`` with four PNGs per heliostat group:
+      - histograms_translation_group_{i}.png  — 3×3 grid, 9 translation deviations
+      - histograms_rotation_group_{i}.png     — 2×2 grid, 4 rotation deviations
+      - histograms_base_position_group_{i}.png— 1×3 grid, δe / δn / δu
+      - histograms_actuators_group_{i}.png    — 2×2 grid, aᵢ and cᵢ deviations
+    """
+    hist_dir = output_dir / "param_histograms"
+    hist_dir.mkdir(parents=True, exist_ok=True)
+
+    def _saturation_pct(values_np: np.ndarray, bound: float) -> float:
+        return 100.0 * float((np.abs(values_np) >= 0.99 * bound).mean())
+
+    def _draw_panel(ax, values_np: np.ndarray, bound: float, title: str, xlabel: str) -> None:
+        sat = _saturation_pct(values_np, bound)
+        ax.hist(values_np, bins=30, color="steelblue", edgecolor="white",
+                linewidth=0.5, alpha=0.85)
+        ax.axvline( bound, color="crimson", linestyle="--", linewidth=1.5)
+        ax.axvline(-bound, color="crimson", linestyle="--", linewidth=1.5)
+        ax.text(
+            0.97, 0.95, f"Sat: {sat:.1f}%",
+            transform=ax.transAxes, ha="right", va="top",
+            fontsize=FONT_TICK, color="crimson",
+            bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.8),
+        )
+        ax.grid(axis="y", **GRID_KW)
+        _style_ax(ax, xlabel, "Count", title)
+
+    for group_idx, heliostat_group in enumerate(scenario.heliostat_field.heliostat_groups):
+        kinematic = heliostat_group.kinematic
+
+        # ---- Translation deviations [N, 9] ----
+        trans = kinematic.translation_deviation_parameters.detach().cpu().numpy()
+        trans_names = [
+            "Joint1 δe", "Joint1 δn", "Joint1 δu",
+            "Joint2 δe", "Joint2 δn", "Joint2 δu",
+            "Conc. δe",  "Conc. δn",  "Conc. δu",
+        ]
+        fig, axes = plt.subplots(3, 3, figsize=(14, 12))
+        fig.patch.set_facecolor("white")
+        fig.suptitle(f"Translation Deviation Histograms — Group {group_idx}",
+                     fontsize=FONT_TITLE, fontweight="bold")
+        for i, (name, ax) in enumerate(zip(trans_names, axes.flat)):
+            _draw_panel(ax, trans[:, i], bounds["translation"], name, "Deviation (m)")
+        plt.tight_layout()
+        plt.savefig(hist_dir / f"histograms_translation_group_{group_idx}.png",
+                    dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+        # ---- Rotation deviations [N, 4] ----
+        rot = kinematic.rotation_deviation_parameters.detach().cpu().numpy()
+        rot_names = [
+            "Joint1 tilt N", "Joint1 tilt U",
+            "Joint2 tilt E", "Joint2 tilt N",
+        ]
+        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+        fig.patch.set_facecolor("white")
+        fig.suptitle(f"Rotation Deviation Histograms — Group {group_idx}",
+                     fontsize=FONT_TITLE, fontweight="bold")
+        for i, (name, ax) in enumerate(zip(rot_names, axes.flat)):
+            _draw_panel(ax, rot[:, i], bounds["rotation"], name, "Deviation (rad)")
+        plt.tight_layout()
+        plt.savefig(hist_dir / f"histograms_rotation_group_{group_idx}.png",
+                    dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+        # ---- Base position deviations [N, 3] ----
+        if hasattr(kinematic, "_base_position_deviation"):
+            base = kinematic._base_position_deviation.detach().cpu().numpy()
+            base_names = ["δe (East)", "δn (North)", "δu (Up)"]
+            fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+            fig.patch.set_facecolor("white")
+            fig.suptitle(f"Base Position Deviation Histograms — Group {group_idx}",
+                         fontsize=FONT_TITLE, fontweight="bold")
+            for i, (name, ax) in enumerate(zip(base_names, axes.flat)):
+                _draw_panel(ax, base[:, i], bounds["base_position"], name, "Deviation (m)")
+            plt.tight_layout()
+            plt.savefig(hist_dir / f"histograms_base_position_group_{group_idx}.png",
+                        dpi=150, bbox_inches="tight")
+            plt.close(fig)
+
+        # ---- Actuator deviations — aᵢ and cᵢ per actuator ----
+        if hasattr(kinematic, "_initial_actuator_initial_angle"):
+            a_dev = (
+                kinematic.actuators.optimizable_parameters[
+                    :, index_mapping.actuator_initial_angle, :
+                ].detach().cpu().numpy()
+                - kinematic._initial_actuator_initial_angle.cpu().numpy()
+            )  # [N, 2]
+            c_dev = (
+                kinematic.actuators.non_optimizable_parameters[
+                    :, index_mapping.actuator_offset, :
+                ].detach().cpu().numpy()
+                - kinematic._initial_actuator_offset.cpu().numpy()
+            )  # [N, 2]
+
+            panel_data = [
+                (a_dev[:, 0], bounds["actuator_angle"],  "aᵢ — Actuator 0", "Deviation (rad)"),
+                (a_dev[:, 1], bounds["actuator_angle"],  "aᵢ — Actuator 1", "Deviation (rad)"),
+                (c_dev[:, 0], bounds["actuator_offset"], "cᵢ — Actuator 0", "Deviation (m)"),
+                (c_dev[:, 1], bounds["actuator_offset"], "cᵢ — Actuator 1", "Deviation (m)"),
+            ]
+            fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+            fig.patch.set_facecolor("white")
+            fig.suptitle(f"Actuator Deviation Histograms — Group {group_idx}",
+                         fontsize=FONT_TITLE, fontweight="bold")
+            for (values, bound, title, xlabel), ax in zip(panel_data, axes.flat):
+                _draw_panel(ax, values, bound, title, xlabel)
+            plt.tight_layout()
+            plt.savefig(hist_dir / f"histograms_actuators_group_{group_idx}.png",
+                        dpi=150, bbox_inches="tight")
+            plt.close(fig)
 
 
 def run_experiment(
@@ -95,6 +329,34 @@ def run_experiment(
         )
 
         plot_training_curves(log_file=exp_dir / "training.log", output_dir=exp_dir)
+
+        # ---- Parameter convergence curves ----
+        with open(exp_dir / "convergence_history.json", "w") as f:
+            json.dump(reconstructor._convergence_history, f, indent=2)
+        _plot_convergence_curves(
+            history=reconstructor._convergence_history,
+            output_dir=exp_dir,
+            bounds={
+                "translation":     reconstructor._BOUND_TRANSLATION_M,
+                "rotation":        reconstructor._BOUND_ROTATION_RAD,
+                "base_position":   reconstructor._BOUND_BASE_POSITION_M,
+                "actuator_angle":  reconstructor._BOUND_ACTUATOR_ANGLE_RAD,
+                "actuator_offset": reconstructor._BOUND_ACTUATOR_OFFSET_M,
+            },
+        )
+
+        # ---- Parameter histograms and bound saturation ----
+        _plot_parameter_histograms(
+            scenario=scenario,
+            output_dir=exp_dir,
+            bounds={
+                "translation":     reconstructor._BOUND_TRANSLATION_M,
+                "rotation":        reconstructor._BOUND_ROTATION_RAD,
+                "base_position":   reconstructor._BOUND_BASE_POSITION_M,
+                "actuator_angle":  reconstructor._BOUND_ACTUATOR_ANGLE_RAD,
+                "actuator_offset": reconstructor._BOUND_ACTUATOR_OFFSET_M,
+            },
+        )
 
         # ---- Final training loss distribution ----
         valid_losses = final_loss_per_heliostat[final_loss_per_heliostat != float("inf")]
@@ -174,6 +436,7 @@ def run_experiment(
             all_kinematic_params_json[f"group_{group_index}"] = {
                 "heliostat_names": heliostat_group.names,
                 "rotation_deviation_parameters": heliostat_group.kinematic.rotation_deviation_parameters.detach().cpu().tolist(),
+                "base_position_deviation_parameters": heliostat_group.kinematic._base_position_deviation.detach().cpu().tolist(),
                 "actuator_parameters": heliostat_group.kinematic.actuators.optimizable_parameters.detach().cpu().tolist(),
             }
         with open(exp_dir / "all_kinematic_parameters.json", "w") as f:
