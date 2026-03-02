@@ -67,6 +67,7 @@ CALIBRATION_PROPERTIES_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "cali
 FLUX_IMAGE_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "flux_image"
 
 SAMPLE_LIMIT_PER_HELIOSTAT = 10
+TRAIN_BASE_POSITION_DEVIATION = True  # False = standard Wortberg Table 5.3 (no position error term)
 CENTROID_METHOD = paint_mappings.UTIS_KEY
 
 print(f"\nRunning on DAIC: {IS_ON_DAIC}")
@@ -212,6 +213,7 @@ try:
             optimization_configuration=optimization_configuration,
             output_dir=OUTPUT_DIR,
             save_figures=IS_ON_DAIC,
+            train_position_deviation=TRAIN_BASE_POSITION_DEVIATION,
         )
 
 except Exception as e:

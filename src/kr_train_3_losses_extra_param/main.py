@@ -57,7 +57,7 @@ else:
 BENCHMARK_NAME = "benchmark_split-balanced_train-10_validation-30"
 SCENARIO_PATH = BASE_DIR / "scenarios" / "deflectometry_scenario" / "deflectometry_scenario.h5"
 _run_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-OUTPUT_DIR = BASE_DIR / "outputs" / f"kr_loss_comparison_{_run_timestamp}"
+OUTPUT_DIR = BASE_DIR / "outputs" / f"extra_param_kr_loss_comparison_{_run_timestamp}"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 _log_file_handler = logging.FileHandler(OUTPUT_DIR / "training.log")
@@ -71,7 +71,7 @@ CALIBRATION_PROPERTIES_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "cali
 FLUX_IMAGE_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "flux_image"
 
 SAMPLE_LIMIT_PER_HELIOSTAT = 10
-TRAIN_BASE_POSITION_DEVIATION = False  # False = standard Wortberg Table 5.3 (no position error term)
+TRAIN_BASE_POSITION_DEVIATION = True  # False = standard Wortberg Table 5.3 (no position error term)
 CENTROID_METHOD = paint_mappings.UTIS_KEY
 
 print(f"\nRunning on DAIC: {IS_ON_DAIC}")

@@ -60,7 +60,9 @@ def _plot_convergence_curves(
     for group_idx, entries in sorted(by_group.items()):
         epochs = [e["epoch"] for e in entries]
 
-        fig, axes = plt.subplots(4, 1, figsize=(10, 16), sharex=True)
+        has_base_pos = entries and "base_pos_dev_e_mean_abs" in entries[0]
+        nrows = 4 if has_base_pos else 3
+        fig, axes = plt.subplots(nrows, 1, figsize=(10, 4 * nrows), sharex=True)
         fig.patch.set_facecolor("white")
         fig.suptitle(
             f"Parameter Convergence — Group {group_idx}",
@@ -97,47 +99,49 @@ def _plot_convergence_curves(
         axes[1].grid(**GRID_KW)
         _style_ax(axes[1], "", "Mean |deviation|", "Joint Deviations")
 
-        # --- Row 2: Base position deviations ---
-        axes[2].plot(
-            epochs, [e["base_pos_dev_e_mean_abs"] for e in entries],
-            color="steelblue", linewidth=1.5, label="δe (East)",
-        )
-        axes[2].plot(
-            epochs, [e["base_pos_dev_n_mean_abs"] for e in entries],
-            color="darkorange", linewidth=1.5, label="δn (North)",
-        )
-        axes[2].plot(
-            epochs, [e["base_pos_dev_u_mean_abs"] for e in entries],
-            color="seagreen", linewidth=1.5, label="δu (Up)",
-        )
-        axes[2].axhline(
-            bounds["base_position"], color="gray", linestyle="--",
-            linewidth=1.0, alpha=0.5, label=f"Bound ±{bounds['base_position']} m",
-        )
-        axes[2].legend(fontsize=FONT_LEGEND, framealpha=0.85)
-        axes[2].grid(**GRID_KW)
-        _style_ax(axes[2], "", "Mean |deviation| (m)", "Base Position Deviations")
+        # --- Row 2: Base position deviations (only when trained) ---
+        if has_base_pos:
+            axes[2].plot(
+                epochs, [e["base_pos_dev_e_mean_abs"] for e in entries],
+                color="steelblue", linewidth=1.5, label="δe (East)",
+            )
+            axes[2].plot(
+                epochs, [e["base_pos_dev_n_mean_abs"] for e in entries],
+                color="darkorange", linewidth=1.5, label="δn (North)",
+            )
+            axes[2].plot(
+                epochs, [e["base_pos_dev_u_mean_abs"] for e in entries],
+                color="seagreen", linewidth=1.5, label="δu (Up)",
+            )
+            axes[2].axhline(
+                bounds["base_position"], color="gray", linestyle="--",
+                linewidth=1.0, alpha=0.5, label=f"Bound ±{bounds['base_position']} m",
+            )
+            axes[2].legend(fontsize=FONT_LEGEND, framealpha=0.85)
+            axes[2].grid(**GRID_KW)
+            _style_ax(axes[2], "", "Mean |deviation| (m)", "Base Position Deviations")
 
-        # --- Row 3: Actuator deviations ---
-        axes[3].plot(
+        # --- Row 3 (or 2 when no base position): Actuator deviations ---
+        ax_act = axes[3] if has_base_pos else axes[2]
+        ax_act.plot(
             epochs, [e["actuator_angle_dev_mean_abs"] for e in entries],
             color="steelblue", linewidth=1.5, label="aᵢ (initial angle)",
         )
-        axes[3].plot(
+        ax_act.plot(
             epochs, [e["actuator_offset_dev_mean_abs"] for e in entries],
             color="darkorange", linewidth=1.5, label="cᵢ (offset)",
         )
-        axes[3].axhline(
+        ax_act.axhline(
             bounds["actuator_angle"], color="steelblue", linestyle="--",
             linewidth=1.0, alpha=0.5, label=f"Angle bound ±{bounds['actuator_angle']} rad",
         )
-        axes[3].axhline(
+        ax_act.axhline(
             bounds["actuator_offset"], color="darkorange", linestyle="--",
             linewidth=1.0, alpha=0.5, label=f"Offset bound ±{bounds['actuator_offset']} m",
         )
-        axes[3].legend(fontsize=FONT_LEGEND, framealpha=0.85)
-        axes[3].grid(**GRID_KW)
-        _style_ax(axes[3], "Epoch", "Mean |deviation|", "Actuator Deviations")
+        ax_act.legend(fontsize=FONT_LEGEND, framealpha=0.85)
+        ax_act.grid(**GRID_KW)
+        _style_ax(ax_act, "Epoch", "Mean |deviation|", "Actuator Deviations")
 
         plt.tight_layout()
         plt.savefig(
@@ -286,6 +290,7 @@ def run_experiment(
     optimization_configuration: dict,
     output_dir: pathlib.Path,
     save_figures: bool = False,
+    train_position_deviation: bool = True,
 ) -> dict:
     """
     Run one training + evaluation experiment for a given loss function.
@@ -326,6 +331,7 @@ def run_experiment(
         reconstructor = reconstructor_cls(
             ddp_setup=ddp_setup,
             scenario=scenario,
+            train_position_deviation=train_position_deviation,
             data=data,
             optimization_configuration=optimization_configuration,
             reconstruction_method=config_dictionary.kinematic_reconstruction_raytracing,
@@ -443,12 +449,14 @@ def run_experiment(
         # ---- Save kinematic parameters ----
         all_kinematic_params_json = {}
         for group_index, heliostat_group in enumerate(scenario.heliostat_field.heliostat_groups):
-            all_kinematic_params_json[f"group_{group_index}"] = {
+            group_entry = {
                 "heliostat_names": heliostat_group.names,
                 "rotation_deviation_parameters": heliostat_group.kinematic.rotation_deviation_parameters.detach().cpu().tolist(),
-                "base_position_deviation_parameters": heliostat_group.kinematic._base_position_deviation.detach().cpu().tolist(),
                 "actuator_parameters": heliostat_group.kinematic.actuators.optimizable_parameters.detach().cpu().tolist(),
             }
+            if hasattr(heliostat_group.kinematic, "_base_position_deviation"):
+                group_entry["base_position_deviation_parameters"] = heliostat_group.kinematic._base_position_deviation.detach().cpu().tolist()
+            all_kinematic_params_json[f"group_{group_index}"] = group_entry
         with open(exp_dir / "all_kinematic_parameters.json", "w") as f:
             json.dump(all_kinematic_params_json, f, indent=2)
 

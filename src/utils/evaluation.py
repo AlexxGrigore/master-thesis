@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import pathlib
 from collections import defaultdict
 
@@ -120,6 +121,7 @@ def evaluate_flux_accuracy(
     all_focal_spot_errors_m = []
     all_focal_spot_errors_mrad = []
     results_per_heliostat = {}
+    nan_heliostat_ids = set()
 
     # Reference target center (mean over all target areas) used for distance computation.
     # All heliostats aim at roughly the same tower, so this is a good approximation.
@@ -210,6 +212,13 @@ def evaluate_flux_accuracy(
         focal_spot_error_mrad = (focal_spot_error / distances_per_sample) * 1000.0
         all_focal_spot_errors_mrad.extend(focal_spot_error_mrad.cpu().tolist())
 
+        # Track heliostats that produced NaN focal spot errors (zero flux on target).
+        nan_sample_indices = torch.where(torch.isnan(focal_spot_error))[0].tolist()
+        for sample_idx in nan_sample_indices:
+            heliostat_idx = sample_idx // samples_per_heliostat
+            if heliostat_idx < num_active:
+                nan_heliostat_ids.add(heliostat_group.names[active_indices[heliostat_idx].item()])
+
         heliostat_names = [
             name for name, _, _ in heliostat_data_mapping
             if name in heliostat_group.names
@@ -222,17 +231,23 @@ def evaluate_flux_accuracy(
                 results_per_heliostat[name] = {"focal_spot_error_mrad": fse_mrad}
 
     def _safe_mean(lst):
-        return sum(lst) / len(lst) if lst else float("inf")
+        valid = [x for x in lst if not math.isnan(x)]
+        return sum(valid) / len(valid) if valid else float("inf")
 
     def _safe_median(lst):
-        return float(np.median(lst)) if lst else float("inf")
+        valid = [x for x in lst if not math.isnan(x)]
+        return float(np.median(valid)) if valid else float("inf")
+
+    num_nan_samples = sum(1 for x in all_focal_spot_errors_mrad if math.isnan(x))
 
     return {
         "mean_focal_spot_error_mrad": _safe_mean(all_focal_spot_errors_mrad),
         "median_focal_spot_error_mrad": _safe_median(all_focal_spot_errors_mrad),
-        "min_focal_spot_error_mrad": min(all_focal_spot_errors_mrad) if all_focal_spot_errors_mrad else float("inf"),
-        "max_focal_spot_error_mrad": max(all_focal_spot_errors_mrad) if all_focal_spot_errors_mrad else float("inf"),
+        "min_focal_spot_error_mrad": float(np.nanmin(all_focal_spot_errors_mrad)) if all_focal_spot_errors_mrad else float("inf"),
+        "max_focal_spot_error_mrad": float(np.nanmax(all_focal_spot_errors_mrad)) if all_focal_spot_errors_mrad else float("inf"),
         "num_samples_evaluated": len(all_focal_spot_errors_m),
+        "num_nan_samples": num_nan_samples,
+        "nan_heliostat_ids": sorted(nan_heliostat_ids),
         "all_errors_mrad": all_focal_spot_errors_mrad,  # kept in memory for histogram; not saved to JSON
         "per_heliostat": results_per_heliostat,
     }
