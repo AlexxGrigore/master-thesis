@@ -119,7 +119,7 @@ def _plot_convergence_curves(
             epochs, [e["actuator_angle_dev_mean_abs"] for e in entries],
             color="steelblue", linewidth=1.5, label="aᵢ (initial angle)",
         )
-        axes[3].plot(
+        ax_act.plot(
             epochs, [e["actuator_offset_dev_mean_abs"] for e in entries],
             color="darkorange", linewidth=1.5, label="cᵢ (offset)",
         )
