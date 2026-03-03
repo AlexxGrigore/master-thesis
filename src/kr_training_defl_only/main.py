@@ -133,12 +133,12 @@ train_data_parser = PaintCalibrationDataParser(
 )
 
 eval_data_parser = PaintCalibrationDataParser(
-    sample_limit=30,
+    sample_limit=10,
     centroid_extraction_method=CENTROID_METHOD,
 )
 
 print(f"\nTrain parser sample limit: {SAMPLE_LIMIT_PER_HELIOSTAT}")
-print(f"Eval parser sample limit: 30")
+print(f"Eval parser sample limit: 10")
 print(f"Centroid method: {CENTROID_METHOD}")
 
 
