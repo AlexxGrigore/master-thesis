@@ -372,6 +372,31 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
 
         return optimizer, initial_actuator_initial_angle, initial_actuator_offset
 
+    def _setup_scheduler(self, optimizer):
+        """Create an LR scheduler from self.optimization_configuration."""
+        scheduler_type = self.optimization_configuration.get(
+            config_dictionary.scheduler, config_dictionary.reduce_on_plateau
+        )
+        params = self.optimization_configuration.get(config_dictionary.scheduler_parameters, {})
+
+        if scheduler_type == config_dictionary.reduce_on_plateau:
+            return torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode="min",
+                factor=params.get(config_dictionary.reduce_factor, 0.5),
+                patience=params.get(config_dictionary.patience, 10),
+                threshold=params.get(config_dictionary.threshold, 1e-4),
+                cooldown=params.get(config_dictionary.cooldown, 5),
+                min_lr=params.get(config_dictionary.min, 1e-8),
+            )
+
+        # Fallback: cosine annealing (original behaviour)
+        return torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=self.optimization_configuration[config_dictionary.max_epoch],
+            eta_min=params.get(config_dictionary.min, 1e-6),
+        )
+
     def _setup_early_stopper(self):
         """Build and return the early stopping instance."""
         return learning_rate_schedulers.EarlyStopping(
