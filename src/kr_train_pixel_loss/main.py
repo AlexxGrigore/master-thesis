@@ -170,7 +170,7 @@ print(f"Number of heliostat groups: {number_of_heliostat_groups}")
 LOSS_NAME = "pixel_loss"
 
 PHASE1_OPT_CONFIG = {
-    config_dictionary.initial_learning_rate: 0.001,
+    config_dictionary.initial_learning_rate: 1e-5,
     config_dictionary.tolerance: 1e-6,
     config_dictionary.max_epoch: 100,
     config_dictionary.batch_size: 8,
@@ -180,7 +180,7 @@ PHASE1_OPT_CONFIG = {
     config_dictionary.early_stopping_patience: 200,  # > max_epoch → always runs fully
     config_dictionary.scheduler: config_dictionary.reduce_on_plateau,
     config_dictionary.scheduler_parameters: {
-        config_dictionary.min: 1e-6,
+        config_dictionary.min: 1e-8,
         config_dictionary.reduce_factor: 0.5,
         config_dictionary.patience: 10,
         config_dictionary.threshold: 1e-4,
@@ -189,7 +189,7 @@ PHASE1_OPT_CONFIG = {
 }
 
 PHASE2_OPT_CONFIG = {
-    config_dictionary.initial_learning_rate: 1e-5,
+    config_dictionary.initial_learning_rate: 1e-6,
     config_dictionary.tolerance: 1e-8,
     config_dictionary.max_epoch: 300,
     config_dictionary.batch_size: 8,

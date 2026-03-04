@@ -215,9 +215,12 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
                         scheduler.step()
 
                     if epoch % log_step == 0:
+                        mem_alloc = torch.cuda.memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+                        mem_peak = torch.cuda.max_memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
                         log.info(
                             f"Rank: {rank}, Epoch: {epoch}, Loss: {loss:.6f}, "
-                            f"LR: {optimizer.param_groups[index_mapping.optimizer_param_group_0]['lr']}"
+                            f"LR: {optimizer.param_groups[index_mapping.optimizer_param_group_0]['lr']}, "
+                            f"GPU mem: {mem_alloc:.2f} GB (peak: {mem_peak:.2f} GB)"
                         )
                         entry = {
                             "epoch": epoch,
