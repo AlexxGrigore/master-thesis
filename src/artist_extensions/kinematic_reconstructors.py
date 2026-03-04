@@ -316,31 +316,40 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
         kinematic.actuators.non_optimizable_parameters.register_hook(_only_actuator_offset)
 
         if self.train_position_deviation:
-            # Attach a base position deviation tensor directly to the kinematic object.
-            # Initialized to zero; injected into active_heliostat_positions each epoch.
-            kinematic._base_position_deviation = torch.zeros(
-                kinematic.number_of_heliostats, 3, device=device, requires_grad=True
-            )
+            if hasattr(kinematic, "_base_position_deviation"):
+                # Phase 2: re-enable grad on existing values so Phase 1 alignment is preserved.
+                kinematic._base_position_deviation = (
+                    kinematic._base_position_deviation.detach().requires_grad_(True)
+                )
+            else:
+                # Phase 1: initialise to zero.
+                kinematic._base_position_deviation = torch.zeros(
+                    kinematic.number_of_heliostats, 3, device=device, requires_grad=True
+                )
 
-        # Snapshot non-zero nominal values for bound clamping and post-hoc histograms.
-        initial_actuator_initial_angle = (
-            kinematic.actuators.optimizable_parameters[
-                :, index_mapping.actuator_initial_angle, :
-            ]
-            .detach()
-            .clone()
-        )
-        initial_actuator_offset = (
-            kinematic.actuators.non_optimizable_parameters[
-                :, index_mapping.actuator_offset, :
-            ]
-            .detach()
-            .clone()
-        )
-        # Persist snapshots on the kinematic so experiment.py can compute
-        # per-actuator deviation histograms after training without re-loading.
-        kinematic._initial_actuator_initial_angle = initial_actuator_initial_angle
-        kinematic._initial_actuator_offset = initial_actuator_offset
+        # Snapshot non-zero nominal values for bound clamping.
+        # Only take the snapshot once (Phase 1) so deviation bounds stay relative
+        # to the original scenario values across both phases.
+        if not hasattr(kinematic, "_initial_actuator_initial_angle"):
+            initial_actuator_initial_angle = (
+                kinematic.actuators.optimizable_parameters[
+                    :, index_mapping.actuator_initial_angle, :
+                ]
+                .detach()
+                .clone()
+            )
+            initial_actuator_offset = (
+                kinematic.actuators.non_optimizable_parameters[
+                    :, index_mapping.actuator_offset, :
+                ]
+                .detach()
+                .clone()
+            )
+            kinematic._initial_actuator_initial_angle = initial_actuator_initial_angle
+            kinematic._initial_actuator_offset = initial_actuator_offset
+        else:
+            initial_actuator_initial_angle = kinematic._initial_actuator_initial_angle
+            initial_actuator_offset = kinematic._initial_actuator_offset
 
         base_lr = float(self.optimization_configuration[config_dictionary.initial_learning_rate])
         # Large-scale parameters (±0.05 m bounds) get 5× the base LR;
@@ -362,21 +371,6 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
         optimizer = torch.optim.Adam(optimizer_params, lr=base_lr)
 
         return optimizer, initial_actuator_initial_angle, initial_actuator_offset
-
-    def _setup_scheduler(self, optimizer):
-        """Build and return a cosine annealing scheduler.
-
-        Decays all param-group LRs from their initial values to eta_min over
-        T_max epochs, regardless of whether the loss plateaus.  This avoids
-        the stalling problem of ReduceLROnPlateau when the loss declines very
-        slowly but never triggers the patience threshold.
-        """
-        T_max = self.optimization_configuration[config_dictionary.max_epoch]
-        return torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=T_max,
-            eta_min=1e-6,
-        )
 
     def _setup_early_stopper(self):
         """Build and return the early stopping instance."""

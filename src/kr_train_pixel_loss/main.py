@@ -23,12 +23,10 @@ import traceback
 
 import torch
 import paint.util.paint_mappings as paint_mappings
-from artist.core.loss_functions import PixelLoss
 from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
 from artist.scenario.scenario import Scenario
 from artist.util import config_dictionary, set_logger_config
 from artist.util.environment_setup import get_device, setup_distributed_environment
-from artist_extensions.kinematic_reconstructors import WortbergPixelReconstructor
 from utils.evaluation import build_heliostat_data_mapping
 from experiment import run_experiment
 
@@ -157,15 +155,42 @@ print(f"Number of heliostat groups: {number_of_heliostat_groups}")
 # Optimization Configuration
 # ===================================================================
 #
-# PixelLoss scale is ~7700x larger than FocalSpotLoss, so a higher
-# initial LR is needed. Patience is relaxed to 60 to avoid premature
-# early stopping before the optimizer has found a descent direction.
+# Two-phase training:
+#
+# Phase 1 — FocalSpotLoss pretraining (WortbergKinematicReconstructor).
+#   Gets heliostats roughly aligned so reflected light reliably hits the
+#   target before pixel loss takes over. ReduceLROnPlateau keeps the LR
+#   high while progress is happening and only reduces on genuine plateaus.
+#   Early stopping patience > max_epoch so Phase 1 always runs fully.
+#
+# Phase 2 — PixelLoss fine-tuning (WortbergPixelReconstructor).
+#   Continues from Phase 1 weights. Fresh Adam optimizer (no stale
+#   momentum). LR starts at 1e-5 to avoid the spike seen at higher rates.
 
 LOSS_NAME = "pixel_loss"
 
-optimization_configuration = {
-    config_dictionary.initial_learning_rate: 0.005,
-    config_dictionary.tolerance: 0.0001,
+PHASE1_OPT_CONFIG = {
+    config_dictionary.initial_learning_rate: 0.001,
+    config_dictionary.tolerance: 1e-6,
+    config_dictionary.max_epoch: 100,
+    config_dictionary.batch_size: 8,
+    config_dictionary.log_step: 5,
+    config_dictionary.early_stopping_window: 10,
+    config_dictionary.early_stopping_delta: 1e-5,
+    config_dictionary.early_stopping_patience: 200,  # > max_epoch → always runs fully
+    config_dictionary.scheduler: config_dictionary.reduce_on_plateau,
+    config_dictionary.scheduler_parameters: {
+        config_dictionary.min: 1e-6,
+        config_dictionary.reduce_factor: 0.5,
+        config_dictionary.patience: 10,
+        config_dictionary.threshold: 1e-4,
+        config_dictionary.cooldown: 5,
+    },
+}
+
+PHASE2_OPT_CONFIG = {
+    config_dictionary.initial_learning_rate: 1e-5,
+    config_dictionary.tolerance: 1e-8,
     config_dictionary.max_epoch: 300,
     config_dictionary.batch_size: 8,
     config_dictionary.log_step: 5,
@@ -174,11 +199,9 @@ optimization_configuration = {
     config_dictionary.early_stopping_patience: 60,
     config_dictionary.scheduler: config_dictionary.reduce_on_plateau,
     config_dictionary.scheduler_parameters: {
-        config_dictionary.gamma: 0.9,
-        config_dictionary.min: 1e-6,
-        config_dictionary.max: 5e-2,
+        config_dictionary.min: 1e-8,
         config_dictionary.reduce_factor: 0.5,
-        config_dictionary.patience: 10,
+        config_dictionary.patience: 20,
         config_dictionary.threshold: 1e-4,
         config_dictionary.cooldown: 5,
     },
@@ -197,17 +220,17 @@ try:
         device = ddp_setup[config_dictionary.device]
 
         print(f"\n{'=' * 60}")
-        print(f"EXPERIMENT: {LOSS_NAME}")
+        print(f"EXPERIMENT: {LOSS_NAME} (two-phase)")
         print("=" * 60)
-        print("  Optimization config:")
-        for key, value in optimization_configuration.items():
-            if key != config_dictionary.scheduler_parameters:
-                print(f"    {key}: {value}")
+        print(f"  Phase 1 — FocalSpotLoss: lr={PHASE1_OPT_CONFIG[config_dictionary.initial_learning_rate]}, "
+              f"max_epoch={PHASE1_OPT_CONFIG[config_dictionary.max_epoch]}")
+        print(f"  Phase 2 — PixelLoss:     lr={PHASE2_OPT_CONFIG[config_dictionary.initial_learning_rate]}, "
+              f"max_epoch={PHASE2_OPT_CONFIG[config_dictionary.max_epoch]}")
 
         metrics = run_experiment(
             loss_name=LOSS_NAME,
-            loss_fn_factory=lambda scenario: PixelLoss(scenario=scenario),
-            reconstructor_cls=WortbergPixelReconstructor,
+            phase1_opt_config=PHASE1_OPT_CONFIG,
+            phase2_opt_config=PHASE2_OPT_CONFIG,
             ddp_setup=ddp_setup,
             device=device,
             scenario_path=SCENARIO_PATH,
@@ -215,7 +238,6 @@ try:
             test_mapping=test_mapping,
             train_data_parser=train_data_parser,
             eval_data_parser=eval_data_parser,
-            optimization_configuration=optimization_configuration,
             output_dir=OUTPUT_DIR,
             save_figures=IS_ON_DAIC,
             train_position_deviation=TRAIN_BASE_POSITION_DEVIATION,
