@@ -180,21 +180,21 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
 
                     sample_indices_for_local_rank = ray_tracer.get_sampler_indices()
 
-                    loss_per_sample = loss_definition(
-                        prediction=flux_distributions,
-                        ground_truth=ground_truth[sample_indices_for_local_rank],
-                        target_area_mask=target_area_mask[sample_indices_for_local_rank],
-                        reduction_dimensions=reduction_dims,
-                        device=device,
-                    )
-
                     number_of_samples_per_heliostat = int(
                         heliostat_group.active_heliostats_mask.sum()
                         / (heliostat_group.active_heliostats_mask > 0).sum()
                     )
 
-                    loss_per_heliostat = core_utils.mean_loss_per_heliostat(
-                        loss_per_sample=loss_per_sample,
+                    loss_per_heliostat = self._compute_epoch_loss(
+                        epoch=epoch,
+                        flux_distributions=flux_distributions,
+                        measured_flux=measured_flux,
+                        focal_spots_measured=focal_spots_measured,
+                        sample_indices=sample_indices_for_local_rank,
+                        target_area_mask=target_area_mask,
+                        loss_definition=loss_definition,
+                        ground_truth=ground_truth,
+                        reduction_dims=reduction_dims,
                         number_of_samples_per_heliostat=number_of_samples_per_heliostat,
                         device=device,
                     )
@@ -409,6 +409,39 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
             relative=True,
         )
 
+    def _compute_epoch_loss(
+        self,
+        epoch: int,
+        flux_distributions: torch.Tensor,
+        measured_flux: torch.Tensor,
+        focal_spots_measured: torch.Tensor,
+        sample_indices: torch.Tensor,
+        target_area_mask: torch.Tensor,
+        loss_definition,
+        ground_truth: torch.Tensor,
+        reduction_dims: tuple,
+        number_of_samples_per_heliostat: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Compute per-heliostat loss for one epoch.
+
+        Override in subclasses to change the loss combination logic
+        (e.g. annealed multi-loss).  The default calls ``loss_definition``
+        with the pre-selected ``ground_truth`` and ``reduction_dims``.
+        """
+        loss_per_sample = loss_definition(
+            prediction=flux_distributions,
+            ground_truth=ground_truth[sample_indices],
+            target_area_mask=target_area_mask[sample_indices],
+            reduction_dimensions=reduction_dims,
+            device=device,
+        )
+        return core_utils.mean_loss_per_heliostat(
+            loss_per_sample=loss_per_sample,
+            number_of_samples_per_heliostat=number_of_samples_per_heliostat,
+            device=device,
+        )
+
     def _get_ground_truth_and_reduction_dims(
         self,
         measured_flux: torch.Tensor,
@@ -472,3 +505,85 @@ class WortbergPixelReconstructor(WortbergKinematicReconstructor):
     ) -> tuple[torch.Tensor, tuple]:
         """Return measured flux bitmaps and spatial reduction dims."""
         return measured_flux, (index_mapping.batched_bitmap_e, index_mapping.batched_bitmap_u)  # focal_spots_measured unused
+
+
+class WortbergAnnealingReconstructor(WortbergKinematicReconstructor):
+    """
+    Variant of WortbergKinematicReconstructor that linearly anneals between
+    FocalSpotLoss and PixelLoss over the course of training.
+
+    At epoch 0 the combined loss is purely FocalSpotLoss (alpha=1, beta=0).
+    At max_epoch it is purely PixelLoss (alpha=0, beta=1).  In between,
+    both losses are normalised by their value at epoch 0 so that they
+    contribute equally when alpha == beta == 0.5.
+
+    Parameters
+    ----------
+    focal_loss : callable
+        A FocalSpotLoss instance.
+    pixel_loss : callable
+        A PixelLoss instance.
+    """
+
+    def __init__(self, *args, focal_loss, pixel_loss, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._focal_loss_fn = focal_loss
+        self._pixel_loss_fn = pixel_loss
+        self._focal_loss_0: torch.Tensor | None = None
+        self._pixel_loss_0: torch.Tensor | None = None
+
+    def _compute_epoch_loss(
+        self,
+        epoch: int,
+        flux_distributions: torch.Tensor,
+        measured_flux: torch.Tensor,
+        focal_spots_measured: torch.Tensor,
+        sample_indices: torch.Tensor,
+        target_area_mask: torch.Tensor,
+        loss_definition,           # unused — uses self._focal_loss_fn / _pixel_loss_fn
+        ground_truth: torch.Tensor,  # unused
+        reduction_dims: tuple,       # unused
+        number_of_samples_per_heliostat: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        max_epoch = self.optimization_configuration[config_dictionary.max_epoch]
+        alpha = 1.0 - epoch / max_epoch
+        beta = epoch / max_epoch
+
+        # ---- Focal spot loss ----
+        focal_per_sample = self._focal_loss_fn(
+            prediction=flux_distributions,
+            ground_truth=focal_spots_measured[sample_indices],
+            target_area_mask=target_area_mask[sample_indices],
+            reduction_dimensions=(index_mapping.focal_spots,),
+            device=device,
+        )
+        focal_per_heliostat = core_utils.mean_loss_per_heliostat(
+            loss_per_sample=focal_per_sample,
+            number_of_samples_per_heliostat=number_of_samples_per_heliostat,
+            device=device,
+        )
+
+        # ---- Pixel loss ----
+        pixel_per_sample = self._pixel_loss_fn(
+            prediction=flux_distributions,
+            ground_truth=measured_flux[sample_indices],
+            target_area_mask=target_area_mask[sample_indices],
+            reduction_dimensions=(index_mapping.batched_bitmap_e, index_mapping.batched_bitmap_u),
+            device=device,
+        )
+        pixel_per_heliostat = core_utils.mean_loss_per_heliostat(
+            loss_per_sample=pixel_per_sample,
+            number_of_samples_per_heliostat=number_of_samples_per_heliostat,
+            device=device,
+        )
+
+        # ---- Normalise by initial values (set on first call) ----
+        if self._focal_loss_0 is None:
+            self._focal_loss_0 = focal_per_heliostat.mean().detach().clamp(min=1e-8)
+            self._pixel_loss_0 = pixel_per_heliostat.mean().detach().clamp(min=1e-8)
+
+        focal_norm = focal_per_heliostat / self._focal_loss_0
+        pixel_norm = pixel_per_heliostat / self._pixel_loss_0
+
+        return alpha * focal_norm + beta * pixel_norm
