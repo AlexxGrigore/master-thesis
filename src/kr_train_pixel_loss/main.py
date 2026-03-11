@@ -162,22 +162,28 @@ print(f"Number of heliostat groups: {number_of_heliostat_groups}")
 #   target before pixel loss takes over. ReduceLROnPlateau keeps the LR
 #   high while progress is happening and only reduces on genuine plateaus.
 #   Early stopping patience > max_epoch so Phase 1 always runs fully.
+#   100 epochs at lr=1e-4: with patience=10+cooldown=5=15 epochs/LR cycle,
+#   we get ~6 LR reductions — more effective than 300 epochs at 1e-3 with
+#   a late LR drop.
 #
 # Phase 2 — PixelLoss fine-tuning (WortbergPixelReconstructor).
 #   Continues from Phase 1 weights. Fresh Adam optimizer (no stale
-#   momentum). LR starts at 1e-5 to avoid the spike seen at higher rates.
+#   momentum). LR starts at 1e-5 for conservative pixel-level fine-tuning.
+#   Early stopping patience=150: with ReduceLROnPlateau patience=30+
+#   cooldown=5=35 epochs/cycle, this allows ~4 LR reductions before
+#   stopping — enough to exhaust the LR schedule if needed.
 
 LOSS_NAME = "pixel_loss"
 
 PHASE1_OPT_CONFIG = {
-    config_dictionary.initial_learning_rate: 1e-3,
+    config_dictionary.initial_learning_rate: 1e-4,
     config_dictionary.tolerance: 1e-6,
-    config_dictionary.max_epoch: 300,
+    config_dictionary.max_epoch: 100,
     config_dictionary.batch_size: 8,
     config_dictionary.log_step: 5,
     config_dictionary.early_stopping_window: 10,
     config_dictionary.early_stopping_delta: 1e-5,
-    config_dictionary.early_stopping_patience: 400,  # > max_epoch → always runs fully
+    config_dictionary.early_stopping_patience: 200,  # > max_epoch → always runs fully
     config_dictionary.scheduler: config_dictionary.reduce_on_plateau,
     config_dictionary.scheduler_parameters: {
         config_dictionary.min: 1e-8,
@@ -189,14 +195,14 @@ PHASE1_OPT_CONFIG = {
 }
 
 PHASE2_OPT_CONFIG = {
-    config_dictionary.initial_learning_rate: 1e-4,
+    config_dictionary.initial_learning_rate: 1e-5,
     config_dictionary.tolerance: 1e-8,
     config_dictionary.max_epoch: 300,
     config_dictionary.batch_size: 8,
     config_dictionary.log_step: 5,
     config_dictionary.early_stopping_window: 10,
     config_dictionary.early_stopping_delta: 1e-5,
-    config_dictionary.early_stopping_patience: 90,
+    config_dictionary.early_stopping_patience: 150,  # ~4 LR cycles (35 epochs each)
     config_dictionary.scheduler: config_dictionary.reduce_on_plateau,
     config_dictionary.scheduler_parameters: {
         config_dictionary.min: 1e-8,

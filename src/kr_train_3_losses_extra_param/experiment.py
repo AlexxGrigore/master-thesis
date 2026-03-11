@@ -408,6 +408,9 @@ def run_experiment(
             plt.close(fig)
 
         # ---- Test evaluation ----
+        del reconstructor
+        torch.cuda.empty_cache()
+
         test_metrics = evaluate_flux_accuracy(
             scenario=scenario,
             heliostat_data_mapping=test_mapping,

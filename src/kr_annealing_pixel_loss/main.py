@@ -175,13 +175,12 @@ OPT_CONFIG = {
     config_dictionary.early_stopping_window: 10,
     config_dictionary.early_stopping_delta: 1e-5,
     config_dictionary.early_stopping_patience: 400,  # > max_epoch → always runs fully
-    config_dictionary.scheduler: config_dictionary.reduce_on_plateau,
+    # CosineAnnealingLR: LR decays on a fixed schedule independent of loss,
+    # which is required for annealing — ReduceLROnPlateau is incompatible
+    # because the combined loss naturally rises as beta grows.
+    config_dictionary.scheduler: "cosine_annealing",
     config_dictionary.scheduler_parameters: {
-        config_dictionary.min: 1e-8,
-        config_dictionary.reduce_factor: 0.5,
-        config_dictionary.patience: 10,
-        config_dictionary.threshold: 1e-4,
-        config_dictionary.cooldown: 5,
+        config_dictionary.min: 1e-6,  # eta_min at epoch 300
     },
 }
 
