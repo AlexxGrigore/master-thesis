@@ -1,6 +1,7 @@
 import json
 import logging
 import pathlib
+import time
 
 import h5py
 import torch
@@ -113,10 +114,18 @@ def run_experiment(
             optimization_configuration=phase1_opt_config,
             reconstruction_method=config_dictionary.kinematic_reconstruction_raytracing,
         )
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(device)
+        t_phase1_start = time.time()
         phase1_reconstructor.reconstruct_kinematic(
             loss_definition=FocalSpotLoss(scenario=scenario),
             device=device,
         )
+        phase1_time_s = time.time() - t_phase1_start
+        phase1_peak_gpu_gb = torch.cuda.max_memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+        phase1_end_gpu_gb = torch.cuda.memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+        log.info(f"Phase 1 — time: {phase1_time_s/60:.1f} min ({phase1_time_s:.0f}s), peak GPU: {phase1_peak_gpu_gb:.2f} GB, end GPU: {phase1_end_gpu_gb:.2f} GB")
+        print(f"  Phase 1 — time: {phase1_time_s/60:.1f} min ({phase1_time_s:.0f}s), peak GPU: {phase1_peak_gpu_gb:.2f} GB, end GPU: {phase1_end_gpu_gb:.2f} GB")
 
         logging.getLogger().removeHandler(phase1_log_handler)
         phase1_log_handler.close()
@@ -149,10 +158,18 @@ def run_experiment(
             optimization_configuration=phase2_opt_config,
             reconstruction_method=config_dictionary.kinematic_reconstruction_raytracing,
         )
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(device)
+        t_phase2_start = time.time()
         phase2_final_loss = phase2_reconstructor.reconstruct_kinematic(
             loss_definition=PixelLoss(scenario=scenario),
             device=device,
         )
+        phase2_time_s = time.time() - t_phase2_start
+        phase2_peak_gpu_gb = torch.cuda.max_memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+        phase2_end_gpu_gb = torch.cuda.memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+        log.info(f"Phase 2 — time: {phase2_time_s/60:.1f} min ({phase2_time_s:.0f}s), peak GPU: {phase2_peak_gpu_gb:.2f} GB, end GPU: {phase2_end_gpu_gb:.2f} GB")
+        print(f"  Phase 2 — time: {phase2_time_s/60:.1f} min ({phase2_time_s:.0f}s), peak GPU: {phase2_peak_gpu_gb:.2f} GB, end GPU: {phase2_end_gpu_gb:.2f} GB")
 
         logging.getLogger().removeHandler(phase2_log_handler)
         phase2_log_handler.close()
@@ -186,12 +203,20 @@ def run_experiment(
         del phase1_reconstructor, phase2_reconstructor
         torch.cuda.empty_cache()
 
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(device)
+        t_eval_start = time.time()
         test_metrics = evaluate_flux_accuracy(
             scenario=scenario,
             heliostat_data_mapping=test_mapping,
             data_parser=eval_data_parser,
             device=device,
         )
+        eval_time_s = time.time() - t_eval_start
+        eval_peak_gpu_gb = torch.cuda.max_memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+        eval_end_gpu_gb = torch.cuda.memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+        log.info(f"Evaluation — time: {eval_time_s/60:.1f} min ({eval_time_s:.0f}s), peak GPU: {eval_peak_gpu_gb:.2f} GB, end GPU: {eval_end_gpu_gb:.2f} GB")
+        print(f"  Evaluation — time: {eval_time_s/60:.1f} min ({eval_time_s:.0f}s), peak GPU: {eval_peak_gpu_gb:.2f} GB, end GPU: {eval_end_gpu_gb:.2f} GB")
 
         print(f"\n  Test  — mean focal spot error:   {test_metrics['mean_focal_spot_error_mrad']:.2f} mrad")
         print(f"  Test  — median focal spot error: {test_metrics['median_focal_spot_error_mrad']:.2f} mrad")
@@ -211,6 +236,26 @@ def run_experiment(
             num_samples=5,
             save_figures=save_figures,
         )
+
+        total_train_time_s = phase1_time_s + phase2_time_s
+        timing_stats = {
+            "phase1_time_s": round(phase1_time_s, 1),
+            "phase1_time_min": round(phase1_time_s / 60, 2),
+            "phase1_peak_gpu_gb": round(phase1_peak_gpu_gb, 3),
+            "phase1_end_gpu_gb": round(phase1_end_gpu_gb, 3),
+            "phase2_time_s": round(phase2_time_s, 1),
+            "phase2_time_min": round(phase2_time_s / 60, 2),
+            "phase2_peak_gpu_gb": round(phase2_peak_gpu_gb, 3),
+            "phase2_end_gpu_gb": round(phase2_end_gpu_gb, 3),
+            "total_training_time_s": round(total_train_time_s, 1),
+            "total_training_time_min": round(total_train_time_s / 60, 2),
+            "evaluation_time_s": round(eval_time_s, 1),
+            "evaluation_time_min": round(eval_time_s / 60, 2),
+            "evaluation_peak_gpu_gb": round(eval_peak_gpu_gb, 3),
+            "evaluation_end_gpu_gb": round(eval_end_gpu_gb, 3),
+        }
+        with open(exp_dir / "timing_stats.json", "w") as f:
+            json.dump(timing_stats, f, indent=2)
 
         metrics_to_save = {
             "mean_focal_spot_error_mrad": test_metrics["mean_focal_spot_error_mrad"],

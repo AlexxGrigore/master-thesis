@@ -2,6 +2,7 @@ import collections
 import json
 import logging
 import pathlib
+import time
 
 import h5py
 import numpy as np
@@ -329,9 +330,17 @@ def run_experiment(
         loss_definition = loss_fn_factory(scenario)
         print(f"  Loss: {loss_definition.__class__.__name__}")
 
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(device)
+        t_train_start = time.time()
         final_loss_per_heliostat = reconstructor.reconstruct_kinematic(
             loss_definition=loss_definition, device=device
         )
+        train_time_s = time.time() - t_train_start
+        train_peak_gpu_gb = torch.cuda.max_memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+        train_end_gpu_gb = torch.cuda.memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+        log.info(f"Training — time: {train_time_s/60:.1f} min ({train_time_s:.0f}s), peak GPU: {train_peak_gpu_gb:.2f} GB, end GPU: {train_end_gpu_gb:.2f} GB")
+        print(f"  Training — time: {train_time_s/60:.1f} min ({train_time_s:.0f}s), peak GPU: {train_peak_gpu_gb:.2f} GB, end GPU: {train_end_gpu_gb:.2f} GB")
 
         plot_training_curves(log_file=exp_dir / "training.log", output_dir=exp_dir)
 
@@ -410,12 +419,20 @@ def run_experiment(
         del reconstructor
         torch.cuda.empty_cache()
 
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(device)
+        t_eval_start = time.time()
         test_metrics = evaluate_flux_accuracy(
             scenario=scenario,
             heliostat_data_mapping=test_mapping,
             data_parser=eval_data_parser,
             device=device,
         )
+        eval_time_s = time.time() - t_eval_start
+        eval_peak_gpu_gb = torch.cuda.max_memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+        eval_end_gpu_gb = torch.cuda.memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+        log.info(f"Evaluation — time: {eval_time_s/60:.1f} min ({eval_time_s:.0f}s), peak GPU: {eval_peak_gpu_gb:.2f} GB, end GPU: {eval_end_gpu_gb:.2f} GB")
+        print(f"  Evaluation — time: {eval_time_s/60:.1f} min ({eval_time_s:.0f}s), peak GPU: {eval_peak_gpu_gb:.2f} GB, end GPU: {eval_end_gpu_gb:.2f} GB")
 
         print(f"  Test  — mean focal spot error:   {test_metrics['mean_focal_spot_error_mrad']:.2f} mrad")
         print(f"  Test  — median focal spot error: {test_metrics['median_focal_spot_error_mrad']:.2f} mrad")
@@ -451,6 +468,19 @@ def run_experiment(
             all_kinematic_params_json[f"group_{group_index}"] = group_entry
         with open(exp_dir / "all_kinematic_parameters.json", "w") as f:
             json.dump(all_kinematic_params_json, f, indent=2)
+
+        timing_stats = {
+            "training_time_s": round(train_time_s, 1),
+            "training_time_min": round(train_time_s / 60, 2),
+            "training_peak_gpu_gb": round(train_peak_gpu_gb, 3),
+            "training_end_gpu_gb": round(train_end_gpu_gb, 3),
+            "evaluation_time_s": round(eval_time_s, 1),
+            "evaluation_time_min": round(eval_time_s / 60, 2),
+            "evaluation_peak_gpu_gb": round(eval_peak_gpu_gb, 3),
+            "evaluation_end_gpu_gb": round(eval_end_gpu_gb, 3),
+        }
+        with open(exp_dir / "timing_stats.json", "w") as f:
+            json.dump(timing_stats, f, indent=2)
 
         # ---- Save test metrics ----
         metrics_to_save = {
