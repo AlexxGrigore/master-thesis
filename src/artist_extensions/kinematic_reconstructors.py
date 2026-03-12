@@ -10,6 +10,7 @@ stay thin and only deal with data loading and configuration.
 import logging
 
 import torch
+import torch.nn.functional as F
 
 from artist.core import core_utils, learning_rate_schedulers
 from artist.core.heliostat_ray_tracer import HeliostatRayTracer
@@ -56,9 +57,10 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
     _BOUND_ACTUATOR_OFFSET_M = 0.005   # c_i — joint's distance offset
     _BOUND_BASE_POSITION_M = 0.05      # heliostat base position (e, n, u)
 
-    def __init__(self, *args, train_position_deviation: bool = True, **kwargs):
+    def __init__(self, *args, train_position_deviation: bool = True, eval_data: dict | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.train_position_deviation = train_position_deviation
+        self.eval_data = eval_data
 
     def _reconstruct_kinematic_parameters_with_raytracing(
         self,
@@ -241,6 +243,10 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
                             entry["base_pos_dev_e_mean_abs"] = kinematic._base_position_deviation[:, 0].abs().mean().item()
                             entry["base_pos_dev_n_mean_abs"] = kinematic._base_position_deviation[:, 1].abs().mean().item()
                             entry["base_pos_dev_u_mean_abs"] = kinematic._base_position_deviation[:, 2].abs().mean().item()
+                        eval_loss = self._compute_eval_loss_no_grad(heliostat_group, loss_definition, device)
+                        if eval_loss is not None:
+                            entry["eval_loss"] = eval_loss
+                            log.info(f"Rank: {rank}, Epoch: {epoch}, Eval Loss: {eval_loss:.6f}")
                         self._convergence_history.append(entry)
 
                     if early_stopper.step(loss):
@@ -454,6 +460,103 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
         """
         return focal_spots_measured, (index_mapping.focal_spots,)  # measured_flux unused by default
 
+    def _preprocess_eval_flux(
+        self,
+        predicted_flux: torch.Tensor,
+        ground_truth: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Preprocess predicted flux and ground truth before eval loss.
+
+        Default: identity (no transformation). Override in subclasses that need
+        blur or normalization (e.g. WortbergPixelReconstructor).
+        """
+        return predicted_flux, ground_truth
+
+    @torch.no_grad()
+    def _compute_eval_loss_no_grad(self, heliostat_group, loss_definition, device) -> float | None:
+        """Compute eval loss on the validation set without affecting the training graph.
+
+        Returns the mean loss across all validation heliostats, or None if no
+        eval_data was provided or the heliostat group has no active heliostats.
+        Uses _get_ground_truth_and_reduction_dims and _preprocess_eval_flux so
+        subclasses (e.g. WortbergPixelReconstructor) work correctly.
+        """
+        if self.eval_data is None:
+            return None
+        eval_parser = self.eval_data["data_parser"]
+        eval_mapping = self.eval_data["heliostat_data_mapping"]
+
+        (
+            measured_flux,
+            focal_spots_measured,
+            incident_ray_directions,
+            _,
+            active_mask,
+            target_mask,
+        ) = eval_parser.parse_data_for_reconstruction(
+            heliostat_data_mapping=eval_mapping,
+            heliostat_group=heliostat_group,
+            scenario=self.scenario,
+            device=device,
+        )
+
+        if active_mask.sum() == 0:
+            return None
+
+        heliostat_group.activate_heliostats(active_heliostats_mask=active_mask, device=device)
+        kinematic = heliostat_group.kinematic
+
+        if self.train_position_deviation and hasattr(kinematic, "_base_position_deviation"):
+            active_base_dev = kinematic._base_position_deviation.repeat_interleave(active_mask, dim=0)
+            pad = torch.zeros(active_base_dev.shape[0], 1, device=device)
+            kinematic.active_heliostat_positions = (
+                kinematic.active_heliostat_positions + torch.cat([active_base_dev, pad], dim=1)
+            )
+
+        heliostat_group.align_surfaces_with_incident_ray_directions(
+            aim_points=self.scenario.target_areas.centers[target_mask],
+            incident_ray_directions=incident_ray_directions,
+            active_heliostats_mask=active_mask,
+            device=device,
+        )
+
+        ray_tracer = HeliostatRayTracer(
+            scenario=self.scenario,
+            heliostat_group=heliostat_group,
+            blocking_active=False,
+            world_size=self.ddp_setup[config_dictionary.heliostat_group_world_size],
+            rank=self.ddp_setup[config_dictionary.heliostat_group_rank],
+            batch_size=self.optimization_configuration[config_dictionary.batch_size],
+            random_seed=self.ddp_setup[config_dictionary.heliostat_group_rank],
+        )
+        flux = ray_tracer.trace_rays(
+            incident_ray_directions=incident_ray_directions,
+            active_heliostats_mask=active_mask,
+            target_area_mask=target_mask,
+            device=device,
+        )
+        sample_indices = ray_tracer.get_sampler_indices()
+        n_samples = int(active_mask.sum() / (active_mask > 0).sum())
+
+        ground_truth, reduction_dims = self._get_ground_truth_and_reduction_dims(
+            measured_flux, focal_spots_measured
+        )
+        flux_eval, gt_eval = self._preprocess_eval_flux(flux, ground_truth)
+
+        loss_per_sample = loss_definition(
+            prediction=flux_eval,
+            ground_truth=gt_eval[sample_indices],
+            target_area_mask=target_mask[sample_indices],
+            reduction_dimensions=reduction_dims,
+            device=device,
+        )
+        loss_per_heliostat = core_utils.mean_loss_per_heliostat(
+            loss_per_sample=loss_per_sample,
+            number_of_samples_per_heliostat=n_samples,
+            device=device,
+        )
+        return loss_per_heliostat.mean().item()
+
     def _apply_deviation_bounds(self, heliostat_group, initial_actuator_initial_angle, initial_actuator_offset):
         """
         Clamp all optimised parameters to their Table 5.3 deviation bounds.
@@ -493,10 +596,21 @@ class WortbergPixelReconstructor(WortbergKinematicReconstructor):
     Variant of WortbergKinematicReconstructor that uses measured flux bitmaps
     as ground truth instead of focal spot centroids.
 
+    Before computing the pixel loss each epoch, the predicted flux is Gaussian-
+    blurred (to smooth ray-tracing sparsity at low surface-point counts) and
+    both predicted and measured images are peak-normalized to [0, 1] per image.
+
     This makes it compatible with pixel-based loss functions such as
     PixelLoss and KLDivergenceLoss, which compare full flux images rather
     than centroid positions.
     """
+
+    # Default Gaussian blur σ (pixels). Override via constructor blur_sigma argument.
+    BLUR_SIGMA: float = 5.0
+
+    def __init__(self, *args, blur_sigma: float = 5.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.BLUR_SIGMA = blur_sigma
 
     def _get_ground_truth_and_reduction_dims(
         self,
@@ -505,6 +619,69 @@ class WortbergPixelReconstructor(WortbergKinematicReconstructor):
     ) -> tuple[torch.Tensor, tuple]:
         """Return measured flux bitmaps and spatial reduction dims."""
         return measured_flux, (index_mapping.batched_bitmap_e, index_mapping.batched_bitmap_u)  # focal_spots_measured unused
+
+    def _preprocess_eval_flux(
+        self,
+        predicted_flux: torch.Tensor,
+        ground_truth: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Apply blur + peak-normalize to both images, same as training."""
+        blurred = self._gaussian_blur(predicted_flux, self.BLUR_SIGMA)
+        return self._peak_normalize(blurred), self._peak_normalize(ground_truth)
+
+    @staticmethod
+    def _gaussian_blur(flux: torch.Tensor, sigma: float) -> torch.Tensor:
+        """Apply a differentiable Gaussian blur to a batch of flux images [N, H, W].
+
+        Uses separable 2-D Gaussian convolution so gradients flow through
+        the blur into the kinematic parameters.
+        """
+        if sigma <= 0:
+            return flux
+        kernel_size = int(4 * sigma + 0.5) * 2 + 1  # smallest odd integer covering ±2σ
+        coords = torch.arange(kernel_size, device=flux.device, dtype=flux.dtype) - kernel_size // 2
+        gauss_1d = torch.exp(-0.5 * (coords / sigma) ** 2)
+        gauss_1d = gauss_1d / gauss_1d.sum()
+        kernel = (gauss_1d[:, None] * gauss_1d[None, :]).view(1, 1, kernel_size, kernel_size)
+        return F.conv2d(flux.unsqueeze(1), kernel, padding=kernel_size // 2).squeeze(1)
+
+    @staticmethod
+    def _peak_normalize(flux: torch.Tensor) -> torch.Tensor:
+        """Peak-normalize each image in a batch to [0, 1] independently."""
+        N = flux.shape[0]
+        max_vals = flux.view(N, -1).max(dim=1).values.clamp(min=1e-12)
+        return flux / max_vals.view(N, 1, 1)
+
+    def _compute_epoch_loss(
+        self,
+        epoch: int,
+        flux_distributions: torch.Tensor,
+        measured_flux: torch.Tensor,
+        focal_spots_measured: torch.Tensor,
+        sample_indices: torch.Tensor,
+        target_area_mask: torch.Tensor,
+        loss_definition,
+        ground_truth: torch.Tensor,
+        reduction_dims: tuple,
+        number_of_samples_per_heliostat: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Blur predicted flux, peak-normalize both images, then compute pixel loss."""
+        blurred = self._gaussian_blur(flux_distributions, self.BLUR_SIGMA)
+        pred_norm = self._peak_normalize(blurred)
+        meas_norm = self._peak_normalize(ground_truth[sample_indices])
+        loss_per_sample = loss_definition(
+            prediction=pred_norm,
+            ground_truth=meas_norm,
+            target_area_mask=target_area_mask[sample_indices],
+            reduction_dimensions=reduction_dims,
+            device=device,
+        )
+        return core_utils.mean_loss_per_heliostat(
+            loss_per_sample=loss_per_sample,
+            number_of_samples_per_heliostat=number_of_samples_per_heliostat,
+            device=device,
+        )
 
 
 class WortbergAnnealingReconstructor(WortbergKinematicReconstructor):

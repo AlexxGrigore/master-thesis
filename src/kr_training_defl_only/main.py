@@ -10,7 +10,10 @@ sys.path.insert(0, str(_pkg))
 # Configuration
 # ===================================================================
 
-IS_ON_DAIC = True
+IS_ON_DAIC = False
+SMOKE_TEST = not IS_ON_DAIC  # runs locally with 1 heliostat, 3 epochs — smoke-tests the full code path
+SMOKE_TEST_HELIOSTAT = "AA31"
+SMOKE_TEST_SAMPLE_LIMIT = 8
 
 # Must be set before pyplot is imported anywhere (including from plotting).
 if IS_ON_DAIC:
@@ -51,9 +54,17 @@ else:
     BENCHMARK_DIR = BASE_DIR / "datasets" / "paint_benchmarks"
 
 BENCHMARK_NAME = "benchmark_split-balanced_train-10_validation-30"
-SCENARIO_PATH = BASE_DIR / "scenarios" / "deflectometry_scenario" / "deflectometry_scenario.h5"
+SCENARIO_PATH = (
+    BASE_DIR / "scenarios" / "one_heliostat_scenarios" / "scenario1.h5"
+    if SMOKE_TEST
+    else BASE_DIR / "scenarios" / "deflectometry_scenario" / "deflectometry_scenario.h5"
+)
 _run_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-OUTPUT_DIR = BASE_DIR / "outputs" / f"defl_kr_{_run_timestamp}"
+OUTPUT_DIR = (
+    BASE_DIR / "outputs" / "local_runs" / f"defl_kr_{_run_timestamp}"
+    if not IS_ON_DAIC
+    else BASE_DIR / "outputs" / f"defl_kr_{_run_timestamp}"
+)
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 _log_file_handler = logging.FileHandler(OUTPUT_DIR / "training.log")
@@ -66,7 +77,7 @@ BENCHMARK_CSV = BENCHMARK_DIR / "splits" / f"{BENCHMARK_NAME}.csv"
 CALIBRATION_PROPERTIES_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "calibration_properties"
 FLUX_IMAGE_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "flux_image"
 
-SAMPLE_LIMIT_PER_HELIOSTAT = 10
+SAMPLE_LIMIT_PER_HELIOSTAT = SMOKE_TEST_SAMPLE_LIMIT if SMOKE_TEST else 10
 TRAIN_BASE_POSITION_DEVIATION = True  # False = standard Wortberg Table 5.3 (no position error term)
 CENTROID_METHOD = paint_mappings.UTIS_KEY
 
@@ -113,8 +124,28 @@ test_mapping = build_heliostat_data_mapping(
     split="test",
 )
 
-print(f"\nTrain mapping: {len(train_mapping)} heliostats")
-print(f"Test mapping:  {len(test_mapping)} heliostats")
+validation_mapping = build_heliostat_data_mapping(
+    benchmark_csv=BENCHMARK_CSV,
+    calibration_properties_dir=CALIBRATION_PROPERTIES_DIR,
+    flux_image_dir=FLUX_IMAGE_DIR,
+    split="validation",
+)
+
+if SMOKE_TEST:
+    def _filter_mapping(mapping):
+        return [
+            (hid, cal[:SMOKE_TEST_SAMPLE_LIMIT], flux[:SMOKE_TEST_SAMPLE_LIMIT])
+            for hid, cal, flux in mapping
+            if hid == SMOKE_TEST_HELIOSTAT
+        ]
+    train_mapping = _filter_mapping(train_mapping)
+    test_mapping = _filter_mapping(test_mapping)
+    validation_mapping = _filter_mapping(validation_mapping)
+    print(f"\n[SMOKE TEST] Filtered to heliostat {SMOKE_TEST_HELIOSTAT}, {SMOKE_TEST_SAMPLE_LIMIT} samples/split")
+
+print(f"\nTrain mapping:      {len(train_mapping)} heliostats")
+print(f"Validation mapping: {len(validation_mapping)} heliostats")
+print(f"Test mapping:       {len(test_mapping)} heliostats")
 
 print("\nSample of train mapping:")
 for heliostat_id, cal_paths, flux_paths in train_mapping[:3]:
@@ -133,7 +164,7 @@ train_data_parser = PaintCalibrationDataParser(
 )
 
 eval_data_parser = PaintCalibrationDataParser(
-    sample_limit=10,
+    sample_limit=SMOKE_TEST_SAMPLE_LIMIT if SMOKE_TEST else 10,
     centroid_extraction_method=CENTROID_METHOD,
 )
 
@@ -160,7 +191,7 @@ print(f"Number of heliostat groups: {number_of_heliostat_groups}")
 optimization_configuration = {
     config_dictionary.initial_learning_rate: 1e-4,
     config_dictionary.tolerance: 1e-6,
-    config_dictionary.max_epoch: 300,
+    config_dictionary.max_epoch: 11 if SMOKE_TEST else 300,
     config_dictionary.batch_size: 8,
     config_dictionary.log_step: 5,
     config_dictionary.early_stopping_window: 10,
@@ -171,7 +202,7 @@ optimization_configuration = {
         config_dictionary.min: 1e-6,
         config_dictionary.reduce_factor: 0.5,
         config_dictionary.patience: 10,
-        config_dictionary.threshold: 1e-4,
+        config_dictionary.threshold: 1e-3,
         config_dictionary.cooldown: 5,
     },
 }
@@ -210,8 +241,9 @@ try:
             eval_data_parser=eval_data_parser,
             optimization_configuration=optimization_configuration,
             output_dir=OUTPUT_DIR,
-            save_figures=IS_ON_DAIC,
+            save_figures=True,
             train_position_deviation=TRAIN_BASE_POSITION_DEVIATION,
+            validation_mapping=validation_mapping,
         )
 
 except Exception as e:

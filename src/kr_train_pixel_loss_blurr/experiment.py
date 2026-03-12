@@ -9,7 +9,10 @@ from artist.core.loss_functions import FocalSpotLoss, PixelLoss
 from artist.scenario.scenario import Scenario
 from artist.util import config_dictionary
 
-from artist_extensions.kinematic_reconstructors import WortbergAnnealingReconstructor
+from artist_extensions.kinematic_reconstructors import (
+    WortbergKinematicReconstructor,
+    WortbergPixelReconstructor,
+)
 from utils.evaluation import evaluate_flux_accuracy
 from utils.plotting import (
     plot_tracking_error_histogram,
@@ -22,7 +25,8 @@ log = logging.getLogger(__name__)
 
 def run_experiment(
     loss_name: str,
-    opt_config: dict,
+    phase1_opt_config: dict,
+    phase2_opt_config: dict,
     ddp_setup: dict,
     device: torch.device,
     scenario_path: pathlib.Path,
@@ -36,15 +40,22 @@ def run_experiment(
     validation_mapping: list | None = None,
 ) -> dict:
     """
-    Single-phase kinematic reconstruction with linearly annealed combined loss.
+    Two-phase kinematic reconstruction experiment.
 
-    The loss transitions from pure FocalSpotLoss (epoch 0) to pure PixelLoss
-    (epoch max_epoch) via linear annealing.  Both losses are normalised by
-    their initial value at epoch 0 so they contribute equally at the midpoint.
+    Phase 1 — Focal spot pretraining (WortbergKinematicReconstructor):
+        Trains the kinematic parameters with FocalSpotLoss so that heliostats
+        are roughly aligned and reflected light reliably hits the target.
+        This ensures pixel loss receives non-zero gradients in Phase 2.
+
+    Phase 2 — Pixel loss fine-tuning (WortbergPixelReconstructor):
+        Continues from Phase 1 weights using PixelLoss. A fresh optimizer is
+        created so Adam's momentum is not stale from the different loss scale.
+        Deviation bounds and actuator snapshots are preserved from Phase 1 so
+        all parameters stay within Wortberg (2025) Table 5.3 limits.
 
     Outputs saved to output_dir / loss_name:
-      - training/training.log + training_curves.png
-      - training_summary.json
+      - phase1/training.log + training_curves.png
+      - phase2/training.log + training_curves.png
       - test_metrics.json
       - tracking_error_histogram.png
       - visualizations/flux_comparison_*.png
@@ -52,6 +63,7 @@ def run_experiment(
     exp_dir = output_dir / loss_name
     exp_dir.mkdir(parents=True, exist_ok=True)
 
+    # Top-level log captures both phases.
     exp_log_handler = logging.FileHandler(exp_dir / "training.log")
     exp_log_handler.setFormatter(
         logging.Formatter("[%(asctime)s][%(name)s][%(levelname)s] - %(message)s")
@@ -61,6 +73,7 @@ def run_experiment(
     try:
         log.info(f"=== Starting experiment: {loss_name} ===")
 
+        # Load scenario once — both phases share the same kinematic parameters.
         with h5py.File(scenario_path, "r") as scenario_file:
             scenario = Scenario.load_scenario_from_hdf5(
                 scenario_file=scenario_file,
@@ -86,53 +99,98 @@ def run_experiment(
             }
 
         # ----------------------------------------------------------------
-        # Single annealing phase
+        # Phase 1 — focal spot pretraining
         # ----------------------------------------------------------------
-        train_dir = exp_dir / "training"
-        train_dir.mkdir(parents=True, exist_ok=True)
+        phase1_dir = exp_dir / "phase1"
+        phase1_dir.mkdir(parents=True, exist_ok=True)
 
-        train_log_handler = logging.FileHandler(train_dir / "training.log")
-        train_log_handler.setFormatter(
+        phase1_log_handler = logging.FileHandler(phase1_dir / "training.log")
+        phase1_log_handler.setFormatter(
             logging.Formatter("[%(asctime)s][%(name)s][%(levelname)s] - %(message)s")
         )
-        logging.getLogger().addHandler(train_log_handler)
+        logging.getLogger().addHandler(phase1_log_handler)
 
-        print(f"\n  Annealing — FocalSpotLoss→PixelLoss, "
-              f"max_epoch={opt_config[config_dictionary.max_epoch]}, "
-              f"lr={opt_config[config_dictionary.initial_learning_rate]}")
+        log.info("--- Phase 1: focal spot pretraining ---")
+        print(f"\n  Phase 1 — FocalSpotLoss, max_epoch={phase1_opt_config[config_dictionary.max_epoch]}, "
+              f"lr={phase1_opt_config[config_dictionary.initial_learning_rate]}")
 
-        reconstructor = WortbergAnnealingReconstructor(
+        phase1_reconstructor = WortbergKinematicReconstructor(
             ddp_setup=ddp_setup,
             scenario=scenario,
             train_position_deviation=train_position_deviation,
             data=data,
-            optimization_configuration=opt_config,
+            optimization_configuration=phase1_opt_config,
             reconstruction_method=config_dictionary.kinematic_reconstruction_raytracing,
-            focal_loss=FocalSpotLoss(scenario=scenario),
-            pixel_loss=PixelLoss(scenario=scenario),
             eval_data=eval_data,
         )
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(device)
-        t_train_start = time.time()
-        final_loss = reconstructor.reconstruct_kinematic(
-            loss_definition=None,
+        t_phase1_start = time.time()
+        phase1_reconstructor.reconstruct_kinematic(
+            loss_definition=FocalSpotLoss(scenario=scenario),
             device=device,
         )
-        train_time_s = time.time() - t_train_start
-        train_peak_gpu_gb = torch.cuda.max_memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
-        train_end_gpu_gb = torch.cuda.memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
-        log.info(f"Training — time: {train_time_s/60:.1f} min ({train_time_s:.0f}s), peak GPU: {train_peak_gpu_gb:.2f} GB, end GPU: {train_end_gpu_gb:.2f} GB")
-        print(f"  Training — time: {train_time_s/60:.1f} min ({train_time_s:.0f}s), peak GPU: {train_peak_gpu_gb:.2f} GB, end GPU: {train_end_gpu_gb:.2f} GB")
+        phase1_time_s = time.time() - t_phase1_start
+        phase1_peak_gpu_gb = torch.cuda.max_memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+        phase1_end_gpu_gb = torch.cuda.memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+        log.info(f"Phase 1 — time: {phase1_time_s/60:.1f} min ({phase1_time_s:.0f}s), peak GPU: {phase1_peak_gpu_gb:.2f} GB, end GPU: {phase1_end_gpu_gb:.2f} GB")
+        print(f"  Phase 1 — time: {phase1_time_s/60:.1f} min ({phase1_time_s:.0f}s), peak GPU: {phase1_peak_gpu_gb:.2f} GB, end GPU: {phase1_end_gpu_gb:.2f} GB")
 
-        logging.getLogger().removeHandler(train_log_handler)
-        train_log_handler.close()
+        logging.getLogger().removeHandler(phase1_log_handler)
+        phase1_log_handler.close()
 
-        plot_training_curves(log_file=train_dir / "training.log", output_dir=train_dir)
+        plot_training_curves(log_file=phase1_dir / "training.log", output_dir=phase1_dir)
 
+        # ----------------------------------------------------------------
+        # Phase 2 — pixel loss fine-tuning
+        # ----------------------------------------------------------------
+        phase2_dir = exp_dir / "phase2"
+        phase2_dir.mkdir(parents=True, exist_ok=True)
+
+        phase2_log_handler = logging.FileHandler(phase2_dir / "training.log")
+        phase2_log_handler.setFormatter(
+            logging.Formatter("[%(asctime)s][%(name)s][%(levelname)s] - %(message)s")
+        )
+        logging.getLogger().addHandler(phase2_log_handler)
+
+        log.info("--- Phase 2: pixel loss fine-tuning ---")
+        print(f"\n  Phase 2 — PixelLoss, max_epoch={phase2_opt_config[config_dictionary.max_epoch]}, "
+              f"lr={phase2_opt_config[config_dictionary.initial_learning_rate]}")
+
+        # Fresh reconstructor = fresh Adam optimizer (no stale momentum from Phase 1).
+        # The scenario object already holds Phase 1's optimised kinematic parameters.
+        phase2_reconstructor = WortbergPixelReconstructor(
+            ddp_setup=ddp_setup,
+            scenario=scenario,
+            train_position_deviation=train_position_deviation,
+            data=data,
+            optimization_configuration=phase2_opt_config,
+            reconstruction_method=config_dictionary.kinematic_reconstruction_raytracing,
+            eval_data=eval_data,
+        )
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(device)
+        t_phase2_start = time.time()
+        phase2_final_loss = phase2_reconstructor.reconstruct_kinematic(
+            loss_definition=PixelLoss(scenario=scenario),
+            device=device,
+        )
+        phase2_time_s = time.time() - t_phase2_start
+        phase2_peak_gpu_gb = torch.cuda.max_memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+        phase2_end_gpu_gb = torch.cuda.memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+        log.info(f"Phase 2 — time: {phase2_time_s/60:.1f} min ({phase2_time_s:.0f}s), peak GPU: {phase2_peak_gpu_gb:.2f} GB, end GPU: {phase2_end_gpu_gb:.2f} GB")
+        print(f"  Phase 2 — time: {phase2_time_s/60:.1f} min ({phase2_time_s:.0f}s), peak GPU: {phase2_peak_gpu_gb:.2f} GB, end GPU: {phase2_end_gpu_gb:.2f} GB")
+
+        logging.getLogger().removeHandler(phase2_log_handler)
+        phase2_log_handler.close()
+
+        plot_training_curves(log_file=phase2_dir / "training.log", output_dir=phase2_dir)
+
+        # Save Phase 2 training loss summary — NaN/inf counts indicate heliostats
+        # that still produced no flux on the target after Phase 1 pretraining.
+        loss_np = phase2_final_loss.detach().cpu().numpy()
         import numpy as np
-        loss_np = final_loss.detach().cpu().numpy()
-        training_summary = {
+        phase2_summary = {
             "num_heliostats_total": int(len(loss_np)),
             "num_nan_loss": int(np.isnan(loss_np).sum()),
             "num_inf_loss": int(np.isinf(loss_np).sum()),
@@ -141,18 +199,18 @@ def run_experiment(
             "mean_final_loss": float(np.nanmean(loss_np[np.isfinite(loss_np)])) if np.isfinite(loss_np).any() else None,
             "median_final_loss": float(np.nanmedian(loss_np[np.isfinite(loss_np)])) if np.isfinite(loss_np).any() else None,
         }
-        with open(exp_dir / "training_summary.json", "w") as f:
-            json.dump(training_summary, f, indent=2)
-        print(f"\n  Training summary: "
-              f"{training_summary['num_nan_loss']} NaN, "
-              f"{training_summary['num_inf_loss']} inf, "
-              f"{training_summary['num_zero_loss']} zero "
-              f"(out of {training_summary['num_heliostats_total']} heliostats)")
+        with open(phase2_dir / "training_summary.json", "w") as f:
+            json.dump(phase2_summary, f, indent=2)
+        print(f"\n  Phase 2 training summary: "
+              f"{phase2_summary['num_nan_loss']} NaN, "
+              f"{phase2_summary['num_inf_loss']} inf, "
+              f"{phase2_summary['num_zero_loss']} zero "
+              f"(out of {phase2_summary['num_heliostats_total']} heliostats)")
 
         # ----------------------------------------------------------------
         # Test evaluation
         # ----------------------------------------------------------------
-        del reconstructor
+        del phase1_reconstructor, phase2_reconstructor
         torch.cuda.empty_cache()
 
         if torch.cuda.is_available():
@@ -189,11 +247,18 @@ def run_experiment(
             save_figures=save_figures,
         )
 
+        total_train_time_s = phase1_time_s + phase2_time_s
         timing_stats = {
-            "training_time_s": round(train_time_s, 1),
-            "training_time_min": round(train_time_s / 60, 2),
-            "training_peak_gpu_gb": round(train_peak_gpu_gb, 3),
-            "training_end_gpu_gb": round(train_end_gpu_gb, 3),
+            "phase1_time_s": round(phase1_time_s, 1),
+            "phase1_time_min": round(phase1_time_s / 60, 2),
+            "phase1_peak_gpu_gb": round(phase1_peak_gpu_gb, 3),
+            "phase1_end_gpu_gb": round(phase1_end_gpu_gb, 3),
+            "phase2_time_s": round(phase2_time_s, 1),
+            "phase2_time_min": round(phase2_time_s / 60, 2),
+            "phase2_peak_gpu_gb": round(phase2_peak_gpu_gb, 3),
+            "phase2_end_gpu_gb": round(phase2_end_gpu_gb, 3),
+            "total_training_time_s": round(total_train_time_s, 1),
+            "total_training_time_min": round(total_train_time_s / 60, 2),
             "evaluation_time_s": round(eval_time_s, 1),
             "evaluation_time_min": round(eval_time_s / 60, 2),
             "evaluation_peak_gpu_gb": round(eval_peak_gpu_gb, 3),

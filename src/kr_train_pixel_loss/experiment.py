@@ -37,6 +37,7 @@ def run_experiment(
     output_dir: pathlib.Path,
     save_figures: bool = False,
     train_position_deviation: bool = True,
+    validation_mapping: list | None = None,
 ) -> dict:
     """
     Two-phase kinematic reconstruction experiment.
@@ -90,6 +91,13 @@ def run_experiment(
             config_dictionary.heliostat_data_mapping: train_mapping,
         }
 
+        eval_data = None
+        if validation_mapping is not None:
+            eval_data = {
+                "data_parser": eval_data_parser,
+                "heliostat_data_mapping": validation_mapping,
+            }
+
         # ----------------------------------------------------------------
         # Phase 1 — focal spot pretraining
         # ----------------------------------------------------------------
@@ -113,6 +121,7 @@ def run_experiment(
             data=data,
             optimization_configuration=phase1_opt_config,
             reconstruction_method=config_dictionary.kinematic_reconstruction_raytracing,
+            eval_data=eval_data,
         )
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(device)
@@ -157,6 +166,8 @@ def run_experiment(
             data=data,
             optimization_configuration=phase2_opt_config,
             reconstruction_method=config_dictionary.kinematic_reconstruction_raytracing,
+            eval_data=eval_data,
+            blur_sigma=0.0,
         )
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(device)

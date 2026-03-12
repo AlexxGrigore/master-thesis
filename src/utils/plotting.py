@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from matplotlib import pyplot as plt
 from matplotlib.ticker import LogLocator, LogFormatter
+from scipy.ndimage import gaussian_filter
 
 from artist.core.heliostat_ray_tracer import HeliostatRayTracer
 from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
@@ -36,11 +37,15 @@ def plot_training_curves(log_file: pathlib.Path, output_dir: pathlib.Path) -> No
 
     Looks for log lines of the form (written every log_step epochs):
         Rank: 0, Epoch: {epoch}, Loss: {loss}, LR: {lr}
+        Rank: 0, Epoch: {epoch}, Eval Loss: {eval_loss}
     Each heliostat group produces one such sequence, separated by
     'Kinematic reconstructed.' markers.
     """
-    line_pattern = re.compile(
+    train_pattern = re.compile(
         r"Rank:\s*0\s*,\s*Epoch:\s*(\d+),\s*Loss:\s*([\d.eE+\-]+),\s*LR:\s*([\d.eE+\-]+)"
+    )
+    eval_pattern = re.compile(
+        r"Rank:\s*0\s*,\s*Epoch:\s*(\d+),\s*Eval Loss:\s*([\d.eE+\-]+)"
     )
 
     if not log_file.exists():
@@ -48,19 +53,25 @@ def plot_training_curves(log_file: pathlib.Path, output_dir: pathlib.Path) -> No
         return
 
     groups_data: list[dict] = []
-    current: dict = {"epochs": [], "losses": [], "lrs": []}
+    current: dict = {"epochs": [], "losses": [], "lrs": [], "eval_epochs": [], "eval_losses": []}
 
     with open(log_file) as fh:
         for line in fh:
-            m = line_pattern.search(line)
+            m = train_pattern.search(line)
             if m:
                 epoch, loss, lr = int(m.group(1)), float(m.group(2)), float(m.group(3))
                 current["epochs"].append(epoch)
                 current["losses"].append(loss)
                 current["lrs"].append(lr)
-            elif "Kinematic reconstructed." in line and current["epochs"]:
+                continue
+            m = eval_pattern.search(line)
+            if m:
+                current["eval_epochs"].append(int(m.group(1)))
+                current["eval_losses"].append(float(m.group(2)))
+                continue
+            if "Kinematic reconstructed." in line and current["epochs"]:
                 groups_data.append(current)
-                current = {"epochs": [], "losses": [], "lrs": []}
+                current = {"epochs": [], "losses": [], "lrs": [], "eval_epochs": [], "eval_losses": []}
 
     if current["epochs"]:
         groups_data.append(current)
@@ -79,11 +90,24 @@ def plot_training_curves(log_file: pathlib.Path, output_dir: pathlib.Path) -> No
     cmap = plt.cm.tab10 if n_groups <= 10 else plt.cm.viridis
 
     for i, gd in enumerate(groups_data):
-        color = cmap(i / max(n_groups - 1, 1))
+        if individual and n_groups == 1:
+            train_color, val_color = "tab:blue", "tab:orange"
+            train_label, val_label = "Training Loss", "Validation Loss"
+        elif individual:
+            train_color = val_color = cmap(i / max(n_groups - 1, 1))
+            train_label, val_label = f"Group {i} (train)", f"Group {i} (val)"
+        else:
+            train_color = val_color = cmap(i / max(n_groups - 1, 1))
+            train_label = val_label = "_nolegend_"
         alpha = 0.85 if individual else 0.12
-        label = f"Group {i}" if individual else "_nolegend_"
-        ax_loss.plot(gd["epochs"], gd["losses"], color=color, alpha=alpha, linewidth=1.2, label=label)
-        ax_lr.plot(gd["epochs"], gd["lrs"], color=color, alpha=alpha, linewidth=1.2, label=label)
+        ax_loss.plot(gd["epochs"], gd["losses"], color=train_color, alpha=alpha, linewidth=1.2, label=train_label)
+        if gd["eval_epochs"]:
+            ax_loss.plot(
+                gd["eval_epochs"], gd["eval_losses"],
+                color=val_color, alpha=alpha, linewidth=1.2, linestyle="--",
+                label=val_label if individual else "_nolegend_",
+            )
+        ax_lr.plot(gd["epochs"], gd["lrs"], color=train_color, alpha=alpha, linewidth=1.2, label=train_label)
 
     if not individual:
         max_common = min(len(gd["epochs"]) for gd in groups_data)
@@ -94,9 +118,21 @@ def plot_training_curves(log_file: pathlib.Path, output_dir: pathlib.Path) -> No
             mean_losses = all_losses.mean(axis=0)
             mean_lrs = all_lrs.mean(axis=0)
             p10_losses, p90_losses = np.percentile(all_losses, 10, axis=0), np.percentile(all_losses, 90, axis=0)
-            ax_loss.fill_between(common_epochs, p10_losses, p90_losses, alpha=0.15, color="steelblue", label="10–90th pct.")
-            ax_loss.plot(common_epochs, mean_losses, color="black", linewidth=2.2, label=f"Mean ({n_groups} groups)", zorder=5)
-            ax_lr.plot(common_epochs, mean_lrs, color="black", linewidth=2.2, label=f"Mean ({n_groups} groups)", zorder=5)
+            ax_loss.fill_between(common_epochs, p10_losses, p90_losses, alpha=0.15, color="tab:blue", label="10–90th pct.")
+            ax_loss.plot(common_epochs, mean_losses, color="tab:blue", linewidth=2.2, label=f"Mean Training Loss ({n_groups} groups)", zorder=5)
+            ax_lr.plot(common_epochs, mean_lrs, color="tab:blue", linewidth=2.2, label=f"Mean ({n_groups} groups)", zorder=5)
+            # Mean eval loss across groups (only groups that have eval data)
+            groups_with_eval = [gd for gd in groups_data if gd["eval_epochs"]]
+            if groups_with_eval:
+                max_eval_common = min(len(gd["eval_epochs"]) for gd in groups_with_eval)
+                if max_eval_common > 0:
+                    common_eval_epochs = groups_with_eval[0]["eval_epochs"][:max_eval_common]
+                    all_eval_losses = np.array([gd["eval_losses"][:max_eval_common] for gd in groups_with_eval])
+                    ax_loss.plot(
+                        common_eval_epochs, all_eval_losses.mean(axis=0),
+                        color="tab:orange", linewidth=2.2, linestyle="--",
+                        label=f"Mean Validation Loss ({len(groups_with_eval)} groups)", zorder=5,
+                    )
 
     ax_loss.set_yscale("log")
     ax_loss.yaxis.set_major_locator(LogLocator(base=10, numticks=8))
@@ -251,55 +287,71 @@ def visualize_flux_comparison(
             pred_raw = predicted_flux[i].cpu().detach().numpy()
             meas = measured_flux[i].cpu().detach().numpy()
 
-            # Normalize predicted flux to [0, 1] by matching total energy to the measured image.
-            # The ray tracer returns physical intensity units (with 1/r² attenuation) that are
-            # orders of magnitude smaller than the [0, 1]-normalised measured flux, so plotting
-            # both on the same colour scale would make the prediction appear completely black.
-            pred_sum = pred_raw.sum()
-            meas_sum = meas.sum()
-            if pred_sum > 0 and meas_sum > 0:
-                pred = pred_raw * (meas_sum / pred_sum)
-            else:
-                pred = pred_raw  # fall back to raw values if one image is empty
+            # Peak-normalize both images to [0, 1] for a fair visual comparison.
+            pred_max = pred_raw.max()
+            meas_max = meas.max()
+            pred = pred_raw / pred_max if pred_max > 0 else pred_raw
+            meas_norm = meas / meas_max if meas_max > 0 else meas
 
-            diff = pred - meas
+            diff = pred - meas_norm
 
-            # Shared colour scale for predicted / measured
-            vmax_flux = max(pred.max(), meas.max())
+            # Gaussian-blurred versions (sigma matches WortbergPixelReconstructor.BLUR_SIGMA).
+            pred_blur = gaussian_filter(pred, sigma=5)
+            pred_blur_max = pred_blur.max()
+            pred_blur = pred_blur / pred_blur_max if pred_blur_max > 0 else pred_blur
+            diff_blur = pred_blur - meas_norm
+
+            # Both images are in [0, 1], so shared colour scale is always 1.
+            vmax_flux = 1.0
             pixel_mse = float(np.mean(diff ** 2))
             max_abs_diff = float(np.abs(diff).max())
+            pixel_mse_blur = float(np.mean(diff_blur ** 2))
+            max_abs_diff_blur = float(np.abs(diff_blur).max())
 
-            fig, axes = plt.subplots(1, 3, figsize=(17, 5))
+            fig, axes = plt.subplots(2, 3, figsize=(17, 10))
             fig.patch.set_facecolor("white")
             fig.suptitle(
-                f"Flux Comparison — sample {samples_visualized + 1}   "
-                f"(pixel MSE: {pixel_mse:.5f})",
+                f"Flux Comparison — sample {samples_visualized + 1}",
                 fontsize=FONT_TITLE, fontweight="bold",
             )
 
-            im0 = axes[0].imshow(pred, cmap="inferno", vmin=0, vmax=vmax_flux)
-            axes[0].set_title("Predicted Flux (energy-normalised)", fontsize=FONT_LABEL, fontweight="bold")
-            axes[0].axis("off")
-            cb0 = plt.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.03)
-            cb0.ax.tick_params(labelsize=FONT_TICK)
+            # --- Row 0: raw (peak-normalised) ---
+            im00 = axes[0, 0].imshow(pred, cmap="inferno", vmin=0, vmax=vmax_flux)
+            axes[0, 0].set_title("Predicted Flux (peak-normalised)", fontsize=FONT_LABEL, fontweight="bold")
+            axes[0, 0].axis("off")
+            plt.colorbar(im00, ax=axes[0, 0], fraction=0.046, pad=0.03).ax.tick_params(labelsize=FONT_TICK)
 
-            im1 = axes[1].imshow(meas, cmap="inferno", vmin=0, vmax=vmax_flux)
-            axes[1].set_title("Measured Flux", fontsize=FONT_LABEL, fontweight="bold")
-            axes[1].axis("off")
-            cb1 = plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.03)
-            cb1.ax.tick_params(labelsize=FONT_TICK)
+            im01 = axes[0, 1].imshow(meas_norm, cmap="inferno", vmin=0, vmax=vmax_flux)
+            axes[0, 1].set_title("Measured Flux", fontsize=FONT_LABEL, fontweight="bold")
+            axes[0, 1].axis("off")
+            plt.colorbar(im01, ax=axes[0, 1], fraction=0.046, pad=0.03).ax.tick_params(labelsize=FONT_TICK)
 
-            im2 = axes[2].imshow(
-                diff, cmap="coolwarm",
-                vmin=-max_abs_diff, vmax=max_abs_diff,
-            )
-            axes[2].set_title(
-                f"Residual (Pred − Meas)\nmax |diff|: {max_abs_diff:.4f}",
+            im02 = axes[0, 2].imshow(diff, cmap="coolwarm", vmin=-max_abs_diff, vmax=max_abs_diff)
+            axes[0, 2].set_title(
+                f"Residual (Pred − Meas)\npixel MSE: {pixel_mse:.5f}  max |diff|: {max_abs_diff:.4f}",
                 fontsize=FONT_LABEL, fontweight="bold",
             )
-            axes[2].axis("off")
-            cb2 = plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.03)
-            cb2.ax.tick_params(labelsize=FONT_TICK)
+            axes[0, 2].axis("off")
+            plt.colorbar(im02, ax=axes[0, 2], fraction=0.046, pad=0.03).ax.tick_params(labelsize=FONT_TICK)
+
+            # --- Row 1: Gaussian-blurred predicted ---
+            im10 = axes[1, 0].imshow(pred_blur, cmap="inferno", vmin=0, vmax=vmax_flux)
+            axes[1, 0].set_title("Predicted Flux (Gaussian blur σ=3)", fontsize=FONT_LABEL, fontweight="bold")
+            axes[1, 0].axis("off")
+            plt.colorbar(im10, ax=axes[1, 0], fraction=0.046, pad=0.03).ax.tick_params(labelsize=FONT_TICK)
+
+            im11 = axes[1, 1].imshow(meas_norm, cmap="inferno", vmin=0, vmax=vmax_flux)
+            axes[1, 1].set_title("Measured Flux", fontsize=FONT_LABEL, fontweight="bold")
+            axes[1, 1].axis("off")
+            plt.colorbar(im11, ax=axes[1, 1], fraction=0.046, pad=0.03).ax.tick_params(labelsize=FONT_TICK)
+
+            im12 = axes[1, 2].imshow(diff_blur, cmap="coolwarm", vmin=-max_abs_diff_blur, vmax=max_abs_diff_blur)
+            axes[1, 2].set_title(
+                f"Residual (Blurred − Meas)\npixel MSE: {pixel_mse_blur:.5f}  max |diff|: {max_abs_diff_blur:.4f}",
+                fontsize=FONT_LABEL, fontweight="bold",
+            )
+            axes[1, 2].axis("off")
+            plt.colorbar(im12, ax=axes[1, 2], fraction=0.046, pad=0.03).ax.tick_params(labelsize=FONT_TICK)
 
             plt.tight_layout()
 
@@ -309,7 +361,7 @@ def visualize_flux_comparison(
                     dpi=150, bbox_inches="tight",
                 )
 
-            plt.show()
+            plt.close()
 
             samples_visualized += 1
             if samples_visualized >= num_samples:

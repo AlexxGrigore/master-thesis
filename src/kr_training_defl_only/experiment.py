@@ -63,10 +63,21 @@ def _plot_convergence_curves(
         )
 
         # --- Row 0: Loss ---
+        eval_epochs = [e["epoch"] for e in entries if "eval_loss" in e]
+        eval_losses = [e["eval_loss"] for e in entries if "eval_loss" in e]
+        has_eval = bool(eval_epochs)
+
         axes[0].plot(
             epochs, [e["loss"] for e in entries],
             color="steelblue", linewidth=1.5,
+            label="Train" if has_eval else None,
         )
+        if has_eval:
+            axes[0].plot(
+                eval_epochs, eval_losses,
+                color="darkorange", linewidth=1.5, linestyle="--", label="Eval (val)",
+            )
+            axes[0].legend(fontsize=FONT_LEGEND, framealpha=0.85)
         axes[0].grid(**GRID_KW)
         _style_ax(axes[0], "", "Loss", "Training Loss")
 
@@ -279,6 +290,7 @@ def run_experiment(
     output_dir: pathlib.Path,
     save_figures: bool = False,
     train_position_deviation: bool = True,
+    validation_mapping: list | None = None,
 ) -> dict:
     """
     Run one training + evaluation experiment for a given loss function.
@@ -311,12 +323,22 @@ def run_experiment(
                 number_of_surface_points_per_facet=torch.tensor([25, 25]),
             )
 
+        scenario.set_number_of_rays(10)
+        log.info("Number of rays set to 20.")
+
         print(f"  Heliostats: {scenario.heliostat_field.number_of_heliostats_per_group.sum().item()}")
 
         data = {
             config_dictionary.data_parser: train_data_parser,
             config_dictionary.heliostat_data_mapping: train_mapping,
         }
+
+        eval_data = None
+        if validation_mapping is not None:
+            eval_data = {
+                "data_parser": eval_data_parser,
+                "heliostat_data_mapping": validation_mapping,
+            }
 
         reconstructor = reconstructor_cls(
             ddp_setup=ddp_setup,
@@ -325,6 +347,7 @@ def run_experiment(
             data=data,
             optimization_configuration=optimization_configuration,
             reconstruction_method=config_dictionary.kinematic_reconstruction_raytracing,
+            eval_data=eval_data,
         )
 
         loss_definition = loss_fn_factory(scenario)
