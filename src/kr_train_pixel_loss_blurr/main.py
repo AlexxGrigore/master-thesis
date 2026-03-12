@@ -10,7 +10,7 @@ sys.path.insert(0, str(_pkg))
 # Configuration
 # ===================================================================
 
-IS_ON_DAIC = False
+IS_ON_DAIC = True
 SMOKE_TEST = not IS_ON_DAIC  # runs locally with 1 heliostat, 3 epochs — smoke-tests the full code path
 SMOKE_TEST_HELIOSTAT = "AA31"
 SMOKE_TEST_SAMPLE_LIMIT = 8
@@ -59,7 +59,7 @@ SCENARIO_PATH = (
 )
 _run_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 OUTPUT_DIR = (
-    BASE_DIR / "outputs" / "local_runs" / f"pixel_loss_kr_{_run_timestamp}"
+    BASE_DIR / "outputs" / "local_runs" / f"pixel_loss_kr_blurr_{_run_timestamp}"
     if not IS_ON_DAIC
     else BASE_DIR / "outputs" / f"pixel_loss_kr_{_run_timestamp}"
 )
