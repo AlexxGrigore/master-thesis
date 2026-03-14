@@ -13,6 +13,7 @@ from artist_extensions.kinematic_reconstructors import (
     WortbergKinematicReconstructor,
     WortbergPixelReconstructor,
 )
+from utils.checkpointing import save_kinematic_parameters
 from utils.evaluation import evaluate_flux_accuracy
 from utils.plotting import (
     plot_tracking_error_histogram,
@@ -279,6 +280,9 @@ def run_experiment(
         }
         with open(exp_dir / "test_metrics.json", "w") as f:
             json.dump(metrics_to_save, f, indent=2)
+
+        # ---- Save kinematic parameters ----
+        save_kinematic_parameters(scenario, exp_dir / "all_kinematic_parameters.json")
 
         log.info(f"=== Experiment '{loss_name}' done: {test_metrics['mean_focal_spot_error_mrad']:.2f} mrad ===")
         return test_metrics

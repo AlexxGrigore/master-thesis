@@ -11,6 +11,7 @@ from matplotlib import pyplot as plt
 from artist.scenario.scenario import Scenario
 from artist.util import config_dictionary, index_mapping
 
+from utils.checkpointing import save_kinematic_parameters
 from utils.evaluation import evaluate_flux_accuracy
 from utils.plotting import (
     _style_ax,
@@ -479,18 +480,7 @@ def run_experiment(
         )
 
         # ---- Save kinematic parameters ----
-        all_kinematic_params_json = {}
-        for group_index, heliostat_group in enumerate(scenario.heliostat_field.heliostat_groups):
-            group_entry = {
-                "heliostat_names": heliostat_group.names,
-                "rotation_deviation_parameters": heliostat_group.kinematic.rotation_deviation_parameters.detach().cpu().tolist(),
-                "actuator_parameters": heliostat_group.kinematic.actuators.optimizable_parameters.detach().cpu().tolist(),
-            }
-            if hasattr(heliostat_group.kinematic, "_base_position_deviation"):
-                group_entry["base_position_deviation_parameters"] = heliostat_group.kinematic._base_position_deviation.detach().cpu().tolist()
-            all_kinematic_params_json[f"group_{group_index}"] = group_entry
-        with open(exp_dir / "all_kinematic_parameters.json", "w") as f:
-            json.dump(all_kinematic_params_json, f, indent=2)
+        save_kinematic_parameters(scenario, exp_dir / "all_kinematic_parameters.json")
 
         timing_stats = {
             "training_time_s": round(train_time_s, 1),

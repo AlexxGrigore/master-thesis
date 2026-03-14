@@ -10,7 +10,7 @@ sys.path.insert(0, str(_pkg))
 # Configuration
 # ===================================================================
 
-IS_ON_DAIC = False
+IS_ON_DAIC = True
 SMOKE_TEST = not IS_ON_DAIC  # runs locally with 1 heliostat, 3 epochs — smoke-tests the full code path
 SMOKE_TEST_HELIOSTAT = "AA31"
 SMOKE_TEST_SAMPLE_LIMIT = 8
