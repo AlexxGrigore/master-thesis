@@ -15,7 +15,7 @@ sys.path.insert(0, str(_pkg))
 # Configuration
 # ===================================================================
 
-IS_ON_DAIC = False
+IS_ON_DAIC = True
 SMOKE_TEST = not IS_ON_DAIC  # 2 heliostats, rays={10,20}, sigmas={0,5}
 
 if IS_ON_DAIC:
