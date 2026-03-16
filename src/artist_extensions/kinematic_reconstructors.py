@@ -764,3 +764,278 @@ class WortbergAnnealingReconstructor(WortbergKinematicReconstructor):
         pixel_norm = pixel_per_heliostat / self._pixel_loss_0
 
         return alpha * focal_norm + beta * pixel_norm
+
+
+class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
+    """
+    Variant of WortbergKinematicReconstructor that uses motor position (alignment) loss.
+
+    Instead of ray-tracing to produce flux images, this reconstructor compares the motor
+    positions predicted by the kinematic inverse-kinematics solver against the motor positions
+    measured during calibration (from PAINT calibration-properties JSON files).
+
+    No ray tracing is performed during training or validation, making each epoch significantly
+    faster and requiring much less GPU memory.
+
+    The loss is computed via ``AlignmentLoss`` (passed as ``loss_definition``), which converts
+    both predicted and measured motor positions to joint angles (radians) before computing MSE.
+    """
+
+    def _reconstruct_kinematic_parameters_with_raytracing(
+        self,
+        loss_definition,
+        device=None,
+    ) -> torch.Tensor:
+        """Training loop without ray tracing — uses motor position MSE instead."""
+        device = get_device(device=device)
+        rank = self.ddp_setup[config_dictionary.rank]
+
+        if rank == 0:
+            log.info(
+                "Beginning kinematic reconstruction with alignment loss "
+                "(motor position MSE, no ray tracing)."
+            )
+
+        final_loss_per_heliostat = torch.full(
+            (self.scenario.heliostat_field.number_of_heliostats_per_group.sum(),),
+            torch.inf,
+            device=device,
+        )
+        final_loss_start_indices = torch.cat(
+            [
+                torch.tensor([0], device=device),
+                self.scenario.heliostat_field.number_of_heliostats_per_group.cumsum(
+                    index_mapping.heliostat_dimension
+                ),
+            ]
+        )
+
+        self._convergence_history = []
+
+        for heliostat_group_index in self.ddp_setup[config_dictionary.groups_to_ranks_mapping][rank]:
+            heliostat_group = self.scenario.heliostat_field.heliostat_groups[heliostat_group_index]
+            parser = self.data[config_dictionary.data_parser]
+            heliostat_mapping = self.data[config_dictionary.heliostat_data_mapping]
+
+            (
+                _measured_flux,
+                _focal_spots_measured,
+                incident_ray_directions,
+                motor_positions_measured,   # [N_active, 2] — kept, not discarded
+                active_heliostats_mask,
+                target_area_mask,
+            ) = parser.parse_data_for_reconstruction(
+                heliostat_data_mapping=heliostat_mapping,
+                heliostat_group=heliostat_group,
+                scenario=self.scenario,
+                device=device,
+            )
+
+            if active_heliostats_mask.sum() == 0:
+                loss_per_heliostat_all.append(torch.tensor(float("inf"), device=device))
+                continue
+
+            optimizer, initial_actuator_initial_angle, initial_actuator_offset = (
+                self._setup_optimizer(heliostat_group, device)
+            )
+            scheduler = self._setup_scheduler(optimizer)
+            early_stopper = self._setup_early_stopper()
+
+            number_of_samples_per_heliostat = int(
+                active_heliostats_mask.sum() / (active_heliostats_mask > 0).sum()
+            )
+
+            loss = torch.inf
+            epoch = 0
+            log_step = (
+                self.optimization_configuration[config_dictionary.max_epoch]
+                if self.optimization_configuration[config_dictionary.log_step] == 0
+                else self.optimization_configuration[config_dictionary.log_step]
+            )
+
+            while (
+                loss > float(self.optimization_configuration[config_dictionary.tolerance])
+                and epoch <= self.optimization_configuration[config_dictionary.max_epoch]
+            ):
+                optimizer.zero_grad()
+
+                heliostat_group.activate_heliostats(
+                    active_heliostats_mask=active_heliostats_mask, device=device
+                )
+                kinematic = heliostat_group.kinematic
+
+                if self.train_position_deviation:
+                    active_base_dev = kinematic._base_position_deviation.repeat_interleave(
+                        active_heliostats_mask, dim=0
+                    )
+                    pad = torch.zeros(active_base_dev.shape[0], 1, device=device)
+                    kinematic.active_heliostat_positions = (
+                        kinematic.active_heliostat_positions
+                        + torch.cat([active_base_dev, pad], dim=1)
+                    )
+
+                # Forward pass — sets kinematic.active_motor_positions as a byproduct
+                heliostat_group.align_surfaces_with_incident_ray_directions(
+                    aim_points=self.scenario.target_areas.centers[target_area_mask],
+                    incident_ray_directions=incident_ray_directions,
+                    active_heliostats_mask=active_heliostats_mask,
+                    device=device,
+                )
+
+                # Alignment loss — no ray tracing needed
+                predicted_mp = kinematic.active_motor_positions  # [N_active, 2]
+                loss_per_sample = loss_definition(
+                    predicted_motor_positions=predicted_mp,
+                    measured_motor_positions=motor_positions_measured,
+                    actuators=kinematic.actuators,
+                    device=device,
+                )
+                loss_per_heliostat = core_utils.mean_loss_per_heliostat(
+                    loss_per_sample=loss_per_sample,
+                    number_of_samples_per_heliostat=number_of_samples_per_heliostat,
+                    device=device,
+                )
+
+                loss = loss_per_heliostat.mean()
+                loss.backward()
+                optimizer.step()
+
+                self._apply_deviation_bounds(
+                    heliostat_group,
+                    initial_actuator_initial_angle,
+                    initial_actuator_offset,
+                )
+
+                if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                    scheduler.step(loss.detach())
+                else:
+                    scheduler.step()
+
+                if epoch % log_step == 0:
+                    mem_alloc = torch.cuda.memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+                    mem_peak = torch.cuda.max_memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0
+                    log.info(
+                        f"Rank: {rank}, Epoch: {epoch}, Loss: {loss:.6f}, "
+                        f"LR: {optimizer.param_groups[index_mapping.optimizer_param_group_0]['lr']}, "
+                        f"GPU mem: {mem_alloc:.2f} GB (peak: {mem_peak:.2f} GB)"
+                    )
+                    entry = {
+                        "epoch": epoch,
+                        "group": heliostat_group_index,
+                        "loss": loss.item(),
+                        "translation_deviation_mean_abs": kinematic.translation_deviation_parameters.abs().mean().item(),
+                        "rotation_deviation_mean_abs": kinematic.rotation_deviation_parameters.abs().mean().item(),
+                        "actuator_angle_dev_mean_abs": (
+                            kinematic.actuators.optimizable_parameters[:, index_mapping.actuator_initial_angle, :]
+                            - initial_actuator_initial_angle
+                        ).abs().mean().item(),
+                        "actuator_offset_dev_mean_abs": (
+                            kinematic.actuators.non_optimizable_parameters[:, index_mapping.actuator_offset, :]
+                            - initial_actuator_offset
+                        ).abs().mean().item(),
+                    }
+                    if self.train_position_deviation:
+                        entry["base_pos_dev_e_mean_abs"] = kinematic._base_position_deviation[:, 0].abs().mean().item()
+                        entry["base_pos_dev_n_mean_abs"] = kinematic._base_position_deviation[:, 1].abs().mean().item()
+                        entry["base_pos_dev_u_mean_abs"] = kinematic._base_position_deviation[:, 2].abs().mean().item()
+                    eval_loss = self._compute_eval_loss_no_grad(heliostat_group, loss_definition, device)
+                    if eval_loss is not None:
+                        entry["eval_loss"] = eval_loss
+                        log.info(f"Rank: {rank}, Epoch: {epoch}, Eval Loss: {eval_loss:.6f}")
+                    self._convergence_history.append(entry)
+
+                if early_stopper.step(loss):
+                    log.info(f"Early stopping at epoch {epoch}.")
+                    break
+
+                epoch += 1
+
+            # Map per-heliostat loss back into the global result tensor
+            global_active_indices = torch.nonzero(active_heliostats_mask != 0, as_tuple=True)[0]
+            final_indices = global_active_indices + final_loss_start_indices[heliostat_group_index]
+            final_loss_per_heliostat[final_indices] = loss_per_heliostat.detach()
+            log.info(f"Rank: {rank}, Kinematic reconstructed.")
+
+        if self.ddp_setup[config_dictionary.is_distributed]:
+            for index, heliostat_group in enumerate(self.scenario.heliostat_field.heliostat_groups):
+                src = self.ddp_setup[config_dictionary.ranks_to_groups_mapping][index][
+                    index_mapping.first_rank_from_group
+                ]
+                torch.distributed.broadcast(
+                    heliostat_group.kinematic.translation_deviation_parameters, src=src
+                )
+                torch.distributed.broadcast(
+                    heliostat_group.kinematic.rotation_deviation_parameters, src=src
+                )
+                torch.distributed.broadcast(
+                    heliostat_group.kinematic.actuators.optimizable_parameters, src=src
+                )
+                torch.distributed.broadcast(
+                    heliostat_group.kinematic.actuators.non_optimizable_parameters, src=src
+                )
+                if self.train_position_deviation:
+                    torch.distributed.broadcast(
+                        heliostat_group.kinematic._base_position_deviation, src=src
+                    )
+            torch.distributed.all_reduce(
+                final_loss_per_heliostat, op=torch.distributed.ReduceOp.MIN
+            )
+            log.info(f"Rank: {rank}, synchronized after kinematic reconstruction.")
+
+        return final_loss_per_heliostat
+
+    @torch.no_grad()
+    def _compute_eval_loss_no_grad(self, heliostat_group, loss_definition, device) -> float | None:
+        """Compute validation alignment loss without ray tracing."""
+        if self.eval_data is None:
+            return None
+        eval_parser = self.eval_data["data_parser"]
+        eval_mapping = self.eval_data["heliostat_data_mapping"]
+
+        (
+            _measured_flux,
+            _focal_spots_measured,
+            incident_ray_directions,
+            motor_positions_measured,
+            active_mask,
+            target_mask,
+        ) = eval_parser.parse_data_for_reconstruction(
+            heliostat_data_mapping=eval_mapping,
+            heliostat_group=heliostat_group,
+            scenario=self.scenario,
+            device=device,
+        )
+
+        if active_mask.sum() == 0:
+            return None
+
+        heliostat_group.activate_heliostats(active_heliostats_mask=active_mask, device=device)
+        kinematic = heliostat_group.kinematic
+
+        if self.train_position_deviation and hasattr(kinematic, "_base_position_deviation"):
+            active_base_dev = kinematic._base_position_deviation.repeat_interleave(active_mask, dim=0)
+            pad = torch.zeros(active_base_dev.shape[0], 1, device=device)
+            kinematic.active_heliostat_positions = (
+                kinematic.active_heliostat_positions + torch.cat([active_base_dev, pad], dim=1)
+            )
+
+        heliostat_group.align_surfaces_with_incident_ray_directions(
+            aim_points=self.scenario.target_areas.centers[target_mask],
+            incident_ray_directions=incident_ray_directions,
+            active_heliostats_mask=active_mask,
+            device=device,
+        )
+
+        n_samples = int(active_mask.sum() / (active_mask > 0).sum())
+        loss_per_sample = loss_definition(
+            predicted_motor_positions=kinematic.active_motor_positions,
+            measured_motor_positions=motor_positions_measured,
+            actuators=kinematic.actuators,
+            device=device,
+        )
+        loss_per_heliostat = core_utils.mean_loss_per_heliostat(
+            loss_per_sample=loss_per_sample,
+            number_of_samples_per_heliostat=n_samples,
+            device=device,
+        )
+        return loss_per_heliostat.mean().item()
