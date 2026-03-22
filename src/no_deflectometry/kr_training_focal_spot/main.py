@@ -57,13 +57,13 @@ BENCHMARK_NAME = "benchmark_split-balanced_train-10_validation-30"
 SCENARIO_PATH = (
     BASE_DIR / "scenarios" / "one_heliostat_scenarios" / "scenario1.h5"
     if SMOKE_TEST
-    else BASE_DIR / "scenarios" / "deflectometry_scenario" / "deflectometry_scenario.h5"
+    else BASE_DIR / "scenarios" / "ideal_scenario" / "ideal_scenario.h5"
 )
 _run_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 OUTPUT_DIR = (
-    BASE_DIR / "outputs" / "local_runs" / f"focal_spot_kr_{_run_timestamp}"
+    BASE_DIR / "outputs" / "local_runs" / "no_deflectometry" / f"focal_spot_kr_{_run_timestamp}"
     if not IS_ON_DAIC
-    else BASE_DIR / "outputs" / f"focal_spot_kr_{_run_timestamp}"
+    else BASE_DIR / "outputs" / "no_deflectometry" / f"focal_spot_kr_{_run_timestamp}"
 )
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -188,12 +188,15 @@ print(f"Number of heliostat groups: {number_of_heliostat_groups}")
 # Optimization Configuration
 # ===================================================================
 
+LOG_STEP = 5
+VALIDATION_EVERY_N_EPOCHS = 2 * LOG_STEP
+
 optimization_configuration = {
     config_dictionary.initial_learning_rate: 1e-4,
     config_dictionary.tolerance: 1e-6,
     config_dictionary.max_epoch: 11 if SMOKE_TEST else 300,
     config_dictionary.batch_size: 8,
-    config_dictionary.log_step: 5,
+    config_dictionary.log_step: LOG_STEP,
     config_dictionary.early_stopping_window: 10,
     config_dictionary.early_stopping_delta: 1e-5,
     config_dictionary.early_stopping_patience: 400,  # > max_epoch → always runs fully
