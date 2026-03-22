@@ -97,12 +97,22 @@ def plot_heatmap(
     vmin = np.nanmin([grid_off, grid_on])
     vmax = np.nanmax([grid_off, grid_on])
 
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=True)
+    fig = plt.figure(figsize=(11, 4))
     fig.suptitle(
         f"Simulation MSE vs #rays and distance\n"
         f"(left: no blur, right: Gaussian blur σ={optimal_sigma})",
         fontsize=12,
     )
+    import matplotlib.gridspec as gridspec
+    gs = gridspec.GridSpec(
+        1, 3,
+        width_ratios=[1, 1, 0.06],
+        wspace=0.35,
+        left=0.08, right=0.94, top=0.82, bottom=0.12,
+    )
+    axes = [fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1])]
+    cax  = fig.add_subplot(gs[0, 2])
+    axes[1].sharey(axes[0])
 
     for ax, grid, title in [
         (axes[0], grid_off, "Blur = OFF (σ=0)"),
@@ -127,11 +137,11 @@ def plot_heatmap(
             for ri in range(len(rays)):
                 val = grid[bi, ri]
                 if not np.isnan(val):
-                    ax.text(ri, bi, f"{val:.3f}", ha="center", va="center",
+                    ax.text(ri, bi, f"{val:.4f}", ha="center", va="center",
                             fontsize=8, color="white" if val > (vmin + vmax) / 2 else "black")
 
-    plt.colorbar(im, ax=axes, label="MSE (peak-normalised)")
-    plt.tight_layout()
+    plt.setp(axes[1].get_yticklabels(), visible=False)
+    fig.colorbar(im, cax=cax, label="MSE (peak-normalised)")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close()

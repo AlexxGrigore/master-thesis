@@ -296,7 +296,7 @@ def visualize_flux_comparison(
             diff = pred - meas_norm
 
             # Gaussian-blurred versions (sigma matches WortbergPixelReconstructor.BLUR_SIGMA).
-            pred_blur = gaussian_filter(pred, sigma=5)
+            pred_blur = gaussian_filter(pred, sigma=2)
             pred_blur_max = pred_blur.max()
             pred_blur = pred_blur / pred_blur_max if pred_blur_max > 0 else pred_blur
             diff_blur = pred_blur - meas_norm

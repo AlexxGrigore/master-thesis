@@ -61,9 +61,9 @@ SCENARIO_PATH = (
 )
 _run_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 OUTPUT_DIR = (
-    BASE_DIR / "outputs" / "local_runs" / f"defl_kr_{_run_timestamp}"
+    BASE_DIR / "outputs" / "local_runs" / f"focal_spot_kr_{_run_timestamp}"
     if not IS_ON_DAIC
-    else BASE_DIR / "outputs" / f"defl_kr_{_run_timestamp}"
+    else BASE_DIR / "outputs" / f"focal_spot_kr_{_run_timestamp}"
 )
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
