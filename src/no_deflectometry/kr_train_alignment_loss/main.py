@@ -1,8 +1,9 @@
 import pathlib
 import sys
 
-_pkg = pathlib.Path(__file__).parent   # .../src/kr_train_alignment_loss/
-_src = _pkg.parent                     # .../src/
+_pkg = pathlib.Path(__file__).parent   # .../src/no_deflectometry/kr_train_alignment_loss/
+_no_defl = _pkg.parent                 # .../src/no_deflectometry/
+_src = _no_defl.parent                 # .../src/
 sys.path.insert(0, str(_src))
 sys.path.insert(0, str(_pkg))
 
@@ -219,11 +220,11 @@ try:
         device = ddp_setup[config_dictionary.device]
 
         print(f"\n{'=' * 60}")
-        print("EXPERIMENT: alignment_loss_deflectometry_only")
+        print("EXPERIMENT: alignment_loss_no_deflectometry")
         print("=" * 60)
 
         metrics = run_experiment(
-            loss_name="alignment_loss_deflectometry_only",
+            loss_name="alignment_loss_no_deflectometry",
             loss_fn_factory=lambda scenario: AlignmentLoss(),
             reconstructor_cls=WortbergAlignmentReconstructor,
             ddp_setup=ddp_setup,
@@ -253,7 +254,7 @@ except Exception as e:
 # ===================================================================
 
 print("\n" + "=" * 60)
-print("RESULT  (alignment loss — deflectometry heliostats only)")
+print("RESULT  (alignment loss — ideal surfaces, no deflectometry)")
 print("=" * 60)
 print(f"  Mean focal spot error:   {metrics['mean_focal_spot_error_mrad']:.2f} mrad")
 print(f"  Median focal spot error: {metrics['median_focal_spot_error_mrad']:.2f} mrad")

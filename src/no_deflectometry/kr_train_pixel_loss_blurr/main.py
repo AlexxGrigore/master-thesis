@@ -1,8 +1,9 @@
 import pathlib
 import sys
 
-_pkg = pathlib.Path(__file__).parent   # .../src/kr_train_pixel_loss/
-_src = _pkg.parent                     # .../src/
+_pkg = pathlib.Path(__file__).parent   # .../src/no_deflectometry/kr_train_pixel_loss_blurr/
+_no_defl = _pkg.parent                 # .../src/no_deflectometry/
+_src = _no_defl.parent                 # .../src/
 sys.path.insert(0, str(_src))
 sys.path.insert(0, str(_pkg))
 
@@ -204,7 +205,7 @@ print(f"Number of heliostat groups: {number_of_heliostat_groups}")
 #   cooldown=5=35 epochs/cycle, this allows ~4 LR reductions before
 #   stopping — enough to exhaust the LR schedule if needed.
 
-LOSS_NAME = "pixel_loss"
+LOSS_NAME = "pixel_loss_no_deflectometry"
 
 LOG_STEP = 5
 VALIDATION_EVERY_N_EPOCHS = 2 * LOG_STEP
