@@ -1,3 +1,4 @@
+import gc
 import json
 import logging
 import pathlib
@@ -142,6 +143,10 @@ def run_experiment(
 
         plot_training_curves(log_file=phase1_dir / "training.log", output_dir=phase1_dir)
 
+        del phase1_reconstructor
+        gc.collect()
+        torch.cuda.empty_cache()
+
         # ----------------------------------------------------------------
         # Phase 2 — pixel loss fine-tuning
         # ----------------------------------------------------------------
@@ -212,7 +217,8 @@ def run_experiment(
         # ----------------------------------------------------------------
         # Test evaluation
         # ----------------------------------------------------------------
-        del phase1_reconstructor, phase2_reconstructor
+        del phase2_reconstructor
+        gc.collect()
         torch.cuda.empty_cache()
 
         if torch.cuda.is_available():

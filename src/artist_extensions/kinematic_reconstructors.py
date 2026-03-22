@@ -841,9 +841,9 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
             scheduler = self._setup_scheduler(optimizer)
             early_stopper = self._setup_early_stopper()
 
-            number_of_samples_per_heliostat = int(
-                active_heliostats_mask.sum() / (active_heliostats_mask > 0).sum()
-            )
+            # Per-heliostat sample counts from the mask (may be non-uniform when
+            # some heliostats have fewer than sample_limit calibration files).
+            nonzero_sample_counts = active_heliostats_mask[active_heliostats_mask > 0].tolist()
 
             loss = torch.inf
             epoch = 0
@@ -890,11 +890,11 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
                     actuators=kinematic.actuators,
                     device=device,
                 )
-                loss_per_heliostat = core_utils.mean_loss_per_heliostat(
-                    loss_per_sample=loss_per_sample,
-                    number_of_samples_per_heliostat=number_of_samples_per_heliostat,
-                    device=device,
-                )
+                # Split per-heliostat using actual sample counts from the mask.
+                # This handles variable sample counts (some heliostats may have
+                # fewer than sample_limit calibration files available).
+                split_losses = torch.split(loss_per_sample, nonzero_sample_counts)
+                loss_per_heliostat = torch.stack([c.mean() for c in split_losses])
 
                 loss = loss_per_heliostat.mean()
                 loss.backward()
@@ -1026,16 +1026,13 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
             device=device,
         )
 
-        n_samples = int(active_mask.sum() / (active_mask > 0).sum())
         loss_per_sample = loss_definition(
             predicted_motor_positions=kinematic.active_motor_positions,
             measured_motor_positions=motor_positions_measured,
             actuators=kinematic.actuators,
             device=device,
         )
-        loss_per_heliostat = core_utils.mean_loss_per_heliostat(
-            loss_per_sample=loss_per_sample,
-            number_of_samples_per_heliostat=n_samples,
-            device=device,
-        )
+        nonzero_counts = active_mask[active_mask > 0].tolist()
+        split_losses = torch.split(loss_per_sample, nonzero_counts)
+        loss_per_heliostat = torch.stack([c.mean() for c in split_losses])
         return loss_per_heliostat.mean().item()

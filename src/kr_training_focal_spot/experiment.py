@@ -1,4 +1,5 @@
 import collections
+import gc
 import json
 import logging
 import pathlib
@@ -441,6 +442,7 @@ def run_experiment(
 
         # ---- Test evaluation ----
         del reconstructor
+        gc.collect()
         torch.cuda.empty_cache()
 
         if torch.cuda.is_available():
