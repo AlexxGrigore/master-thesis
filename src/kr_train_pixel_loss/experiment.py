@@ -83,7 +83,7 @@ def run_experiment(
                 number_of_surface_points_per_facet=torch.tensor([25, 25]),
             )
 
-        scenario.set_number_of_rays(20)
+        scenario.set_number_of_rays(10)
         log.info("Number of rays set to 20.")
 
         print(f"  Heliostats: {scenario.heliostat_field.number_of_heliostats_per_group.sum().item()}")
