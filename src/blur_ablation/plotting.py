@@ -203,6 +203,115 @@ def plot_line_plots(
     plt.close()
 
 
+def plot_field_heatmap(
+    selected_heliostats: list[dict],
+    output_path: pathlib.Path,
+    heliostats_per_cell: int = 2,
+) -> None:
+    """Figure 4: Grid heatmap — rows=distance bands, cols=quadrants, value=# selected heliostats."""
+    import pandas as pd
+
+    bands = ["near", "mid", "far"]
+    band_labels = {"near": "Near\n(<100 m)", "mid": "Mid\n(100–175 m)", "far": "Far\n(>175 m)"}
+    quadrants = ["N", "E", "S", "W"]
+
+    # Count selected per cell and collect names.
+    counts = pd.DataFrame(0, index=bands, columns=quadrants)
+    names: dict[tuple, list[str]] = {(b, q): [] for b in bands for q in quadrants}
+    for h in selected_heliostats:
+        counts.loc[h["band"], h["quadrant"]] += 1
+        names[(h["band"], h["quadrant"])].append(h["name"])
+
+    grid = counts.values.astype(float)
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    im = ax.imshow(grid, cmap="Blues", vmin=0, vmax=heliostats_per_cell, aspect="auto")
+
+    ax.set_xticks(range(len(quadrants)))
+    ax.set_xticklabels(quadrants)
+    ax.set_yticks(range(len(bands)))
+    ax.set_yticklabels([band_labels[b] for b in bands])
+    ax.set_xlabel("Quadrant")
+    ax.set_ylabel("Distance band")
+    ax.set_title(f"Heliostat selection grid\n(max {heliostats_per_cell} per cell)")
+
+    for bi, band in enumerate(bands):
+        for qi, q in enumerate(quadrants):
+            count = int(grid[bi, qi])
+            cell_names = names[(band, q)]
+            label = f"{count}/{heliostats_per_cell}"
+            if cell_names:
+                label += "\n" + ", ".join(cell_names)
+            text_color = "white" if count == heliostats_per_cell else "black"
+            ax.text(qi, bi, label, ha="center", va="center", fontsize=7.5, color=text_color)
+
+    fig.colorbar(im, ax=ax, label="# selected heliostats", ticks=range(heliostats_per_cell + 1))
+    plt.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+
+def plot_field_coordinates(
+    selected_heliostats: list[dict],
+    all_heliostat_positions: dict[str, tuple[float, float]],
+    output_path: pathlib.Path,
+    deflectometry_names: set[str] | None = None,
+) -> None:
+    """Figure 5: Birds-eye field map — all heliostats, deflectometry subset, and selected sample.
+
+    Parameters
+    ----------
+    selected_heliostats : list[dict]
+        Output of the stratified selection — each dict has 'name', 'band', etc.
+    all_heliostat_positions : dict[str, tuple[float, float]]
+        {name: (east_m, north_m)} for every heliostat in the scenario.
+    deflectometry_names : set[str], optional
+        Names of heliostats that have deflectometry calibration data.
+        If None, this layer is omitted.
+    """
+    selected_names = {h["name"] for h in selected_heliostats}
+
+    # Split positions into three layers.
+    bg_e, bg_n = [], []
+    defl_e, defl_n = [], []
+    for name, (e, n) in all_heliostat_positions.items():
+        if name in selected_names:
+            continue
+        if deflectometry_names and name in deflectometry_names:
+            defl_e.append(e)
+            defl_n.append(n)
+        else:
+            bg_e.append(e)
+            bg_n.append(n)
+
+    sel_e = [all_heliostat_positions[h["name"]][0] for h in selected_heliostats if h["name"] in all_heliostat_positions]
+    sel_n = [all_heliostat_positions[h["name"]][1] for h in selected_heliostats if h["name"] in all_heliostat_positions]
+
+    fig, ax = plt.subplots(figsize=(7, 7))
+
+    ax.scatter(bg_e, bg_n, s=6, color="#cccccc", zorder=1, label="All heliostats")
+    if deflectometry_names:
+        ax.scatter(defl_e, defl_n, s=10, color="#90CAF9", zorder=2, label="Deflectometry heliostats")
+    ax.scatter(sel_e, sel_n, s=60, color="#F44336", zorder=4, label="Selected sample",
+               edgecolors="white", linewidths=0.6)
+
+    # Tower at origin.
+    ax.scatter([0], [0], s=120, marker="*", color="black", zorder=5, label="Tower")
+
+    ax.set_aspect("equal")
+    ax.set_xlabel("East (m)")
+    ax.set_ylabel("North (m)")
+    ax.set_title("Heliostat field — stratified sample selection")
+    ax.legend(loc="lower right", fontsize=9)
+    ax.grid(True, alpha=0.2)
+
+    plt.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+
 def plot_sigma_sweep(
     records: list[dict],
     heliostat_distances: dict[str, float],

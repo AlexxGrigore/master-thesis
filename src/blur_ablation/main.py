@@ -33,7 +33,7 @@ from artist.util.environment_setup import get_device
 from utils.checkpointing import load_kinematic_parameters
 from utils.evaluation import build_heliostat_data_mapping
 from blur_ablation.sweep import run_blur_sweep
-from blur_ablation.plotting import plot_heatmap, plot_line_plots, plot_sigma_sweep
+from blur_ablation.plotting import plot_heatmap, plot_line_plots, plot_sigma_sweep, plot_field_heatmap, plot_field_coordinates
 
 set_logger_config()
 logging.getLogger().setLevel(logging.INFO)
@@ -163,6 +163,8 @@ for heliostat_group in scenario_pos.heliostat_field.heliostat_groups:
             "bearing_deg": bearing_deg,
             "quadrant": quadrant,
             "band": band,
+            "east_m": e,
+            "north_m": n,
         })
 
 print(f"Heliostat info collected for {len(heliostat_info)} heliostats.")
@@ -310,5 +312,21 @@ plot_sigma_sweep(
     fixed_n_rays=RAYS_CONFIGS[0],
 )
 print("  Fig 3: sigma sweep saved.")
+
+all_heliostat_positions = {h["name"]: (h["east_m"], h["north_m"]) for h in heliostat_info}
+
+plot_field_heatmap(
+    selected_heliostats=selected_heliostats,
+    output_path=OUTPUT_DIR / "fig4_field_heatmap.png",
+    heliostats_per_cell=HELIOSTATS_PER_CELL,
+)
+print("  Fig 4: field heatmap saved.")
+
+plot_field_coordinates(
+    selected_heliostats=selected_heliostats,
+    all_heliostat_positions=all_heliostat_positions,
+    output_path=OUTPUT_DIR / "fig5_field_coordinates.png",
+)
+print("  Fig 5: field coordinates saved.")
 
 print(f"\nAll outputs written to: {OUTPUT_DIR}")
