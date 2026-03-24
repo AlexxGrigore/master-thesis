@@ -113,8 +113,7 @@ def trace_flux_for_mapping(
 # ---------------------------------------------------------------------------
 
 def run_blur_sweep(
-    scenario_50: Scenario,
-    scenario_25: Scenario,
+    scenario: Scenario,
     selected_mapping: list[tuple[str, list, list]],
     data_parser: PaintCalibrationDataParser,
     rays_configs: list[int],
@@ -127,12 +126,10 @@ def run_blur_sweep(
 
     Parameters
     ----------
-    scenario_50 : Scenario
-        Scenario loaded with 50×50 surface points per facet — used for the reference pass.
-    scenario_25 : Scenario
-        Scenario loaded with 25×25 surface points per facet — used for all test configs.
+    scenario : Scenario
+        Scenario used for both the reference pass (ref_rays) and all test configs.
     selected_mapping : list
-        Filtered heliostat_data_mapping containing only the ~25–30 selected heliostats.
+        Filtered heliostat_data_mapping containing only the selected heliostats.
     data_parser : PaintCalibrationDataParser
         Parser configured with sample_limit (10 for train split).
     rays_configs : list[int]
@@ -156,13 +153,13 @@ def run_blur_sweep(
         }
     """
     # ------------------------------------------------------------------ #
-    # Step 1: compute reference flux (50×50, ref_rays, no blur)
+    # Step 1: compute reference flux (25×25, ref_rays, no blur)
     # ------------------------------------------------------------------ #
-    log.info(f"Computing reference flux (50×50, {ref_rays} rays) …")
-    scenario_50.set_number_of_rays(ref_rays)
+    log.info(f"Computing reference flux (25×25, {ref_rays} rays) …")
+    scenario.set_number_of_rays(ref_rays)
 
     ref_flux = trace_flux_for_mapping(
-        scenario=scenario_50,
+        scenario=scenario,
         heliostat_data_mapping=selected_mapping,
         data_parser=data_parser,
         device=device,
@@ -177,18 +174,18 @@ def run_blur_sweep(
     log.info(f"Reference flux computed for {len(ref_norm)} heliostats.")
 
     # ------------------------------------------------------------------ #
-    # Step 2: sweep (n_rays × sigma) on the 25×25 scenario
+    # Step 2: sweep (n_rays × sigma)
     # ------------------------------------------------------------------ #
     records = []
     total_configs = len(rays_configs) * len(sigma_configs)
     cfg_idx = 0
 
     for n_rays in rays_configs:
-        log.info(f"  Setting n_rays = {n_rays} on 25×25 scenario …")
-        scenario_25.set_number_of_rays(n_rays)
+        log.info(f"  Setting n_rays = {n_rays} …")
+        scenario.set_number_of_rays(n_rays)
 
         test_flux = trace_flux_for_mapping(
-            scenario=scenario_25,
+            scenario=scenario,
             heliostat_data_mapping=selected_mapping,
             data_parser=data_parser,
             device=device,

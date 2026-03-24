@@ -22,6 +22,9 @@ if IS_ON_DAIC:
     import matplotlib
     matplotlib.use("Agg")
 
+import time
+
+import numpy as np
 import torch
 import h5py
 import paint.util.paint_mappings as paint_mappings
@@ -32,7 +35,7 @@ from artist.util.environment_setup import get_device
 
 from utils.checkpointing import load_kinematic_parameters
 from utils.evaluation import build_heliostat_data_mapping
-from blur_ablation.sweep import run_blur_sweep
+from blur_ablation.sweep import run_blur_sweep, trace_flux_for_mapping
 from blur_ablation.plotting import plot_heatmap, plot_line_plots, plot_sigma_sweep, plot_field_heatmap, plot_field_coordinates
 
 set_logger_config()
@@ -80,8 +83,8 @@ SAMPLE_LIMIT = 10     # measurements per heliostat (train split)
 
 # Heliostat selection grid.
 DISTANCE_BANDS = [("near", 0, 100), ("mid", 100, 175), ("far", 175, float("inf"))]
-QUADRANTS = ["N", "E", "S", "W"]
-HELIOSTATS_PER_CELL = 2  # 2 × 12 cells = 24 heliostats (~25 total)
+COLUMNS = ["left", "mid", "right"]  # lateral split by east coordinate, computed per band
+HELIOSTATS_PER_CELL = 2  # 2 × 9 cells = 18 heliostats
 
 # Smoke test overrides.
 if SMOKE_TEST:
@@ -133,7 +136,7 @@ with h5py.File(SCENARIO_PATH, "r") as f:
         number_of_surface_points_per_facet=torch.tensor([25, 25]),
     )
 
-# Collect (name, distance_m, bearing_deg) for each heliostat in the scenario.
+# Collect position info for each benchmark heliostat in the scenario.
 heliostat_info: list[dict] = []
 for heliostat_group in scenario_pos.heliostat_field.heliostat_groups:
     positions = heliostat_group.positions[:, :3].cpu()  # [N, 3] — (E, N, U) in metres
@@ -142,15 +145,6 @@ for heliostat_group in scenario_pos.heliostat_field.heliostat_groups:
             continue  # not in benchmark
         e, n, u = positions[idx].tolist()
         dist = math.sqrt(e ** 2 + n ** 2)  # horizontal ground distance
-        bearing_deg = math.degrees(math.atan2(e, n)) % 360  # N=0, E=90, S=180, W=270
-        if bearing_deg < 45 or bearing_deg >= 315:
-            quadrant = "N"
-        elif bearing_deg < 135:
-            quadrant = "E"
-        elif bearing_deg < 225:
-            quadrant = "S"
-        else:
-            quadrant = "W"
         # Assign distance band.
         band = "far"
         for label, lo, hi in DISTANCE_BANDS:
@@ -160,8 +154,6 @@ for heliostat_group in scenario_pos.heliostat_field.heliostat_groups:
         heliostat_info.append({
             "name": name,
             "distance_m": dist,
-            "bearing_deg": bearing_deg,
-            "quadrant": quadrant,
             "band": band,
             "east_m": e,
             "north_m": n,
@@ -169,26 +161,43 @@ for heliostat_group in scenario_pos.heliostat_field.heliostat_groups:
 
 print(f"Heliostat info collected for {len(heliostat_info)} heliostats.")
 
+# Assign lateral column (left/mid/right) per band using 33rd/66th percentile of east_m
+# across all benchmark heliostats in that band.
+for band_label, _, _ in DISTANCE_BANDS:
+    band_heliostats = [h for h in heliostat_info if h["band"] == band_label]
+    if not band_heliostats:
+        continue
+    east_vals = np.array([h["east_m"] for h in band_heliostats])
+    p33 = float(np.percentile(east_vals, 33.33))
+    p66 = float(np.percentile(east_vals, 66.67))
+    for h in band_heliostats:
+        if h["east_m"] < p33:
+            h["column"] = "left"
+        elif h["east_m"] <= p66:
+            h["column"] = "mid"
+        else:
+            h["column"] = "right"
+
 # ===================================================================
-# Heliostat selection: sample HELIOSTATS_PER_CELL per (band × quadrant)
+# Heliostat selection: sample HELIOSTATS_PER_CELL per (band × column)
 # ===================================================================
 
 from collections import defaultdict
 cell_buckets: dict[tuple, list] = defaultdict(list)
 for h in heliostat_info:
-    cell_buckets[(h["band"], h["quadrant"])].append(h)
+    cell_buckets[(h["band"], h["column"])].append(h)
 
 selected_heliostats: list[dict] = []
 for band, _, _ in DISTANCE_BANDS:
-    for q in QUADRANTS:
-        cell = cell_buckets.get((band, q), [])
+    for col in COLUMNS:
+        cell = cell_buckets.get((band, col), [])
         if cell:
             chosen = random.sample(cell, min(HELIOSTATS_PER_CELL, len(cell)))
             selected_heliostats.extend(chosen)
 
 print(f"\nSelected {len(selected_heliostats)} heliostats:")
 for h in selected_heliostats:
-    print(f"  {h['name']:8s}  dist={h['distance_m']:6.1f} m  {h['band']:4s}  {h['quadrant']}")
+    print(f"  {h['name']:8s}  dist={h['distance_m']:6.1f} m  {h['band']:4s}  {h['column']}")
 
 heliostat_distances = {h["name"]: h["distance_m"] for h in selected_heliostats}
 selected_names = set(heliostat_distances.keys())
@@ -231,11 +240,46 @@ def _load_scenario_with_checkpoint(surface_pts: list[int]) -> Scenario:
     return sc
 
 
-print(f"\nLoading scenario 50×50 (reference) + applying checkpoint …")
-scenario_50 = _load_scenario_with_checkpoint([50, 50])
-
-print(f"Loading scenario 25×25 (test configs) + applying checkpoint …")
+print(f"\nLoading scenario 25×25 + applying checkpoint …")
 scenario_25 = _load_scenario_with_checkpoint([25, 25])
+
+
+# ===================================================================
+# GPU memory & speed benchmark (single heliostat, 25×25)
+# ===================================================================
+
+def _bench_config(n_rays: int, heliostat_mapping: list) -> dict:
+    scenario_25.set_number_of_rays(n_rays)
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+        torch.cuda.reset_peak_memory_stats(device)
+    t0 = time.perf_counter()
+    trace_flux_for_mapping(
+        scenario=scenario_25,
+        heliostat_data_mapping=heliostat_mapping,
+        data_parser=data_parser,
+        device=device,
+    )
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    elapsed = time.perf_counter() - t0
+    peak_mem_gb = torch.cuda.max_memory_allocated(device) / 1e9 if device.type == "cuda" else float("nan")
+    return {"n_rays": n_rays, "surface_pts": "25x25", "wall_time_s": round(elapsed, 3), "peak_gpu_mem_gb": round(peak_mem_gb, 4)}
+
+bench_heliostat_mapping = selected_mapping[:1]
+print(f"\nGPU benchmark on heliostat '{bench_heliostat_mapping[0][0]}' (25×25 surface pts) …")
+bench_results = []
+for n_rays in [10, REF_RAYS]:
+    r = _bench_config(n_rays, bench_heliostat_mapping)
+    bench_results.append(r)
+    print(f"  {n_rays:4d} rays: {r['wall_time_s']:.3f} s,  peak GPU mem: {r['peak_gpu_mem_gb']:.4f} GB")
+if len(bench_results) == 2:
+    t_ratio = bench_results[1]["wall_time_s"] / bench_results[0]["wall_time_s"]
+    m_ratio = bench_results[1]["peak_gpu_mem_gb"] / bench_results[0]["peak_gpu_mem_gb"] if bench_results[0]["peak_gpu_mem_gb"] > 0 else float("nan")
+    print(f"  Speed ratio ({REF_RAYS} vs 10 rays): {t_ratio:.1f}×  |  Memory ratio: {m_ratio:.1f}×")
+with open(OUTPUT_DIR / "benchmark_gpu.json", "w") as fp:
+    json.dump(bench_results, fp, indent=2)
+print(f"  Saved → {OUTPUT_DIR / 'benchmark_gpu.json'}")
 
 
 # ===================================================================
@@ -245,11 +289,10 @@ scenario_25 = _load_scenario_with_checkpoint([25, 25])
 print(f"\nRunning sweep: {len(RAYS_CONFIGS)} ray configs × {len(SIGMA_CONFIGS)} sigma configs")
 print(f"  rays configs: {RAYS_CONFIGS}")
 print(f"  sigma configs: {SIGMA_CONFIGS}")
-print(f"  reference rays: {REF_RAYS} (50×50)")
+print(f"  reference rays: {REF_RAYS} (25×25)")
 
 records = run_blur_sweep(
-    scenario_50=scenario_50,
-    scenario_25=scenario_25,
+    scenario=scenario_25,
     selected_mapping=selected_mapping,
     data_parser=data_parser,
     rays_configs=RAYS_CONFIGS,

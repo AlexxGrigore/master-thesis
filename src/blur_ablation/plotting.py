@@ -208,42 +208,42 @@ def plot_field_heatmap(
     output_path: pathlib.Path,
     heliostats_per_cell: int = 2,
 ) -> None:
-    """Figure 4: Grid heatmap — rows=distance bands, cols=quadrants, value=# selected heliostats."""
+    """Figure 4: Grid heatmap — rows=distance bands, cols=lateral position, value=# selected heliostats."""
     import pandas as pd
 
     bands = ["near", "mid", "far"]
     band_labels = {"near": "Near\n(<100 m)", "mid": "Mid\n(100–175 m)", "far": "Far\n(>175 m)"}
-    quadrants = ["N", "E", "S", "W"]
+    columns = ["left", "mid", "right"]
 
     # Count selected per cell and collect names.
-    counts = pd.DataFrame(0, index=bands, columns=quadrants)
-    names: dict[tuple, list[str]] = {(b, q): [] for b in bands for q in quadrants}
+    counts = pd.DataFrame(0, index=bands, columns=columns)
+    names: dict[tuple, list[str]] = {(b, c): [] for b in bands for c in columns}
     for h in selected_heliostats:
-        counts.loc[h["band"], h["quadrant"]] += 1
-        names[(h["band"], h["quadrant"])].append(h["name"])
+        counts.loc[h["band"], h["column"]] += 1
+        names[(h["band"], h["column"])].append(h["name"])
 
     grid = counts.values.astype(float)
 
     fig, ax = plt.subplots(figsize=(6, 4))
     im = ax.imshow(grid, cmap="Blues", vmin=0, vmax=heliostats_per_cell, aspect="auto")
 
-    ax.set_xticks(range(len(quadrants)))
-    ax.set_xticklabels(quadrants)
+    ax.set_xticks(range(len(columns)))
+    ax.set_xticklabels(columns)
     ax.set_yticks(range(len(bands)))
     ax.set_yticklabels([band_labels[b] for b in bands])
-    ax.set_xlabel("Quadrant")
+    ax.set_xlabel("Lateral position")
     ax.set_ylabel("Distance band")
     ax.set_title(f"Heliostat selection grid\n(max {heliostats_per_cell} per cell)")
 
     for bi, band in enumerate(bands):
-        for qi, q in enumerate(quadrants):
-            count = int(grid[bi, qi])
-            cell_names = names[(band, q)]
+        for ci, col in enumerate(columns):
+            count = int(grid[bi, ci])
+            cell_names = names[(band, col)]
             label = f"{count}/{heliostats_per_cell}"
             if cell_names:
                 label += "\n" + ", ".join(cell_names)
             text_color = "white" if count == heliostats_per_cell else "black"
-            ax.text(qi, bi, label, ha="center", va="center", fontsize=7.5, color=text_color)
+            ax.text(ci, bi, label, ha="center", va="center", fontsize=7.5, color=text_color)
 
     fig.colorbar(im, ax=ax, label="# selected heliostats", ticks=range(heliostats_per_cell + 1))
     plt.tight_layout()
