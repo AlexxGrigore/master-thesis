@@ -312,6 +312,89 @@ def plot_field_coordinates(
     plt.close()
 
 
+def plot_surface_pts_sweep(
+    records: list[dict],
+    heliostat_distances: dict[str, float],
+    output_path: pathlib.Path,
+    optimal_sigma: float | None = None,
+    rays_configs: list[int] | None = None,
+) -> None:
+    """Figure 6: MSE vs surface_pts, broken down by n_rays — blur off vs blur on.
+
+    Parameters
+    ----------
+    records : list[dict]
+        Combined records from all surface_pts configs (must contain 'surface_pts' key).
+    heliostat_distances : dict[str, float]
+        {heliostat_id: distance_from_tower_m}.
+    output_path : pathlib.Path
+        Where to save the figure (PNG).
+    optimal_sigma : float, optional
+        Sigma value for the "blur=ON" panel.
+    rays_configs : list[int], optional
+        Which n_rays values to plot (defaults to all present in records).
+    """
+    import pandas as pd
+
+    df = pd.DataFrame(records)
+    df["distance_m"] = df["heliostat_id"].map(heliostat_distances)
+    df["band"] = df["distance_m"].map(_assign_band)
+
+    surface_pts_vals = sorted(df["surface_pts"].unique())
+
+    if rays_configs is None:
+        rays_configs = sorted(df["n_rays"].unique())
+
+    if optimal_sigma is None:
+        blur_df = df[df["sigma"] > 0]
+        if not blur_df.empty:
+            optimal_sigma = float(blur_df.groupby("sigma")["mse"].mean().idxmin())
+        else:
+            optimal_sigma = 0.0
+
+    # Color per n_rays value.
+    ray_colors = plt.cm.tab10.colors
+    ray_color_map = {n: ray_colors[i % len(ray_colors)] for i, n in enumerate(rays_configs)}
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharey=True)
+    fig.suptitle("MSE vs surface points — blur off vs blur on\n(averaged over all selected heliostats)", fontsize=12)
+
+    for ax, sigma_val, title in [
+        (axes[0], 0.0,          "Blur = OFF (σ=0)"),
+        (axes[1], optimal_sigma, f"Blur = ON  (σ={optimal_sigma})"),
+    ]:
+        sub = df[df["sigma"] == sigma_val]
+        for n_rays in rays_configs:
+            ray_df = sub[sub["n_rays"] == n_rays]
+            if ray_df.empty:
+                continue
+            means = ray_df.groupby("surface_pts")["mse"].mean().reindex(surface_pts_vals)
+            stds  = ray_df.groupby("surface_pts")["mse"].std().reindex(surface_pts_vals).fillna(0)
+            ax.plot(
+                surface_pts_vals, means.values,
+                marker="o", label=f"{n_rays} rays",
+                color=ray_color_map[n_rays],
+            )
+            ax.fill_between(
+                surface_pts_vals,
+                (means - stds).values,
+                (means + stds).values,
+                alpha=0.15, color=ray_color_map[n_rays],
+            )
+        ax.set_xticks(surface_pts_vals)
+        ax.set_xticklabels([f"{p}×{p}" for p in surface_pts_vals])
+        ax.set_xlabel("Surface points per facet")
+        ax.set_ylabel("MSE (peak-normalised)")
+        ax.set_title(title)
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+
 def plot_sigma_sweep(
     records: list[dict],
     heliostat_distances: dict[str, float],

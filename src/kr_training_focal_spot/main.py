@@ -191,7 +191,7 @@ print(f"Number of heliostat groups: {number_of_heliostat_groups}")
 optimization_configuration = {
     config_dictionary.initial_learning_rate: 1e-4,
     config_dictionary.tolerance: 1e-6,
-    config_dictionary.max_epoch: 11 if SMOKE_TEST else 300,
+    config_dictionary.max_epoch: 11 if SMOKE_TEST else 100,
     config_dictionary.batch_size: 8,
     config_dictionary.log_step: 5,
     config_dictionary.early_stopping_window: 10,
@@ -205,6 +205,7 @@ optimization_configuration = {
         config_dictionary.threshold: 1e-3,
         config_dictionary.cooldown: 5,
     },
+    "heliostat_chunk_size": 100,  # process 100 heliostats per forward pass to stay within GPU memory
 }
 
 print("\nOptimization configuration:")

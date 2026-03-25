@@ -322,10 +322,10 @@ def run_experiment(
             scenario = Scenario.load_scenario_from_hdf5(
                 scenario_file=scenario_file,
                 device=device,
-                number_of_surface_points_per_facet=torch.tensor([25, 25]),
+                number_of_surface_points_per_facet=torch.tensor([50, 50]),
             )
 
-        scenario.set_number_of_rays(10)
+        scenario.set_number_of_rays(20)
         log.info("Number of rays set to 20.")
 
         print(f"  Heliostats: {scenario.heliostat_field.number_of_heliostats_per_group.sum().item()}")
@@ -453,6 +453,7 @@ def run_experiment(
             heliostat_data_mapping=test_mapping,
             data_parser=eval_data_parser,
             device=device,
+            heliostat_chunk_size=optimization_configuration.get("heliostat_chunk_size"),
         )
         eval_time_s = time.time() - t_eval_start
         eval_peak_gpu_gb = torch.cuda.max_memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0.0

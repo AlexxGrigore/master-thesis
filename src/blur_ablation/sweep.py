@@ -7,6 +7,7 @@ Provides two main functions:
 """
 
 import logging
+import math
 
 import torch
 from artist.core.heliostat_ray_tracer import HeliostatRayTracer
@@ -32,8 +33,15 @@ def trace_flux_for_mapping(
     device: torch.device,
     bitmap_resolution: torch.Tensor = torch.tensor([256, 256]),
     ray_tracing_batch_size: int = 32,
+    heliostat_chunk_size: int | None = None,
 ) -> dict[str, torch.Tensor]:
     """Trace rays for each heliostat in the mapping and return per-heliostat flux.
+
+    Parameters
+    ----------
+    heliostat_chunk_size : int or None
+        If set, process at most this many heliostats per forward pass to cap
+        GPU memory. None (default) processes the whole active group at once.
 
     Returns
     -------
@@ -61,49 +69,59 @@ def trace_flux_for_mapping(
         if active_heliostats_mask.sum() == 0:
             continue
 
-        heliostat_group.activate_heliostats(
-            active_heliostats_mask=active_heliostats_mask,
-            device=device,
-        )
-
-        heliostat_group.align_surfaces_with_incident_ray_directions(
-            aim_points=scenario.target_areas.centers[target_area_mask],
-            incident_ray_directions=incident_ray_directions,
-            active_heliostats_mask=active_heliostats_mask,
-            device=device,
-        )
-
-        ray_tracer = HeliostatRayTracer(
-            scenario=scenario,
-            heliostat_group=heliostat_group,
-            blocking_active=False,
-            batch_size=min(heliostat_group.number_of_active_heliostats, ray_tracing_batch_size),
-            bitmap_resolution=bitmap_resolution.to(device),
-        )
+        N_samples = int(active_heliostats_mask.max().item())
+        active_group_positions = torch.where(active_heliostats_mask > 0)[0]
+        N_active = len(active_group_positions)
+        chunk_size = heliostat_chunk_size if heliostat_chunk_size is not None else N_active
 
         with torch.no_grad():
-            predicted_flux = ray_tracer.trace_rays(
-                incident_ray_directions=incident_ray_directions,
-                active_heliostats_mask=active_heliostats_mask,
-                target_area_mask=target_area_mask,
-                device=device,
-            )  # [N_active_heliostats * N_meas, H, W]
+            for c_start in range(0, N_active, chunk_size):
+                c_end = min(c_start + chunk_size, N_active)
+                chunk_active_local = list(range(c_start, c_end))
+                K = len(chunk_active_local)
 
-        # Split the flat batch back into per-heliostat tensors.
-        # active_heliostats_mask[i] == N_meas for active heliostats, 0 otherwise.
-        active_indices = torch.where(active_heliostats_mask > 0)[0]
-        n_active = len(active_indices)
-        if n_active == 0:
-            continue
+                chunk_mask = torch.zeros_like(active_heliostats_mask)
+                chunk_mask[active_group_positions[chunk_active_local]] = N_samples
 
-        n_meas = int(active_heliostats_mask[active_indices[0]].item())
-        # predicted_flux shape: [n_active * n_meas, H, W]
-        H, W = predicted_flux.shape[1], predicted_flux.shape[2]
-        per_heliostat_flux = predicted_flux.reshape(n_active, n_meas, H, W)
+                data_rows = torch.cat([
+                    torch.arange(i * N_samples, (i + 1) * N_samples, device=device)
+                    for i in chunk_active_local
+                ])
+                chunk_incident = incident_ray_directions[data_rows]
+                chunk_target_mask = target_area_mask[data_rows]
 
-        for i, idx in enumerate(active_indices):
-            name = heliostat_group.names[idx.item()]
-            result[name] = per_heliostat_flux[i].cpu()  # [n_meas, H, W]
+                heliostat_group.activate_heliostats(
+                    active_heliostats_mask=chunk_mask,
+                    device=device,
+                )
+                heliostat_group.align_surfaces_with_incident_ray_directions(
+                    aim_points=scenario.target_areas.centers[chunk_target_mask],
+                    incident_ray_directions=chunk_incident,
+                    active_heliostats_mask=chunk_mask,
+                    device=device,
+                )
+
+                ray_tracer = HeliostatRayTracer(
+                    scenario=scenario,
+                    heliostat_group=heliostat_group,
+                    blocking_active=False,
+                    batch_size=min(K * N_samples, ray_tracing_batch_size),
+                    bitmap_resolution=bitmap_resolution.to(device),
+                )
+
+                predicted_flux = ray_tracer.trace_rays(
+                    incident_ray_directions=chunk_incident,
+                    active_heliostats_mask=chunk_mask,
+                    target_area_mask=chunk_target_mask,
+                    device=device,
+                )  # [K * N_samples, H, W]
+
+                H, W = predicted_flux.shape[1], predicted_flux.shape[2]
+                per_chunk_flux = predicted_flux.reshape(K, N_samples, H, W)
+
+                for local_i, global_local in enumerate(chunk_active_local):
+                    name = heliostat_group.names[active_group_positions[global_local].item()]
+                    result[name] = per_chunk_flux[local_i].cpu()  # [N_samples, H, W]
 
     return result
 
@@ -121,6 +139,7 @@ def run_blur_sweep(
     ref_rays: int,
     device: torch.device,
     bitmap_resolution: torch.Tensor = torch.tensor([256, 256]),
+    heliostat_chunk_size: int | None = None,
 ) -> list[dict]:
     """Run the full (n_rays × sigma) grid and compute MSE vs high-quality reference.
 
@@ -155,7 +174,7 @@ def run_blur_sweep(
     # ------------------------------------------------------------------ #
     # Step 1: compute reference flux (25×25, ref_rays, no blur)
     # ------------------------------------------------------------------ #
-    log.info(f"Computing reference flux (25×25, {ref_rays} rays) …")
+    log.info(f"Computing reference flux ({ref_rays} rays) …")
     scenario.set_number_of_rays(ref_rays)
 
     ref_flux = trace_flux_for_mapping(
@@ -164,6 +183,7 @@ def run_blur_sweep(
         data_parser=data_parser,
         device=device,
         bitmap_resolution=bitmap_resolution,
+        heliostat_chunk_size=heliostat_chunk_size,
     )  # {name: [n_meas, H, W] on CPU}
 
     # Peak-normalise reference images once (per image).
@@ -190,6 +210,7 @@ def run_blur_sweep(
             data_parser=data_parser,
             device=device,
             bitmap_resolution=bitmap_resolution,
+            heliostat_chunk_size=heliostat_chunk_size,
         )  # {name: [n_meas, H, W] on CPU}
 
         for sigma in sigma_configs:

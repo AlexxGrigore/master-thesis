@@ -110,6 +110,7 @@ def evaluate_flux_accuracy(
     device: torch.device,
     bitmap_resolution: torch.Tensor = torch.tensor([256, 256]),
     ray_tracing_batch_size: int = 32,
+    heliostat_chunk_size: int | None = None,
 ) -> dict:
     """
     Evaluate flux image prediction accuracy after kinematic reconstruction.
@@ -117,6 +118,10 @@ def evaluate_flux_accuracy(
     Returns a dict with min/mean/median/max focal spot errors in mrad, the
     sample count, per-heliostat mrad errors, and the raw error list (needed
     for histogram plotting but not persisted to JSON).
+
+    heliostat_chunk_size : int or None
+        If set, process at most this many heliostats per forward pass to cap
+        GPU memory usage. None (default) processes the whole group at once.
     """
     all_focal_spot_errors_m = []
     all_focal_spot_errors_mrad = []
@@ -146,89 +151,118 @@ def evaluate_flux_accuracy(
         if active_heliostats_mask.sum() == 0:
             continue
 
-        heliostat_group.activate_heliostats(
-            active_heliostats_mask=active_heliostats_mask,
-            device=device,
-        )
+        N_samples_per_heliostat = int(active_heliostats_mask.max().item())
+        active_group_positions = torch.where(active_heliostats_mask > 0)[0]
+        N_active_heliostats = len(active_group_positions)
 
-        heliostat_group.align_surfaces_with_incident_ray_directions(
-            aim_points=scenario.target_areas.centers[target_area_mask],
-            incident_ray_directions=incident_ray_directions,
-            active_heliostats_mask=active_heliostats_mask,
-            device=device,
-        )
-
-        ray_tracer = HeliostatRayTracer(
-            scenario=scenario,
-            heliostat_group=heliostat_group,
-            blocking_active=False,
-            batch_size=min(heliostat_group.number_of_active_heliostats, ray_tracing_batch_size),
-            bitmap_resolution=bitmap_resolution.to(device),
-        )
-
-        predicted_flux = ray_tracer.trace_rays(
-            incident_ray_directions=incident_ray_directions,
-            active_heliostats_mask=active_heliostats_mask,
-            target_area_mask=target_area_mask,
-            device=device,
-        )
-
-        target_centers = scenario.target_areas.centers[target_area_mask]
-        target_widths = scenario.target_areas.dimensions[target_area_mask][
-            :, index_mapping.target_area_width
-        ]
-        target_heights = scenario.target_areas.dimensions[target_area_mask][
-            :, index_mapping.target_area_height
-        ]
-
-        predicted_focal_spots = get_center_of_mass(
-            bitmaps=predicted_flux,
-            target_centers=target_centers,
-            target_widths=target_widths,
-            target_heights=target_heights,
-            device=device,
-        )
-
-        focal_spot_error = torch.norm(predicted_focal_spots[:, :3] - focal_spots[:, :3], dim=1)
-        all_focal_spot_errors_m.extend(focal_spot_error.cpu().tolist())
-
-        # Compute per-heliostat distances to the reference target for mrad conversion.
-        active_indices = torch.where(active_heliostats_mask.bool())[0]
-        active_positions = heliostat_group.positions[active_indices, :3].to(device)
+        # Distances computed once for all active heliostats (no activation needed).
+        active_positions = heliostat_group.positions[active_group_positions, :3].to(device)
         distances = torch.norm(active_positions - reference_target.unsqueeze(0), dim=1)
-
-        # Build name -> distance lookup for per-heliostat results.
         name_to_distance = {
             heliostat_group.names[idx.item()]: dist.item()
-            for idx, dist in zip(active_indices, distances)
+            for idx, dist in zip(active_group_positions, distances)
         }
 
-        # Repeat distances to match number of focal spot error samples
-        # (there may be multiple measurements per heliostat).
-        num_active = active_indices.shape[0]
-        num_focal_spots = focal_spot_error.shape[0]
-        samples_per_heliostat = max(num_focal_spots // num_active, 1)
-        distances_per_sample = distances.repeat_interleave(samples_per_heliostat)[:num_focal_spots]
-        focal_spot_error_mrad = (focal_spot_error / distances_per_sample) * 1000.0
-        all_focal_spot_errors_mrad.extend(focal_spot_error_mrad.cpu().tolist())
+        chunk_size = heliostat_chunk_size if heliostat_chunk_size is not None else N_active_heliostats
 
-        # Track heliostats that produced NaN focal spot errors (zero flux on target).
-        nan_sample_indices = torch.where(torch.isnan(focal_spot_error))[0].tolist()
-        for sample_idx in nan_sample_indices:
-            heliostat_idx = sample_idx // samples_per_heliostat
-            if heliostat_idx < num_active:
-                nan_heliostat_ids.add(heliostat_group.names[active_indices[heliostat_idx].item()])
+        with torch.no_grad():
+            for c_start in range(0, N_active_heliostats, chunk_size):
+                c_end = min(c_start + chunk_size, N_active_heliostats)
+                chunk_active_local = list(range(c_start, c_end))
+                K = len(chunk_active_local)
 
-        heliostat_names = [
-            name for name, _, _ in heliostat_data_mapping
-            if name in heliostat_group.names
-        ]
-        for i, name in enumerate(heliostat_names):
-            if i < len(focal_spot_error):
-                fse_m = focal_spot_error[i].item()
-                dist_m = name_to_distance.get(name)
-                fse_mrad = (fse_m / dist_m * 1000.0) if dist_m else None
-                results_per_heliostat[name] = {"focal_spot_error_mrad": fse_mrad}
+                chunk_mask = torch.zeros_like(active_heliostats_mask)
+                chunk_mask[active_group_positions[chunk_active_local]] = N_samples_per_heliostat
+
+                data_rows = torch.cat([
+                    torch.arange(i * N_samples_per_heliostat, (i + 1) * N_samples_per_heliostat, device=device)
+                    for i in chunk_active_local
+                ])
+
+                chunk_incident = incident_ray_directions[data_rows]
+                chunk_target_mask = target_area_mask[data_rows]
+                chunk_focal_spots = focal_spots[data_rows]
+
+                heliostat_group.activate_heliostats(
+                    active_heliostats_mask=chunk_mask,
+                    device=device,
+                )
+
+                kinematic = heliostat_group.kinematic
+                if hasattr(kinematic, "_base_position_deviation"):
+                    chunk_base_dev = kinematic._base_position_deviation[
+                        active_group_positions[chunk_active_local]
+                    ].repeat_interleave(N_samples_per_heliostat, dim=0)
+                    pad = torch.zeros(chunk_base_dev.shape[0], 1, device=device)
+                    kinematic.active_heliostat_positions = (
+                        kinematic.active_heliostat_positions + torch.cat([chunk_base_dev, pad], dim=1)
+                    )
+
+                heliostat_group.align_surfaces_with_incident_ray_directions(
+                    aim_points=scenario.target_areas.centers[chunk_target_mask],
+                    incident_ray_directions=chunk_incident,
+                    active_heliostats_mask=chunk_mask,
+                    device=device,
+                )
+
+                ray_tracer = HeliostatRayTracer(
+                    scenario=scenario,
+                    heliostat_group=heliostat_group,
+                    blocking_active=False,
+                    batch_size=min(K * N_samples_per_heliostat, ray_tracing_batch_size),
+                    bitmap_resolution=bitmap_resolution.to(device),
+                )
+
+                predicted_flux = ray_tracer.trace_rays(
+                    incident_ray_directions=chunk_incident,
+                    active_heliostats_mask=chunk_mask,
+                    target_area_mask=chunk_target_mask,
+                    device=device,
+                )
+
+                target_centers = scenario.target_areas.centers[chunk_target_mask]
+                target_widths = scenario.target_areas.dimensions[chunk_target_mask][
+                    :, index_mapping.target_area_width
+                ]
+                target_heights = scenario.target_areas.dimensions[chunk_target_mask][
+                    :, index_mapping.target_area_height
+                ]
+
+                predicted_focal_spots = get_center_of_mass(
+                    bitmaps=predicted_flux,
+                    target_centers=target_centers,
+                    target_widths=target_widths,
+                    target_heights=target_heights,
+                    device=device,
+                )
+
+                focal_spot_error = torch.norm(
+                    predicted_focal_spots[:, :3] - chunk_focal_spots[:, :3], dim=1
+                )
+                all_focal_spot_errors_m.extend(focal_spot_error.cpu().tolist())
+
+                # mrad conversion using per-chunk distances.
+                chunk_distances = distances[chunk_active_local].repeat_interleave(N_samples_per_heliostat)
+                focal_spot_error_mrad = (focal_spot_error / chunk_distances) * 1000.0
+                all_focal_spot_errors_mrad.extend(focal_spot_error_mrad.cpu().tolist())
+
+                # Track heliostats with NaN focal spot errors (zero flux on target).
+                nan_sample_indices = torch.where(torch.isnan(focal_spot_error))[0].tolist()
+                for sample_idx in nan_sample_indices:
+                    heliostat_local_idx = sample_idx // N_samples_per_heliostat
+                    global_idx = active_group_positions[chunk_active_local[heliostat_local_idx]].item()
+                    nan_heliostat_ids.add(heliostat_group.names[global_idx])
+
+                # Per-heliostat results: mean error across all samples for that heliostat.
+                for local_i, global_local in enumerate(chunk_active_local):
+                    name = heliostat_group.names[active_group_positions[global_local].item()]
+                    sample_errors = focal_spot_error[
+                        local_i * N_samples_per_heliostat : (local_i + 1) * N_samples_per_heliostat
+                    ]
+                    fse_m = sample_errors.nanmean().item()
+                    dist_m = name_to_distance.get(name)
+                    fse_mrad = (fse_m / dist_m * 1000.0) if dist_m else None
+                    results_per_heliostat[name] = {"focal_spot_error_mrad": fse_mrad}
 
     def _safe_mean(lst):
         valid = [x for x in lst if not math.isnan(x)]

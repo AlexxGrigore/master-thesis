@@ -36,7 +36,7 @@ from artist.util.environment_setup import get_device
 from utils.checkpointing import load_kinematic_parameters
 from utils.evaluation import build_heliostat_data_mapping
 from blur_ablation.sweep import run_blur_sweep, trace_flux_for_mapping
-from blur_ablation.plotting import plot_heatmap, plot_line_plots, plot_sigma_sweep, plot_field_heatmap, plot_field_coordinates
+from blur_ablation.plotting import plot_heatmap, plot_line_plots, plot_sigma_sweep, plot_field_heatmap, plot_field_coordinates, plot_surface_pts_sweep
 
 set_logger_config()
 logging.getLogger().setLevel(logging.INFO)
@@ -66,6 +66,7 @@ OUTPUT_DIR = (
     else BASE_DIR / "outputs" / f"blur_ablation_{_run_timestamp}"
 )
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+_run_start = time.perf_counter()
 
 _log_handler = logging.FileHandler(OUTPUT_DIR / "blur_ablation.log")
 _log_handler.setFormatter(logging.Formatter("[%(asctime)s][%(name)s][%(levelname)s] - %(message)s"))
@@ -80,6 +81,8 @@ RAYS_CONFIGS = [10, 20, 50]
 SIGMA_CONFIGS = [0.0, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0]
 REF_RAYS = 200        # rays for high-quality reference
 SAMPLE_LIMIT = 10     # measurements per heliostat (train split)
+SURFACE_PTS_CONFIGS = [[25, 25], [50, 50], [75, 75], [100, 100]]
+HELIOSTAT_CHUNK_SIZE = 100
 
 # Heliostat selection grid.
 DISTANCE_BANDS = [("near", 0, 100), ("mid", 100, 175), ("far", 175, float("inf"))]
@@ -93,6 +96,7 @@ if SMOKE_TEST:
     REF_RAYS = 50
     SAMPLE_LIMIT = 3
     HELIOSTATS_PER_CELL = 1
+    SURFACE_PTS_CONFIGS = [[25, 25], [50, 50]]
     log.info("[SMOKE TEST] Reduced configs active.")
 
 print(f"Output directory: {OUTPUT_DIR}")
@@ -245,10 +249,10 @@ scenario_25 = _load_scenario_with_checkpoint([25, 25])
 
 
 # ===================================================================
-# GPU memory & speed benchmark (single heliostat, 25×25)
+# GPU memory & speed benchmark (all selected heliostats, 25×25)
 # ===================================================================
 
-def _bench_config(n_rays: int, heliostat_mapping: list) -> dict:
+def _bench_config(n_rays: int, heliostat_mapping: list, surface_pts: list) -> dict:
     scenario_25.set_number_of_rays(n_rays)
     if device.type == "cuda":
         torch.cuda.synchronize(device)
@@ -259,23 +263,34 @@ def _bench_config(n_rays: int, heliostat_mapping: list) -> dict:
         heliostat_data_mapping=heliostat_mapping,
         data_parser=data_parser,
         device=device,
+        heliostat_chunk_size=HELIOSTAT_CHUNK_SIZE,
     )
     if device.type == "cuda":
         torch.cuda.synchronize(device)
     elapsed = time.perf_counter() - t0
+    n_heliostats = len(heliostat_mapping)
     peak_mem_gb = torch.cuda.max_memory_allocated(device) / 1e9 if device.type == "cuda" else float("nan")
-    return {"n_rays": n_rays, "surface_pts": "25x25", "wall_time_s": round(elapsed, 3), "peak_gpu_mem_gb": round(peak_mem_gb, 4)}
+    return {
+        "n_rays": n_rays,
+        "surface_pts": f"{surface_pts[0]}x{surface_pts[1]}",
+        "n_heliostats": n_heliostats,
+        "wall_time_s": round(elapsed, 3),
+        "wall_time_per_heliostat_s": round(elapsed / n_heliostats, 4),
+        "peak_gpu_mem_gb": round(peak_mem_gb, 4),
+    }
 
-bench_heliostat_mapping = selected_mapping[:1]
-print(f"\nGPU benchmark on heliostat '{bench_heliostat_mapping[0][0]}' (25×25 surface pts) …")
+print(f"\nGPU benchmark on all {len(selected_mapping)} selected heliostats (25×25 surface pts) …")
 bench_results = []
 for n_rays in [10, REF_RAYS]:
-    r = _bench_config(n_rays, bench_heliostat_mapping)
+    r = _bench_config(n_rays, selected_mapping, [25, 25])
     bench_results.append(r)
-    print(f"  {n_rays:4d} rays: {r['wall_time_s']:.3f} s,  peak GPU mem: {r['peak_gpu_mem_gb']:.4f} GB")
+    print(f"  {n_rays:4d} rays: {r['wall_time_s']:.3f} s total, "
+          f"{r['wall_time_per_heliostat_s']:.4f} s/heliostat, "
+          f"peak GPU: {r['peak_gpu_mem_gb']:.4f} GB")
 if len(bench_results) == 2:
     t_ratio = bench_results[1]["wall_time_s"] / bench_results[0]["wall_time_s"]
-    m_ratio = bench_results[1]["peak_gpu_mem_gb"] / bench_results[0]["peak_gpu_mem_gb"] if bench_results[0]["peak_gpu_mem_gb"] > 0 else float("nan")
+    m_ratio = (bench_results[1]["peak_gpu_mem_gb"] / bench_results[0]["peak_gpu_mem_gb"]
+               if bench_results[0]["peak_gpu_mem_gb"] > 0 else float("nan"))
     print(f"  Speed ratio ({REF_RAYS} vs 10 rays): {t_ratio:.1f}×  |  Memory ratio: {m_ratio:.1f}×")
 with open(OUTPUT_DIR / "benchmark_gpu.json", "w") as fp:
     json.dump(bench_results, fp, indent=2)
@@ -283,28 +298,56 @@ print(f"  Saved → {OUTPUT_DIR / 'benchmark_gpu.json'}")
 
 
 # ===================================================================
-# Run sweep
+# Run sweep across all surface_pts configs
 # ===================================================================
 
-print(f"\nRunning sweep: {len(RAYS_CONFIGS)} ray configs × {len(SIGMA_CONFIGS)} sigma configs")
+print(f"\nRunning sweep: {len(SURFACE_PTS_CONFIGS)} surface-pts configs × "
+      f"{len(RAYS_CONFIGS)} ray configs × {len(SIGMA_CONFIGS)} sigma configs")
+print(f"  surface_pts configs: {[f'{p[0]}x{p[1]}' for p in SURFACE_PTS_CONFIGS]}")
 print(f"  rays configs: {RAYS_CONFIGS}")
 print(f"  sigma configs: {SIGMA_CONFIGS}")
-print(f"  reference rays: {REF_RAYS} (25×25)")
+print(f"  reference rays: {REF_RAYS}")
+print(f"  heliostat chunk size: {HELIOSTAT_CHUNK_SIZE}")
 
-records = run_blur_sweep(
-    scenario=scenario_25,
-    selected_mapping=selected_mapping,
-    data_parser=data_parser,
-    rays_configs=RAYS_CONFIGS,
-    sigma_configs=SIGMA_CONFIGS,
-    ref_rays=REF_RAYS,
-    device=device,
-)
+all_records = []
 
-# Save raw results.
+for pts in SURFACE_PTS_CONFIGS:
+    pts_label = f"{pts[0]}x{pts[1]}"
+    print(f"\n--- Surface pts: {pts_label} ---")
+
+    if pts == [25, 25]:
+        scenario = scenario_25
+    else:
+        print(f"  Loading scenario {pts_label} + applying checkpoint …")
+        scenario = _load_scenario_with_checkpoint(pts)
+
+    records_pts = run_blur_sweep(
+        scenario=scenario,
+        selected_mapping=selected_mapping,
+        data_parser=data_parser,
+        rays_configs=RAYS_CONFIGS,
+        sigma_configs=SIGMA_CONFIGS,
+        ref_rays=REF_RAYS,
+        device=device,
+        heliostat_chunk_size=HELIOSTAT_CHUNK_SIZE,
+    )
+
+    for r in records_pts:
+        r["surface_pts"] = pts[0]
+    all_records.extend(records_pts)
+    print(f"  Done: {len(records_pts)} records.")
+
+    if pts != [25, 25]:
+        del scenario
+        torch.cuda.empty_cache()
+
+# Save all results.
 with open(OUTPUT_DIR / "sweep_results.json", "w") as fp:
-    json.dump(records, fp, indent=2)
-print(f"\nResults saved to {OUTPUT_DIR / 'sweep_results.json'} ({len(records)} records).")
+    json.dump(all_records, fp, indent=2)
+print(f"\nAll results saved to {OUTPUT_DIR / 'sweep_results.json'} ({len(all_records)} records).")
+
+# Convenience: records for the baseline 25×25 config (used for existing plots).
+records = [r for r in all_records if r["surface_pts"] == 25]
 
 
 # ===================================================================
@@ -372,4 +415,16 @@ plot_field_coordinates(
 )
 print("  Fig 5: field coordinates saved.")
 
+plot_surface_pts_sweep(
+    records=all_records,
+    heliostat_distances=heliostat_distances,
+    output_path=OUTPUT_DIR / "fig6_surface_pts_sweep.png",
+    optimal_sigma=optimal_sigma,
+    rays_configs=RAYS_CONFIGS,
+)
+print("  Fig 6: surface_pts sweep saved.")
+
+_total_s = time.perf_counter() - _run_start
+_total_min = _total_s / 60
 print(f"\nAll outputs written to: {OUTPUT_DIR}")
+print(f"\nTotal wall time: {_total_min:.1f} min ({_total_s:.0f} s)")

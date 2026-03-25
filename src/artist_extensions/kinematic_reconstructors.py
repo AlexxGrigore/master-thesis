@@ -8,6 +8,7 @@ stay thin and only deal with data loading and configuration.
 """
 
 import logging
+import math
 
 import torch
 import torch.nn.functional as F
@@ -123,6 +124,26 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
                 scheduler = self._setup_scheduler(optimizer)
                 early_stopper = self._setup_early_stopper()
 
+                # Chunking setup: how many heliostats to process per forward pass.
+                # "heliostat_chunk_size" in optimization_configuration controls this.
+                # None / missing = process all at once (original behaviour).
+                N_samples_per_heliostat = int(active_heliostats_mask.max().item())
+                active_group_positions = torch.where(active_heliostats_mask > 0)[0]
+                N_active_heliostats = len(active_group_positions)
+                chunk_size = int(
+                    self.optimization_configuration.get(
+                        "heliostat_chunk_size", N_active_heliostats
+                    )
+                )
+                n_chunks = math.ceil(N_active_heliostats / chunk_size)
+
+                if n_chunks > 1:
+                    log.info(
+                        f"Heliostat mini-batching enabled: {N_active_heliostats} active "
+                        f"heliostats split into {n_chunks} chunks of ≤{chunk_size}."
+                    )
+
+                kinematic = heliostat_group.kinematic
                 loss = torch.inf
                 epoch = 0
                 log_step = (
@@ -130,6 +151,9 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
                     if self.optimization_configuration[config_dictionary.log_step] == 0
                     else self.optimization_configuration[config_dictionary.log_step]
                 )
+                # Stores (chunk_active_local_indices, detached_loss_per_heliostat) for each
+                # chunk in the most recently completed epoch — used to fill final_loss_per_heliostat.
+                last_epoch_chunk_losses: list[tuple[list[int], torch.Tensor]] = []
 
                 while (
                     loss > float(self.optimization_configuration[config_dictionary.tolerance])
@@ -137,72 +161,101 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
                 ):
                     optimizer.zero_grad()
 
-                    heliostat_group.activate_heliostats(
-                        active_heliostats_mask=active_heliostats_mask, device=device
-                    )
+                    epoch_loss_sum = 0.0
+                    last_epoch_chunk_losses = []
 
-                    kinematic = heliostat_group.kinematic
+                    for c_start in range(0, N_active_heliostats, chunk_size):
+                        c_end = min(c_start + chunk_size, N_active_heliostats)
+                        # Indices into active_group_positions / data tensors (0-indexed
+                        # among active heliostats, not among all group heliostats).
+                        chunk_active_local = list(range(c_start, c_end))
+                        K = len(chunk_active_local)
 
-                    if self.train_position_deviation:
-                        # Inject base position deviation into the active positions that
-                        # ARTIST just set.  We overwrite with a new tensor (no in-place op)
-                        # so autograd traces through repeat_interleave → _base_position_deviation.
-                        active_base_dev = kinematic._base_position_deviation.repeat_interleave(
-                            active_heliostats_mask, dim=0
-                        )  # [N_active, 3]
-                        pad = torch.zeros(active_base_dev.shape[0], 1, device=device)
-                        kinematic.active_heliostat_positions = (
-                            kinematic.active_heliostat_positions
-                            + torch.cat([active_base_dev, pad], dim=1)
+                        # Build a mask that activates only the K chunk heliostats.
+                        chunk_mask = torch.zeros_like(active_heliostats_mask)
+                        chunk_mask[active_group_positions[chunk_active_local]] = N_samples_per_heliostat
+
+                        # Row indices into the [N_active * N_samples, ...] data tensors.
+                        data_rows = torch.cat([
+                            torch.arange(
+                                i * N_samples_per_heliostat,
+                                (i + 1) * N_samples_per_heliostat,
+                                device=device,
+                            )
+                            for i in chunk_active_local
+                        ])
+
+                        chunk_incident = incident_ray_directions[data_rows]
+                        chunk_target_mask = target_area_mask[data_rows]
+                        chunk_ground_truth = ground_truth[data_rows]
+                        chunk_measured_flux = measured_flux[data_rows]
+                        chunk_focal_spots = focal_spots_measured[data_rows]
+
+                        heliostat_group.activate_heliostats(
+                            active_heliostats_mask=chunk_mask, device=device
                         )
 
-                    heliostat_group.align_surfaces_with_incident_ray_directions(
-                        aim_points=self.scenario.target_areas.centers[target_area_mask],
-                        incident_ray_directions=incident_ray_directions,
-                        active_heliostats_mask=active_heliostats_mask,
-                        device=device,
-                    )
+                        if self.train_position_deviation:
+                            active_base_dev = kinematic._base_position_deviation.repeat_interleave(
+                                chunk_mask, dim=0
+                            )
+                            pad = torch.zeros(active_base_dev.shape[0], 1, device=device)
+                            kinematic.active_heliostat_positions = (
+                                kinematic.active_heliostat_positions
+                                + torch.cat([active_base_dev, pad], dim=1)
+                            )
 
-                    ray_tracer = HeliostatRayTracer(
-                        scenario=self.scenario,
-                        heliostat_group=heliostat_group,
-                        blocking_active=False,
-                        world_size=self.ddp_setup[config_dictionary.heliostat_group_world_size],
-                        rank=self.ddp_setup[config_dictionary.heliostat_group_rank],
-                        batch_size=self.optimization_configuration[config_dictionary.batch_size],
-                        random_seed=self.ddp_setup[config_dictionary.heliostat_group_rank],
-                    )
+                        heliostat_group.align_surfaces_with_incident_ray_directions(
+                            aim_points=self.scenario.target_areas.centers[chunk_target_mask],
+                            incident_ray_directions=chunk_incident,
+                            active_heliostats_mask=chunk_mask,
+                            device=device,
+                        )
 
-                    flux_distributions = ray_tracer.trace_rays(
-                        incident_ray_directions=incident_ray_directions,
-                        active_heliostats_mask=active_heliostats_mask,
-                        target_area_mask=target_area_mask,
-                        device=device,
-                    )
+                        ray_tracer = HeliostatRayTracer(
+                            scenario=self.scenario,
+                            heliostat_group=heliostat_group,
+                            blocking_active=False,
+                            world_size=self.ddp_setup[config_dictionary.heliostat_group_world_size],
+                            rank=self.ddp_setup[config_dictionary.heliostat_group_rank],
+                            batch_size=self.optimization_configuration[config_dictionary.batch_size],
+                            random_seed=self.ddp_setup[config_dictionary.heliostat_group_rank],
+                        )
 
-                    sample_indices_for_local_rank = ray_tracer.get_sampler_indices()
+                        chunk_flux = ray_tracer.trace_rays(
+                            incident_ray_directions=chunk_incident,
+                            active_heliostats_mask=chunk_mask,
+                            target_area_mask=chunk_target_mask,
+                            device=device,
+                        )
 
-                    number_of_samples_per_heliostat = int(
-                        heliostat_group.active_heliostats_mask.sum()
-                        / (heliostat_group.active_heliostats_mask > 0).sum()
-                    )
+                        chunk_sample_indices = ray_tracer.get_sampler_indices()
 
-                    loss_per_heliostat = self._compute_epoch_loss(
-                        epoch=epoch,
-                        flux_distributions=flux_distributions,
-                        measured_flux=measured_flux,
-                        focal_spots_measured=focal_spots_measured,
-                        sample_indices=sample_indices_for_local_rank,
-                        target_area_mask=target_area_mask,
-                        loss_definition=loss_definition,
-                        ground_truth=ground_truth,
-                        reduction_dims=reduction_dims,
-                        number_of_samples_per_heliostat=number_of_samples_per_heliostat,
-                        device=device,
-                    )
+                        chunk_loss_per_heliostat = self._compute_epoch_loss(
+                            epoch=epoch,
+                            flux_distributions=chunk_flux,
+                            measured_flux=chunk_measured_flux,
+                            focal_spots_measured=chunk_focal_spots,
+                            sample_indices=chunk_sample_indices,
+                            target_area_mask=chunk_target_mask,
+                            loss_definition=loss_definition,
+                            ground_truth=chunk_ground_truth,
+                            reduction_dims=reduction_dims,
+                            number_of_samples_per_heliostat=N_samples_per_heliostat,
+                            device=device,
+                        )
 
-                    loss = loss_per_heliostat.mean()
-                    loss.backward()
+                        # Gradient accumulation: scale so that the sum across all chunks
+                        # equals the mean loss over all heliostats.
+                        (chunk_loss_per_heliostat.sum() / N_active_heliostats).backward()
+
+                        epoch_loss_sum += chunk_loss_per_heliostat.detach().sum().item()
+                        last_epoch_chunk_losses.append(
+                            (chunk_active_local, chunk_loss_per_heliostat.detach())
+                        )
+
+                    loss = epoch_loss_sum / N_active_heliostats
+
                     optimizer.step()
 
                     self._apply_deviation_bounds(
@@ -212,7 +265,7 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
                     )
 
                     if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                        scheduler.step(loss.detach())
+                        scheduler.step(loss)
                     else:
                         scheduler.step()
 
@@ -227,7 +280,7 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
                         entry = {
                             "epoch": epoch,
                             "group": heliostat_group_index,
-                            "loss": loss.item(),
+                            "loss": loss,
                             "translation_deviation_mean_abs": kinematic.translation_deviation_parameters.abs().mean().item(),
                             "rotation_deviation_mean_abs": kinematic.rotation_deviation_parameters.abs().mean().item(),
                             "actuator_angle_dev_mean_abs": (
@@ -255,16 +308,13 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
 
                     epoch += 1
 
-                local_indices = (
-                    sample_indices_for_local_rank[::number_of_samples_per_heliostat]
-                    // number_of_samples_per_heliostat
-                )
-                global_active_indices = torch.nonzero(active_heliostats_mask != 0, as_tuple=True)[0]
-                rank_active_indices_global = global_active_indices[local_indices]
-                final_indices = (
-                    rank_active_indices_global + final_loss_start_indices[heliostat_group_index]
-                )
-                final_loss_per_heliostat[final_indices] = loss_per_heliostat
+                # Assemble final per-heliostat losses from the last epoch's chunks.
+                final_loss_full = torch.full((N_active_heliostats,), torch.inf, device=device)
+                for chunk_active_local, chunk_loss in last_epoch_chunk_losses:
+                    final_loss_full[chunk_active_local] = chunk_loss
+
+                final_indices = active_group_positions + final_loss_start_indices[heliostat_group_index]
+                final_loss_per_heliostat[final_indices] = final_loss_full
                 log.info(f"Rank: {rank}, Kinematic reconstructed.")
 
         if self.ddp_setup[config_dictionary.is_distributed]:

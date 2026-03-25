@@ -326,7 +326,15 @@ def run_experiment(
             )
 
         scenario.set_number_of_rays(10)
-        log.info("Number of rays set to 20.")
+        log.info("Number of rays set to 10.")
+
+        # Reset all kinematic deviation parameters to zero so every config
+        # starts from the same uncalibrated baseline.
+        with torch.no_grad():
+            for hg in scenario.heliostat_field.heliostat_groups:
+                hg.kinematic.translation_deviation_parameters.zero_()
+                hg.kinematic.rotation_deviation_parameters.zero_()
+        log.info("Kinematic deviation parameters reset to zero.")
 
         print(f"  Heliostats: {scenario.heliostat_field.number_of_heliostats_per_group.sum().item()}")
 
