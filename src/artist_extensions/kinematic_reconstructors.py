@@ -591,6 +591,147 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
                 )
 
 
+class RotationsOnlyReconstructor(WortbergKinematicReconstructor):
+    """
+    Config A: only ``rotation_deviation_parameters`` (4 main-axis tilts) are optimised.
+
+    All other parameters (translations, actuators, base position) are frozen.
+    Use this as the minimal structural baseline.
+    """
+
+    def _setup_optimizer(self, heliostat_group, device):
+        kinematic = heliostat_group.kinematic
+        kinematic.rotation_deviation_parameters.requires_grad_()
+
+        # Snapshot actuator nominals — required by parent _apply_deviation_bounds.
+        if not hasattr(kinematic, "_initial_actuator_initial_angle"):
+            kinematic._initial_actuator_initial_angle = (
+                kinematic.actuators.optimizable_parameters[
+                    :, index_mapping.actuator_initial_angle, :
+                ].detach().clone()
+            )
+            kinematic._initial_actuator_offset = (
+                kinematic.actuators.non_optimizable_parameters[
+                    :, index_mapping.actuator_offset, :
+                ].detach().clone()
+            )
+        initial_actuator_initial_angle = kinematic._initial_actuator_initial_angle
+        initial_actuator_offset = kinematic._initial_actuator_offset
+
+        base_lr = float(self.optimization_configuration[config_dictionary.initial_learning_rate])
+        optimizer = torch.optim.Adam(
+            [{"params": kinematic.rotation_deviation_parameters, "lr": base_lr}],
+            lr=base_lr,
+        )
+        return optimizer, initial_actuator_initial_angle, initial_actuator_offset
+
+
+class RotationsActuatorsReconstructor(WortbergKinematicReconstructor):
+    """
+    Config B: ``rotation_deviation_parameters`` + actuator params (aᵢ, cᵢ).
+
+    Translations and base position are frozen.
+    """
+
+    def _setup_optimizer(self, heliostat_group, device):
+        kinematic = heliostat_group.kinematic
+        kinematic.rotation_deviation_parameters.requires_grad_()
+        kinematic.actuators.optimizable_parameters.requires_grad_()
+        kinematic.actuators.non_optimizable_parameters.requires_grad_()
+
+        # Freeze bᵢ (initial_stroke_length).
+        def _freeze_stroke_length(grad: torch.Tensor) -> torch.Tensor:
+            mask = torch.ones_like(grad)
+            mask[:, index_mapping.actuator_initial_stroke_length, :] = 0.0
+            return grad * mask
+
+        kinematic.actuators.optimizable_parameters.register_hook(_freeze_stroke_length)
+
+        # Restrict non_optimizable gradients to cᵢ only.
+        def _only_actuator_offset(grad: torch.Tensor) -> torch.Tensor:
+            mask = torch.zeros_like(grad)
+            mask[:, index_mapping.actuator_offset, :] = 1.0
+            return grad * mask
+
+        kinematic.actuators.non_optimizable_parameters.register_hook(_only_actuator_offset)
+
+        if not hasattr(kinematic, "_initial_actuator_initial_angle"):
+            kinematic._initial_actuator_initial_angle = (
+                kinematic.actuators.optimizable_parameters[
+                    :, index_mapping.actuator_initial_angle, :
+                ].detach().clone()
+            )
+            kinematic._initial_actuator_offset = (
+                kinematic.actuators.non_optimizable_parameters[
+                    :, index_mapping.actuator_offset, :
+                ].detach().clone()
+            )
+        initial_actuator_initial_angle = kinematic._initial_actuator_initial_angle
+        initial_actuator_offset = kinematic._initial_actuator_offset
+
+        base_lr = float(self.optimization_configuration[config_dictionary.initial_learning_rate])
+        optimizer = torch.optim.Adam(
+            [
+                {"params": kinematic.rotation_deviation_parameters, "lr": base_lr},
+                {"params": kinematic.actuators.optimizable_parameters, "lr": base_lr},
+                {"params": kinematic.actuators.non_optimizable_parameters, "lr": base_lr},
+            ],
+            lr=base_lr,
+        )
+        return optimizer, initial_actuator_initial_angle, initial_actuator_offset
+
+
+class RotationsTranslationsReconstructor(WortbergKinematicReconstructor):
+    """
+    Config C: ``rotation_deviation_parameters`` + ``translation_deviation_parameters``.
+
+    Actuators and base position are frozen.
+    Translations use 5× the base LR (large-scale params, same as Wortberg).
+    """
+
+    def _setup_optimizer(self, heliostat_group, device):
+        kinematic = heliostat_group.kinematic
+        kinematic.rotation_deviation_parameters.requires_grad_()
+        kinematic.translation_deviation_parameters.requires_grad_()
+
+        if not hasattr(kinematic, "_initial_actuator_initial_angle"):
+            kinematic._initial_actuator_initial_angle = (
+                kinematic.actuators.optimizable_parameters[
+                    :, index_mapping.actuator_initial_angle, :
+                ].detach().clone()
+            )
+            kinematic._initial_actuator_offset = (
+                kinematic.actuators.non_optimizable_parameters[
+                    :, index_mapping.actuator_offset, :
+                ].detach().clone()
+            )
+        initial_actuator_initial_angle = kinematic._initial_actuator_initial_angle
+        initial_actuator_offset = kinematic._initial_actuator_offset
+
+        base_lr = float(self.optimization_configuration[config_dictionary.initial_learning_rate])
+        optimizer = torch.optim.Adam(
+            [
+                {"params": kinematic.translation_deviation_parameters, "lr": base_lr * 5.0},
+                {"params": kinematic.rotation_deviation_parameters, "lr": base_lr},
+            ],
+            lr=base_lr,
+        )
+        return optimizer, initial_actuator_initial_angle, initial_actuator_offset
+
+
+class FullStructuralReconstructor(WortbergKinematicReconstructor):
+    """
+    Config D: rotations + translations + actuators (aᵢ, cᵢ), no base position.
+
+    Identical to WortbergKinematicReconstructor(train_position_deviation=False).
+    Named explicitly for clarity in the parameter ablation study.
+    """
+
+    def __init__(self, *args, **kwargs):
+        kwargs["train_position_deviation"] = False
+        super().__init__(*args, **kwargs)
+
+
 class WortbergPixelReconstructor(WortbergKinematicReconstructor):
     """
     Variant of WortbergKinematicReconstructor that uses measured flux bitmaps
