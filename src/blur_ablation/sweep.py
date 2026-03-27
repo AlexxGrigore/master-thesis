@@ -7,6 +7,7 @@ Provides two main functions:
 """
 
 import logging
+from typing import Callable
 
 import torch
 from artist.core.heliostat_ray_tracer import HeliostatRayTracer
@@ -113,7 +114,8 @@ def trace_flux_for_mapping(
 # ---------------------------------------------------------------------------
 
 def run_blur_sweep(
-    scenarios: dict[int, Scenario],
+    scenario_loader: Callable[[int], Scenario],
+    surface_configs: list[int],
     selected_mapping: list[tuple[str, list, list]],
     data_parser: PaintCalibrationDataParser,
     rays_configs: list[int],
@@ -127,11 +129,15 @@ def run_blur_sweep(
     For each surface_pts config the reference is computed at (surface_pts, ref_rays, no blur),
     so comparisons are always within the same surface discretisation.
 
+    Scenarios are loaded one at a time and freed after each surface config to
+    avoid holding all scenario instances in GPU memory simultaneously.
+
     Parameters
     ----------
-    scenarios : dict[int, Scenario]
-        {surface_pts: scenario} — one loaded scenario per surface discretisation,
-        e.g. {25: scenario_25, 50: scenario_50, 75: scenario_75, 100: scenario_100}.
+    scenario_loader : Callable[[int], Scenario]
+        Callable that loads and returns a scenario for the given surface_pts value.
+    surface_configs : list[int]
+        Surface discretisation values to sweep, e.g. [25, 50, 75, 100].
     selected_mapping : list
         Filtered heliostat_data_mapping containing only the selected heliostats.
     data_parser : PaintCalibrationDataParser
@@ -159,7 +165,9 @@ def run_blur_sweep(
     """
     records = []
 
-    for surface_pts, scenario in sorted(scenarios.items()):
+    for surface_pts in sorted(surface_configs):
+        log.info(f"  Loading scenario for {surface_pts}×{surface_pts} …")
+        scenario = scenario_loader(surface_pts)
         log.info(f"=== Surface config: {surface_pts}×{surface_pts} ===")
 
         # ------------------------------------------------------------------ #
@@ -229,6 +237,12 @@ def run_blur_sweep(
                         "mse": mse_mean,
                         "mse_std": mse_std,
                     })
+
+        # Free the scenario from GPU memory before loading the next one.
+        del scenario
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+        log.info(f"  Freed scenario {surface_pts}×{surface_pts} from GPU memory.")
 
     log.info(f"Sweep complete. {len(records)} records collected.")
     return records

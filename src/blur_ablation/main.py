@@ -143,20 +143,14 @@ def _load_scenario_with_checkpoint(surface_pts: int) -> Scenario:
     return sc
 
 
-print(f"\nLoading {len(SURFACE_CONFIGS)} scenario instances …")
-scenarios: dict[int, Scenario] = {}
-for sp in SURFACE_CONFIGS:
-    print(f"  Loading {sp}×{sp} …")
-    scenarios[sp] = _load_scenario_with_checkpoint(sp)
+print(f"\nLoading reference scenario ({SURFACE_CONFIGS[0]}×{SURFACE_CONFIGS[0]}) for metadata …")
+_ref_scenario = _load_scenario_with_checkpoint(SURFACE_CONFIGS[0])
 print("Done.")
 
 
 # ===================================================================
 # Build heliostat metadata from scenario (for mapping and plots)
 # ===================================================================
-
-# Use the first (smallest) scenario for position extraction.
-_ref_scenario = scenarios[SURFACE_CONFIGS[0]]
 
 heliostat_info: list[dict] = []
 for heliostat_group in _ref_scenario.heliostat_field.heliostat_groups:
@@ -189,6 +183,11 @@ for band_label, _, _ in DISTANCE_BANDS:
         h["column"] = "left" if h["east_m"] < p33 else ("mid" if h["east_m"] <= p66 else "right")
 
 print(f"Heliostats in scenario: {len(heliostat_info)}")
+
+# Free reference scenario — no longer needed after metadata extraction.
+del _ref_scenario
+if device.type == "cuda":
+    torch.cuda.empty_cache()
 
 heliostat_distances = {h["name"]: h["distance_m"] for h in heliostat_info}
 
@@ -246,10 +245,14 @@ bench_heliostat_mapping = selected_mapping[:1]
 print(f"\nGPU benchmark on heliostat '{bench_heliostat_mapping[0][0]}' …")
 bench_results = []
 for sp in SURFACE_CONFIGS:
+    _bench_scenario = _load_scenario_with_checkpoint(sp)
     for n_rays in [10, REF_RAYS]:
-        r = _bench_config(scenarios[sp], n_rays, sp, bench_heliostat_mapping)
+        r = _bench_config(_bench_scenario, n_rays, sp, bench_heliostat_mapping)
         bench_results.append(r)
         print(f"  {sp:3d}×{sp:<3d}  {n_rays:4d} rays: {r['wall_time_s']:.3f} s,  peak GPU: {r['peak_gpu_mem_gb']:.4f} GB")
+    del _bench_scenario
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
 
 with open(OUTPUT_DIR / "benchmark_gpu.json", "w") as fp:
     json.dump(bench_results, fp, indent=2)
@@ -267,7 +270,8 @@ print(f"  sigma configs: {SIGMA_CONFIGS}")
 print(f"  reference rays: {REF_RAYS}")
 
 records = run_blur_sweep(
-    scenarios=scenarios,
+    scenario_loader=_load_scenario_with_checkpoint,
+    surface_configs=SURFACE_CONFIGS,
     selected_mapping=selected_mapping,
     data_parser=data_parser,
     rays_configs=RAYS_CONFIGS,
