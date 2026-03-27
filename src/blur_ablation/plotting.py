@@ -312,6 +312,59 @@ def plot_field_coordinates(
     plt.close()
 
 
+def plot_surface_pts_comparison(
+    records: list[dict],
+    rays_configs: list[int],
+    output_path: pathlib.Path,
+) -> None:
+    """Figure 6: sigma vs MSE with one line per surface config, one panel per n_rays.
+
+    Shows how the optimal blur sigma and the overall MSE change as surface
+    discretisation increases (25×25 → 50×50 → 75×75 → 100×100).
+    """
+    import pandas as pd
+
+    df = pd.DataFrame(records)
+    surface_configs = sorted(df["surface_pts"].unique())
+    sigmas = sorted(df["sigma"].unique())
+
+    cmap = plt.cm.get_cmap("plasma", len(surface_configs))
+    colors = {sp: cmap(i) for i, sp in enumerate(surface_configs)}
+
+    n_panels = len(rays_configs)
+    fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 5), sharey=False)
+    if n_panels == 1:
+        axes = [axes]
+
+    fig.suptitle("Effect of surface discretisation on blur ablation", fontsize=12)
+
+    for ax, n_rays in zip(axes, rays_configs):
+        sub = df[df["n_rays"] == n_rays]
+        for sp in surface_configs:
+            sp_df = sub[sub["surface_pts"] == sp]
+            if sp_df.empty:
+                continue
+            means = sp_df.groupby("sigma")["mse"].mean().reindex(sigmas)
+            stds  = sp_df.groupby("sigma")["mse"].std().reindex(sigmas).fillna(0)
+            ax.plot(sigmas, means.values, marker="o", label=f"{sp}×{sp} pts",
+                    color=colors[sp])
+            ax.fill_between(sigmas,
+                            (means - stds).values,
+                            (means + stds).values,
+                            alpha=0.15, color=colors[sp])
+
+        ax.set_title(f"n_rays = {n_rays}")
+        ax.set_xlabel("Gaussian blur sigma (pixels)")
+        ax.set_ylabel("MSE (peak-normalised)")
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+
 def plot_sigma_sweep(
     records: list[dict],
     heliostat_distances: dict[str, float],

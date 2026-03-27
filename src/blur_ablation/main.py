@@ -3,7 +3,6 @@ import json
 import logging
 import math
 import pathlib
-import random
 import sys
 
 _pkg = pathlib.Path(__file__).parent   # .../src/blur_ablation/
@@ -16,7 +15,8 @@ sys.path.insert(0, str(_pkg))
 # ===================================================================
 
 IS_ON_DAIC = True
-SMOKE_TEST = not IS_ON_DAIC  # 2 heliostats, rays={10,20}, sigmas={0,5}
+SMOKE_TEST = not IS_ON_DAIC  # reduced rays/sigmas/sample_limit/surface_configs
+# SMOKE_TEST = False
 
 if IS_ON_DAIC:
     import matplotlib
@@ -36,13 +36,15 @@ from artist.util.environment_setup import get_device
 from utils.checkpointing import load_kinematic_parameters
 from utils.evaluation import build_heliostat_data_mapping
 from blur_ablation.sweep import run_blur_sweep, trace_flux_for_mapping
-from blur_ablation.plotting import plot_heatmap, plot_line_plots, plot_sigma_sweep, plot_field_heatmap, plot_field_coordinates
+from blur_ablation.plotting import (
+    plot_heatmap, plot_line_plots, plot_sigma_sweep,
+    plot_field_heatmap, plot_field_coordinates,
+    plot_surface_pts_comparison,
+)
 
 set_logger_config()
 logging.getLogger().setLevel(logging.INFO)
 log = logging.getLogger(__name__)
-
-random.seed(42)
 
 if IS_ON_DAIC:
     BASE_DIR = pathlib.Path("/home/nfs/agrigore/projects/githubProjects/master-thesis")
@@ -52,7 +54,9 @@ else:
     BENCHMARK_DIR = BASE_DIR / "datasets" / "paint_benchmarks"
 
 BENCHMARK_NAME = "benchmark_split-balanced_train-10_validation-30"
-SCENARIO_PATH = BASE_DIR / "scenarios" / "deflectometry_scenario" / "deflectometry_scenario.h5"
+
+# 18-heliostat scenario — pre-selected stratified subset (blur_ablation, random.seed(42)).
+SCENARIO_PATH = BASE_DIR / "scenarios" / "blur_ablation_scenario" / "blur_ablation_scenario.h5"
 
 KINEMATIC_CHECKPOINT = (
     BASE_DIR / "outputs" / "basic_kinematic_parameters"
@@ -76,28 +80,28 @@ CALIBRATION_PROPERTIES_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "cali
 FLUX_IMAGE_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "flux_image"
 
 # Sweep parameters.
-RAYS_CONFIGS = [10, 20, 50]
-SIGMA_CONFIGS = [0.0, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0]
-REF_RAYS = 200        # rays for high-quality reference
-SAMPLE_LIMIT = 10     # measurements per heliostat (train split)
+SURFACE_CONFIGS = [25, 50, 75, 100]   # N in N×N surface points per facet
+RAYS_CONFIGS    = [10, 20, 50]
+SIGMA_CONFIGS   = [0.0, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0]
+REF_RAYS        = 200        # rays for high-quality reference
+SAMPLE_LIMIT    = 10         # measurements per heliostat (train split)
 
-# Heliostat selection grid.
-DISTANCE_BANDS = [("near", 0, 100), ("mid", 100, 175), ("far", 175, float("inf"))]
-COLUMNS = ["left", "mid", "right"]  # lateral split by east coordinate, computed per band
-HELIOSTATS_PER_CELL = 2  # 2 × 9 cells = 18 heliostats
+# Used only for plot labelling (fig4) — reflects how the scenario was originally built.
+HELIOSTATS_PER_CELL = 2
 
 # Smoke test overrides.
 if SMOKE_TEST:
-    RAYS_CONFIGS = [10, 20]
-    SIGMA_CONFIGS = [0.0, 5.0]
-    REF_RAYS = 50
-    SAMPLE_LIMIT = 3
-    HELIOSTATS_PER_CELL = 1
+    SURFACE_CONFIGS = [25, 50]
+    RAYS_CONFIGS    = [10, 20]
+    SIGMA_CONFIGS   = [0.0, 5.0]
+    REF_RAYS        = 50
+    SAMPLE_LIMIT    = 3
     log.info("[SMOKE TEST] Reduced configs active.")
 
 print(f"Output directory: {OUTPUT_DIR}")
 print(f"Scenario: {SCENARIO_PATH}")
 print(f"Checkpoint: {KINEMATIC_CHECKPOINT}")
+print(f"Surface configs: {SURFACE_CONFIGS}")
 
 
 # ===================================================================
@@ -125,94 +129,80 @@ mapping_by_name = {name: (cal, flux) for name, cal, flux in full_train_mapping}
 
 
 # ===================================================================
-# Load scenario (25×25) to read heliostat positions
+# Load one scenario per surface config, each with pre-trained kinematics
 # ===================================================================
 
-print("Loading scenario (25×25) to read heliostat positions …")
-with h5py.File(SCENARIO_PATH, "r") as f:
-    scenario_pos = Scenario.load_scenario_from_hdf5(
-        scenario_file=f,
-        device=device,
-        number_of_surface_points_per_facet=torch.tensor([25, 25]),
-    )
+def _load_scenario_with_checkpoint(surface_pts: int) -> Scenario:
+    with h5py.File(SCENARIO_PATH, "r") as f:
+        sc = Scenario.load_scenario_from_hdf5(
+            scenario_file=f,
+            device=device,
+            number_of_surface_points_per_facet=torch.tensor([surface_pts, surface_pts]),
+        )
+    load_kinematic_parameters(sc, KINEMATIC_CHECKPOINT, device)
+    return sc
 
-# Collect position info for each benchmark heliostat in the scenario.
+
+print(f"\nLoading {len(SURFACE_CONFIGS)} scenario instances …")
+scenarios: dict[int, Scenario] = {}
+for sp in SURFACE_CONFIGS:
+    print(f"  Loading {sp}×{sp} …")
+    scenarios[sp] = _load_scenario_with_checkpoint(sp)
+print("Done.")
+
+
+# ===================================================================
+# Build heliostat metadata from scenario (for mapping and plots)
+# ===================================================================
+
+# Use the first (smallest) scenario for position extraction.
+_ref_scenario = scenarios[SURFACE_CONFIGS[0]]
+
 heliostat_info: list[dict] = []
-for heliostat_group in scenario_pos.heliostat_field.heliostat_groups:
+for heliostat_group in _ref_scenario.heliostat_field.heliostat_groups:
     positions = heliostat_group.positions[:, :3].cpu()  # [N, 3] — (E, N, U) in metres
     for idx, name in enumerate(heliostat_group.names):
-        if name not in mapping_by_name:
-            continue  # not in benchmark
         e, n, u = positions[idx].tolist()
-        dist = math.sqrt(e ** 2 + n ** 2)  # horizontal ground distance
-        # Assign distance band.
-        band = "far"
-        for label, lo, hi in DISTANCE_BANDS:
-            if lo <= dist < hi:
-                band = label
-                break
+        dist = math.sqrt(e ** 2 + n ** 2)
         heliostat_info.append({
             "name": name,
             "distance_m": dist,
-            "band": band,
             "east_m": e,
             "north_m": n,
         })
 
-print(f"Heliostat info collected for {len(heliostat_info)} heliostats.")
+# Assign distance band and lateral column (needed for fig4).
+DISTANCE_BANDS = [("near", 0, 100), ("mid", 100, 175), ("far", 175, float("inf"))]
+for h in heliostat_info:
+    h["band"] = next(
+        label for label, lo, hi in DISTANCE_BANDS if lo <= h["distance_m"] < hi
+    )
 
-# Assign lateral column (left/mid/right) per band using 33rd/66th percentile of east_m
-# across all benchmark heliostats in that band.
 for band_label, _, _ in DISTANCE_BANDS:
-    band_heliostats = [h for h in heliostat_info if h["band"] == band_label]
-    if not band_heliostats:
+    band_h = [h for h in heliostat_info if h["band"] == band_label]
+    if not band_h:
         continue
-    east_vals = np.array([h["east_m"] for h in band_heliostats])
+    east_vals = np.array([h["east_m"] for h in band_h])
     p33 = float(np.percentile(east_vals, 33.33))
     p66 = float(np.percentile(east_vals, 66.67))
-    for h in band_heliostats:
-        if h["east_m"] < p33:
-            h["column"] = "left"
-        elif h["east_m"] <= p66:
-            h["column"] = "mid"
-        else:
-            h["column"] = "right"
+    for h in band_h:
+        h["column"] = "left" if h["east_m"] < p33 else ("mid" if h["east_m"] <= p66 else "right")
 
-# ===================================================================
-# Heliostat selection: sample HELIOSTATS_PER_CELL per (band × column)
-# ===================================================================
+print(f"Heliostats in scenario: {len(heliostat_info)}")
 
-from collections import defaultdict
-cell_buckets: dict[tuple, list] = defaultdict(list)
-for h in heliostat_info:
-    cell_buckets[(h["band"], h["column"])].append(h)
+heliostat_distances = {h["name"]: h["distance_m"] for h in heliostat_info}
 
-selected_heliostats: list[dict] = []
-for band, _, _ in DISTANCE_BANDS:
-    for col in COLUMNS:
-        cell = cell_buckets.get((band, col), [])
-        if cell:
-            chosen = random.sample(cell, min(HELIOSTATS_PER_CELL, len(cell)))
-            selected_heliostats.extend(chosen)
-
-print(f"\nSelected {len(selected_heliostats)} heliostats:")
-for h in selected_heliostats:
-    print(f"  {h['name']:8s}  dist={h['distance_m']:6.1f} m  {h['band']:4s}  {h['column']}")
-
-heliostat_distances = {h["name"]: h["distance_m"] for h in selected_heliostats}
-selected_names = set(heliostat_distances.keys())
-
-# Build filtered mapping with only selected heliostats.
+# Build mapping limited to heliostats present in both scenario and benchmark.
 selected_mapping = [
     (name, mapping_by_name[name][0][:SAMPLE_LIMIT], mapping_by_name[name][1][:SAMPLE_LIMIT])
-    for name in (h["name"] for h in selected_heliostats)
+    for name in (h["name"] for h in heliostat_info)
     if name in mapping_by_name
 ]
 print(f"Selected mapping: {len(selected_mapping)} heliostats, up to {SAMPLE_LIMIT} measurements each.")
 
 # Save heliostat metadata.
 with open(OUTPUT_DIR / "selected_heliostats.json", "w") as fp:
-    json.dump(selected_heliostats, fp, indent=2)
+    json.dump(heliostat_info, fp, indent=2)
 
 
 # ===================================================================
@@ -226,36 +216,17 @@ data_parser = PaintCalibrationDataParser(
 
 
 # ===================================================================
-# Load both scenario instances and apply pre-trained kinematics
+# GPU memory & speed benchmark (single heliostat, all surface configs)
 # ===================================================================
 
-def _load_scenario_with_checkpoint(surface_pts: list[int]) -> Scenario:
-    with h5py.File(SCENARIO_PATH, "r") as f:
-        sc = Scenario.load_scenario_from_hdf5(
-            scenario_file=f,
-            device=device,
-            number_of_surface_points_per_facet=torch.tensor(surface_pts),
-        )
-    load_kinematic_parameters(sc, KINEMATIC_CHECKPOINT, device)
-    return sc
-
-
-print(f"\nLoading scenario 25×25 + applying checkpoint …")
-scenario_25 = _load_scenario_with_checkpoint([25, 25])
-
-
-# ===================================================================
-# GPU memory & speed benchmark (single heliostat, 25×25)
-# ===================================================================
-
-def _bench_config(n_rays: int, heliostat_mapping: list) -> dict:
-    scenario_25.set_number_of_rays(n_rays)
+def _bench_config(scenario: Scenario, n_rays: int, surface_pts: int, heliostat_mapping: list) -> dict:
+    scenario.set_number_of_rays(n_rays)
     if device.type == "cuda":
         torch.cuda.synchronize(device)
         torch.cuda.reset_peak_memory_stats(device)
     t0 = time.perf_counter()
     trace_flux_for_mapping(
-        scenario=scenario_25,
+        scenario=scenario,
         heliostat_data_mapping=heliostat_mapping,
         data_parser=data_parser,
         device=device,
@@ -264,35 +235,39 @@ def _bench_config(n_rays: int, heliostat_mapping: list) -> dict:
         torch.cuda.synchronize(device)
     elapsed = time.perf_counter() - t0
     peak_mem_gb = torch.cuda.max_memory_allocated(device) / 1e9 if device.type == "cuda" else float("nan")
-    return {"n_rays": n_rays, "surface_pts": "25x25", "wall_time_s": round(elapsed, 3), "peak_gpu_mem_gb": round(peak_mem_gb, 4)}
+    return {
+        "surface_pts": surface_pts,
+        "n_rays": n_rays,
+        "wall_time_s": round(elapsed, 3),
+        "peak_gpu_mem_gb": round(peak_mem_gb, 4),
+    }
 
 bench_heliostat_mapping = selected_mapping[:1]
-print(f"\nGPU benchmark on heliostat '{bench_heliostat_mapping[0][0]}' (25×25 surface pts) …")
+print(f"\nGPU benchmark on heliostat '{bench_heliostat_mapping[0][0]}' …")
 bench_results = []
-for n_rays in [10, REF_RAYS]:
-    r = _bench_config(n_rays, bench_heliostat_mapping)
-    bench_results.append(r)
-    print(f"  {n_rays:4d} rays: {r['wall_time_s']:.3f} s,  peak GPU mem: {r['peak_gpu_mem_gb']:.4f} GB")
-if len(bench_results) == 2:
-    t_ratio = bench_results[1]["wall_time_s"] / bench_results[0]["wall_time_s"]
-    m_ratio = bench_results[1]["peak_gpu_mem_gb"] / bench_results[0]["peak_gpu_mem_gb"] if bench_results[0]["peak_gpu_mem_gb"] > 0 else float("nan")
-    print(f"  Speed ratio ({REF_RAYS} vs 10 rays): {t_ratio:.1f}×  |  Memory ratio: {m_ratio:.1f}×")
+for sp in SURFACE_CONFIGS:
+    for n_rays in [10, REF_RAYS]:
+        r = _bench_config(scenarios[sp], n_rays, sp, bench_heliostat_mapping)
+        bench_results.append(r)
+        print(f"  {sp:3d}×{sp:<3d}  {n_rays:4d} rays: {r['wall_time_s']:.3f} s,  peak GPU: {r['peak_gpu_mem_gb']:.4f} GB")
+
 with open(OUTPUT_DIR / "benchmark_gpu.json", "w") as fp:
     json.dump(bench_results, fp, indent=2)
 print(f"  Saved → {OUTPUT_DIR / 'benchmark_gpu.json'}")
 
 
 # ===================================================================
-# Run sweep
+# Run sweep (surface_pts × n_rays × sigma)
 # ===================================================================
 
-print(f"\nRunning sweep: {len(RAYS_CONFIGS)} ray configs × {len(SIGMA_CONFIGS)} sigma configs")
+print(f"\nRunning sweep: {len(SURFACE_CONFIGS)} surface configs × {len(RAYS_CONFIGS)} ray configs × {len(SIGMA_CONFIGS)} sigma configs")
+print(f"  surface configs: {SURFACE_CONFIGS}")
 print(f"  rays configs: {RAYS_CONFIGS}")
 print(f"  sigma configs: {SIGMA_CONFIGS}")
-print(f"  reference rays: {REF_RAYS} (25×25)")
+print(f"  reference rays: {REF_RAYS}")
 
 records = run_blur_sweep(
-    scenario=scenario_25,
+    scenarios=scenarios,
     selected_mapping=selected_mapping,
     data_parser=data_parser,
     rays_configs=RAYS_CONFIGS,
@@ -308,22 +283,24 @@ print(f"\nResults saved to {OUTPUT_DIR / 'sweep_results.json'} ({len(records)} r
 
 
 # ===================================================================
-# Determine optimal sigma (minimises mean MSE across all heliostats)
+# Determine optimal sigma per surface config
 # ===================================================================
 
 import pandas as pd
 
 df = pd.DataFrame(records)
-blur_df = df[df["sigma"] > 0]
-if not blur_df.empty:
-    sigma_mse = blur_df.groupby("sigma")["mse"].mean()
-    optimal_sigma = float(sigma_mse.idxmin())
-    print(f"\nOptimal sigma: {optimal_sigma} (mean MSE = {sigma_mse[optimal_sigma]:.4f})")
-else:
-    optimal_sigma = 0.0
+optimal_sigmas: dict[int, float] = {}
+for sp in SURFACE_CONFIGS:
+    blur_df = df[(df["surface_pts"] == sp) & (df["sigma"] > 0)]
+    if not blur_df.empty:
+        sigma_mse = blur_df.groupby("sigma")["mse"].mean()
+        optimal_sigmas[sp] = float(sigma_mse.idxmin())
+        print(f"  Optimal sigma for {sp}×{sp}: {optimal_sigmas[sp]} (mean MSE = {sigma_mse[optimal_sigmas[sp]]:.4f})")
+    else:
+        optimal_sigmas[sp] = 0.0
 
 with open(OUTPUT_DIR / "optimal_sigma.json", "w") as fp:
-    json.dump({"optimal_sigma": optimal_sigma}, fp)
+    json.dump(optimal_sigmas, fp, indent=2)
 
 
 # ===================================================================
@@ -332,44 +309,56 @@ with open(OUTPUT_DIR / "optimal_sigma.json", "w") as fp:
 
 print("\nGenerating plots …")
 
-plot_heatmap(
-    records=records,
-    heliostat_distances=heliostat_distances,
-    output_path=OUTPUT_DIR / "fig1_heatmap_rays_vs_distance.png",
-    optimal_sigma=optimal_sigma,
-)
-print("  Fig 1: heatmap saved.")
+# Figs 1–3: per-surface-config (one set per N×N in a subdirectory).
+for sp in SURFACE_CONFIGS:
+    sp_records = [r for r in records if r["surface_pts"] == sp]
+    sp_dir = OUTPUT_DIR / f"surface_{sp}x{sp}"
+    sp_dir.mkdir(parents=True, exist_ok=True)
+    opt_sigma = optimal_sigmas[sp]
 
-plot_line_plots(
-    records=records,
-    heliostat_distances=heliostat_distances,
-    output_path=OUTPUT_DIR / "fig2_line_plots.png",
-    optimal_sigma=optimal_sigma,
-)
-print("  Fig 2: line plots saved.")
+    plot_heatmap(
+        records=sp_records,
+        heliostat_distances=heliostat_distances,
+        output_path=sp_dir / "fig1_heatmap_rays_vs_distance.png",
+        optimal_sigma=opt_sigma,
+    )
+    plot_line_plots(
+        records=sp_records,
+        heliostat_distances=heliostat_distances,
+        output_path=sp_dir / "fig2_line_plots.png",
+        optimal_sigma=opt_sigma,
+    )
+    plot_sigma_sweep(
+        records=sp_records,
+        heliostat_distances=heliostat_distances,
+        output_path=sp_dir / "fig3_sigma_sweep.png",
+        fixed_n_rays=RAYS_CONFIGS[0],
+    )
+    print(f"  Figs 1–3 for {sp}×{sp} saved to {sp_dir.name}/")
 
-plot_sigma_sweep(
-    records=records,
-    heliostat_distances=heliostat_distances,
-    output_path=OUTPUT_DIR / "fig3_sigma_sweep.png",
-    fixed_n_rays=RAYS_CONFIGS[0],
-)
-print("  Fig 3: sigma sweep saved.")
-
+# Fig 4 & 5: field layout (surface-config-independent).
 all_heliostat_positions = {h["name"]: (h["east_m"], h["north_m"]) for h in heliostat_info}
 
 plot_field_heatmap(
-    selected_heliostats=selected_heliostats,
+    selected_heliostats=heliostat_info,
     output_path=OUTPUT_DIR / "fig4_field_heatmap.png",
     heliostats_per_cell=HELIOSTATS_PER_CELL,
 )
 print("  Fig 4: field heatmap saved.")
 
 plot_field_coordinates(
-    selected_heliostats=selected_heliostats,
+    selected_heliostats=heliostat_info,
     all_heliostat_positions=all_heliostat_positions,
     output_path=OUTPUT_DIR / "fig5_field_coordinates.png",
 )
 print("  Fig 5: field coordinates saved.")
+
+# Fig 6: cross-surface-config comparison — sigma vs MSE, one line per surface config.
+plot_surface_pts_comparison(
+    records=records,
+    rays_configs=RAYS_CONFIGS,
+    output_path=OUTPUT_DIR / "fig6_surface_pts_comparison.png",
+)
+print("  Fig 6: surface pts comparison saved.")
 
 print(f"\nAll outputs written to: {OUTPUT_DIR}")

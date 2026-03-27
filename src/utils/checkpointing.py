@@ -39,32 +39,56 @@ def save_kinematic_parameters(scenario: Scenario, output_path: pathlib.Path) -> 
 def load_kinematic_parameters(scenario: Scenario, checkpoint_path: pathlib.Path, device: torch.device) -> None:
     """Load kinematic parameters from a JSON checkpoint and apply them to the scenario in-place.
 
-    Restores all four parameter tensors saved by save_kinematic_parameters().
-    Groups in the checkpoint are matched to scenario groups by their index (group_0, group_1, …).
+    Heliostats are matched by name, so this works correctly when the scenario is a subset
+    of the heliostats that were present when the checkpoint was saved (e.g. 18 out of 376).
     """
     with open(checkpoint_path, "r") as f:
         all_params = json.load(f)
 
-    for group_index, heliostat_group in enumerate(scenario.heliostat_field.heliostat_groups):
-        key = f"group_{group_index}"
-        if key not in all_params:
-            raise KeyError(f"Checkpoint missing '{key}' — does it match this scenario?")
-        saved = all_params[key]
+    # Build a flat name → params lookup across all checkpoint groups.
+    name_to_params: dict[str, dict] = {}
+    for saved in all_params.values():
+        for i, name in enumerate(saved["heliostat_names"]):
+            name_to_params[name] = {
+                "translation": saved["translation_deviation_parameters"][i],
+                "rotation":    saved["rotation_deviation_parameters"][i],
+                "act_opt":     saved["actuator_optimizable_parameters"][i],
+                "act_nonopt":  saved["actuator_nonoptimizable_parameters"][i],
+                "base_pos":    saved.get("base_position_deviation_parameters", [None] * len(saved["heliostat_names"]))[i],
+            }
+
+    for heliostat_group in scenario.heliostat_field.heliostat_groups:
         kinematic = heliostat_group.kinematic
 
-        kinematic.translation_deviation_parameters.data = torch.tensor(
-            saved["translation_deviation_parameters"], dtype=torch.float32, device=device
+        missing = [n for n in heliostat_group.names if n not in name_to_params]
+        if missing:
+            raise KeyError(f"Checkpoint missing parameters for heliostats: {missing}")
+
+        translation = torch.tensor(
+            [name_to_params[n]["translation"] for n in heliostat_group.names],
+            dtype=torch.float32, device=device,
         )
-        kinematic.rotation_deviation_parameters.data = torch.tensor(
-            saved["rotation_deviation_parameters"], dtype=torch.float32, device=device
+        rotation = torch.tensor(
+            [name_to_params[n]["rotation"] for n in heliostat_group.names],
+            dtype=torch.float32, device=device,
         )
-        kinematic.actuators.optimizable_parameters.data = torch.tensor(
-            saved["actuator_optimizable_parameters"], dtype=torch.float32, device=device
+        act_opt = torch.tensor(
+            [name_to_params[n]["act_opt"] for n in heliostat_group.names],
+            dtype=torch.float32, device=device,
         )
-        kinematic.actuators.non_optimizable_parameters.data = torch.tensor(
-            saved["actuator_nonoptimizable_parameters"], dtype=torch.float32, device=device
+        act_nonopt = torch.tensor(
+            [name_to_params[n]["act_nonopt"] for n in heliostat_group.names],
+            dtype=torch.float32, device=device,
         )
-        if "base_position_deviation_parameters" in saved and hasattr(kinematic, "_base_position_deviation"):
-            kinematic._base_position_deviation.data = torch.tensor(
-                saved["base_position_deviation_parameters"], dtype=torch.float32, device=device
-            )
+
+        kinematic.translation_deviation_parameters.data = translation
+        kinematic.rotation_deviation_parameters.data = rotation
+        kinematic.actuators.optimizable_parameters.data = act_opt
+        kinematic.actuators.non_optimizable_parameters.data = act_nonopt
+
+        if hasattr(kinematic, "_base_position_deviation"):
+            base_pos_rows = [name_to_params[n]["base_pos"] for n in heliostat_group.names]
+            if base_pos_rows[0] is not None:
+                kinematic._base_position_deviation.data = torch.tensor(
+                    base_pos_rows, dtype=torch.float32, device=device,
+                )

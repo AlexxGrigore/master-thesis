@@ -113,7 +113,7 @@ def trace_flux_for_mapping(
 # ---------------------------------------------------------------------------
 
 def run_blur_sweep(
-    scenario: Scenario,
+    scenarios: dict[int, Scenario],
     selected_mapping: list[tuple[str, list, list]],
     data_parser: PaintCalibrationDataParser,
     rays_configs: list[int],
@@ -122,12 +122,16 @@ def run_blur_sweep(
     device: torch.device,
     bitmap_resolution: torch.Tensor = torch.tensor([256, 256]),
 ) -> list[dict]:
-    """Run the full (n_rays × sigma) grid and compute MSE vs high-quality reference.
+    """Run the full (surface_pts × n_rays × sigma) grid and compute MSE vs reference.
+
+    For each surface_pts config the reference is computed at (surface_pts, ref_rays, no blur),
+    so comparisons are always within the same surface discretisation.
 
     Parameters
     ----------
-    scenario : Scenario
-        Scenario used for both the reference pass (ref_rays) and all test configs.
+    scenarios : dict[int, Scenario]
+        {surface_pts: scenario} — one loaded scenario per surface discretisation,
+        e.g. {25: scenario_25, 50: scenario_50, 75: scenario_75, 100: scenario_100}.
     selected_mapping : list
         Filtered heliostat_data_mapping containing only the selected heliostats.
     data_parser : PaintCalibrationDataParser
@@ -143,48 +147,28 @@ def run_blur_sweep(
     Returns
     -------
     list[dict]
-        One record per (heliostat, n_rays, sigma):
+        One record per (surface_pts, heliostat, n_rays, sigma):
         {
+          "surface_pts": int,          # surface discretisation (N in N×N)
           "heliostat_id": str,
           "n_rays": int,
           "sigma": float,
-          "mse": float,               # mean MSE over all measurements
-          "mse_std": float,           # std over measurements
+          "mse": float,                # mean MSE over all measurements
+          "mse_std": float,            # std over measurements
         }
     """
-    # ------------------------------------------------------------------ #
-    # Step 1: compute reference flux (25×25, ref_rays, no blur)
-    # ------------------------------------------------------------------ #
-    log.info(f"Computing reference flux (25×25, {ref_rays} rays) …")
-    scenario.set_number_of_rays(ref_rays)
-
-    ref_flux = trace_flux_for_mapping(
-        scenario=scenario,
-        heliostat_data_mapping=selected_mapping,
-        data_parser=data_parser,
-        device=device,
-        bitmap_resolution=bitmap_resolution,
-    )  # {name: [n_meas, H, W] on CPU}
-
-    # Peak-normalise reference images once (per image).
-    ref_norm = {
-        name: _peak_normalize(flux.to(device)).cpu()
-        for name, flux in ref_flux.items()
-    }
-    log.info(f"Reference flux computed for {len(ref_norm)} heliostats.")
-
-    # ------------------------------------------------------------------ #
-    # Step 2: sweep (n_rays × sigma)
-    # ------------------------------------------------------------------ #
     records = []
-    total_configs = len(rays_configs) * len(sigma_configs)
-    cfg_idx = 0
 
-    for n_rays in rays_configs:
-        log.info(f"  Setting n_rays = {n_rays} …")
-        scenario.set_number_of_rays(n_rays)
+    for surface_pts, scenario in sorted(scenarios.items()):
+        log.info(f"=== Surface config: {surface_pts}×{surface_pts} ===")
 
-        test_flux = trace_flux_for_mapping(
+        # ------------------------------------------------------------------ #
+        # Step 1: reference flux for this surface config (ref_rays, no blur)
+        # ------------------------------------------------------------------ #
+        log.info(f"  Computing reference flux ({surface_pts}×{surface_pts}, {ref_rays} rays) …")
+        scenario.set_number_of_rays(ref_rays)
+
+        ref_flux = trace_flux_for_mapping(
             scenario=scenario,
             heliostat_data_mapping=selected_mapping,
             data_parser=data_parser,
@@ -192,34 +176,59 @@ def run_blur_sweep(
             bitmap_resolution=bitmap_resolution,
         )  # {name: [n_meas, H, W] on CPU}
 
-        for sigma in sigma_configs:
-            cfg_idx += 1
-            log.info(f"  Config {cfg_idx}/{total_configs}: n_rays={n_rays}, sigma={sigma}")
+        ref_norm = {
+            name: _peak_normalize(flux.to(device)).cpu()
+            for name, flux in ref_flux.items()
+        }
+        log.info(f"  Reference flux computed for {len(ref_norm)} heliostats.")
 
-            for name, flux_cpu in test_flux.items():
-                if name not in ref_norm:
-                    continue
+        # ------------------------------------------------------------------ #
+        # Step 2: sweep (n_rays × sigma) for this surface config
+        # ------------------------------------------------------------------ #
+        total_configs = len(rays_configs) * len(sigma_configs)
+        cfg_idx = 0
 
-                flux_dev = flux_cpu.to(device)
+        for n_rays in rays_configs:
+            log.info(f"  Setting n_rays = {n_rays} …")
+            scenario.set_number_of_rays(n_rays)
 
-                # Apply Gaussian blur then peak-normalise.
-                blurred = _gaussian_blur(flux_dev, sigma)       # [n_meas, H, W]
-                test_norm = _peak_normalize(blurred).cpu()      # [n_meas, H, W]
+            test_flux = trace_flux_for_mapping(
+                scenario=scenario,
+                heliostat_data_mapping=selected_mapping,
+                data_parser=data_parser,
+                device=device,
+                bitmap_resolution=bitmap_resolution,
+            )  # {name: [n_meas, H, W] on CPU}
 
-                ref = ref_norm[name]  # [n_meas, H, W]
+            for sigma in sigma_configs:
+                cfg_idx += 1
+                log.info(f"  Config {cfg_idx}/{total_configs}: surface={surface_pts}×{surface_pts}, n_rays={n_rays}, sigma={sigma}")
 
-                # MSE per measurement image, then average + std.
-                mse_per_meas = ((test_norm - ref) ** 2).mean(dim=(1, 2))  # [n_meas]
-                mse_mean = mse_per_meas.mean().item()
-                mse_std = mse_per_meas.std().item() if mse_per_meas.numel() > 1 else 0.0
+                for name, flux_cpu in test_flux.items():
+                    if name not in ref_norm:
+                        continue
 
-                records.append({
-                    "heliostat_id": name,
-                    "n_rays": n_rays,
-                    "sigma": sigma,
-                    "mse": mse_mean,
-                    "mse_std": mse_std,
-                })
+                    flux_dev = flux_cpu.to(device)
+
+                    # Apply Gaussian blur then peak-normalise.
+                    blurred = _gaussian_blur(flux_dev, sigma)       # [n_meas, H, W]
+                    test_norm = _peak_normalize(blurred).cpu()      # [n_meas, H, W]
+
+                    ref = ref_norm[name]  # [n_meas, H, W]
+
+                    # MSE per measurement image, then average + std.
+                    mse_per_meas = ((test_norm - ref) ** 2).mean(dim=(1, 2))  # [n_meas]
+                    mse_mean = mse_per_meas.mean().item()
+                    mse_std = mse_per_meas.std().item() if mse_per_meas.numel() > 1 else 0.0
+
+                    records.append({
+                        "surface_pts": surface_pts,
+                        "heliostat_id": name,
+                        "n_rays": n_rays,
+                        "sigma": sigma,
+                        "mse": mse_mean,
+                        "mse_std": mse_std,
+                    })
 
     log.info(f"Sweep complete. {len(records)} records collected.")
     return records

@@ -326,7 +326,7 @@ def run_experiment(
             )
 
         scenario.set_number_of_rays(10)
-        log.info("Number of rays set to 20.")
+        log.info("Number of rays set to 10.")
 
         print(f"  Heliostats: {scenario.heliostat_field.number_of_heliostats_per_group.sum().item()}")
 
