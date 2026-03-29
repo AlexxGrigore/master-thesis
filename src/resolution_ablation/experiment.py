@@ -5,7 +5,9 @@ import pathlib
 import time
 
 import h5py
+import numpy as np
 import torch
+from matplotlib import pyplot as plt
 from artist.core.loss_functions import FocalSpotLoss
 from artist_extensions.loss_functions_ext import PixelLossL1
 from artist.scenario.scenario import Scenario
@@ -18,12 +20,18 @@ from artist_extensions.kinematic_reconstructors import (
 from utils.checkpointing import save_kinematic_parameters
 from utils.evaluation import compute_pixel_test_loss, evaluate_flux_accuracy
 from utils.plotting import (
+    _style_ax,
+    FONT_LEGEND,
+    FONT_TICK,
+    GRID_KW,
     plot_tracking_error_histogram,
     plot_training_curves,
     visualize_flux_comparison,
 )
 
 log = logging.getLogger(__name__)
+
+_COLORS = ["#2196F3", "#FF9800", "#4CAF50", "#9C27B0", "#E91E63"]
 
 
 def run_experiment(
@@ -38,35 +46,31 @@ def run_experiment(
     train_data_parser,
     eval_data_parser,
     output_dir: pathlib.Path,
+    surface_pts: int = 25,
+    n_rays: int = 10,
     save_figures: bool = False,
     train_position_deviation: bool = True,
     validation_mapping: list | None = None,
 ) -> dict:
     """
-    Two-phase kinematic reconstruction experiment.
+    Two-phase kinematic reconstruction experiment on the 18 blur-ablation heliostats.
 
-    Phase 1 — Focal spot pretraining (WortbergKinematicReconstructor):
-        Trains the kinematic parameters with FocalSpotLoss so that heliostats
-        are roughly aligned and reflected light reliably hits the target.
-        This ensures pixel loss receives non-zero gradients in Phase 2.
+    Phase 1 — Focal spot pretraining (WortbergKinematicReconstructor + FocalSpotLoss).
+    Phase 2 — Pixel loss fine-tuning (WortbergPixelReconstructor + PixelLossL1, blur_sigma=2.0).
 
-    Phase 2 — Pixel loss fine-tuning (WortbergPixelReconstructor):
-        Continues from Phase 1 weights using PixelLoss. A fresh optimizer is
-        created so Adam's momentum is not stale from the different loss scale.
-        Deviation bounds and actuator snapshots are preserved from Phase 1 so
-        all parameters stay within Wortberg (2025) Table 5.3 limits.
+    The scenario is loaded with `surface_pts × surface_pts` evaluation points per facet
+    and `n_rays` per light source, making the resolution a first-class experiment parameter.
 
     Outputs saved to output_dir / loss_name:
-      - phase1/training.log + training_curves.png
-      - phase2/training.log + training_curves.png
-      - test_metrics.json
-      - tracking_error_histogram.png
+      - phase1/{training.log, training_curves.png, convergence_history.json}
+      - phase2/{training.log, training_curves.png, convergence_history.json, training_summary.json}
+      - test_metrics.json, test_loss_values.json, timing_stats.json
+      - tracking_error_histogram.png, all_kinematic_parameters.json
       - visualizations/flux_comparison_*.png
     """
     exp_dir = output_dir / loss_name
     exp_dir.mkdir(parents=True, exist_ok=True)
 
-    # Top-level log captures both phases.
     exp_log_handler = logging.FileHandler(exp_dir / "training.log")
     exp_log_handler.setFormatter(
         logging.Formatter("[%(asctime)s][%(name)s][%(levelname)s] - %(message)s")
@@ -74,18 +78,17 @@ def run_experiment(
     logging.getLogger().addHandler(exp_log_handler)
 
     try:
-        log.info(f"=== Starting experiment: {loss_name} ===")
+        log.info(f"=== Starting experiment: {loss_name} | surface_pts={surface_pts}, n_rays={n_rays} ===")
 
-        # Load scenario once — both phases share the same kinematic parameters.
         with h5py.File(scenario_path, "r") as scenario_file:
             scenario = Scenario.load_scenario_from_hdf5(
                 scenario_file=scenario_file,
                 device=device,
-                number_of_surface_points_per_facet=torch.tensor([25, 25]),
+                number_of_surface_points_per_facet=torch.tensor([surface_pts, surface_pts]),
             )
 
-        scenario.set_number_of_rays(10)
-        log.info("Number of rays set to 20.")
+        scenario.set_number_of_rays(n_rays)
+        log.info(f"Resolution: surface_pts={surface_pts}, n_rays={n_rays}.")
 
         print(f"  Heliostats: {scenario.heliostat_field.number_of_heliostats_per_group.sum().item()}")
 
@@ -165,8 +168,6 @@ def run_experiment(
         print(f"\n  Phase 2 — PixelLoss, max_epoch={phase2_opt_config[config_dictionary.max_epoch]}, "
               f"lr={phase2_opt_config[config_dictionary.initial_learning_rate]}")
 
-        # Fresh reconstructor = fresh Adam optimizer (no stale momentum from Phase 1).
-        # The scenario object already holds Phase 1's optimised kinematic parameters.
         phase2_reconstructor = WortbergPixelReconstructor(
             ddp_setup=ddp_setup,
             scenario=scenario,
@@ -175,7 +176,7 @@ def run_experiment(
             optimization_configuration=phase2_opt_config,
             reconstruction_method=config_dictionary.kinematic_reconstruction_raytracing,
             eval_data=eval_data,
-            blur_sigma=0.0,
+            blur_sigma=2.0,
         )
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(device)
@@ -196,10 +197,7 @@ def run_experiment(
         with open(phase2_dir / "convergence_history.json", "w") as f:
             json.dump(phase2_reconstructor._convergence_history, f, indent=2)
 
-        # Save Phase 2 training loss summary — NaN/inf counts indicate heliostats
-        # that still produced no flux on the target after Phase 1 pretraining.
         loss_np = phase2_final_loss.detach().cpu().numpy()
-        import numpy as np
         phase2_summary = {
             "num_heliostats_total": int(len(loss_np)),
             "num_nan_loss": int(np.isnan(loss_np).sum()),
@@ -217,13 +215,13 @@ def run_experiment(
               f"{phase2_summary['num_zero_loss']} zero "
               f"(out of {phase2_summary['num_heliostats_total']} heliostats)")
 
-        # ----------------------------------------------------------------
-        # Test evaluation
-        # ----------------------------------------------------------------
         del phase2_reconstructor
         gc.collect()
         torch.cuda.empty_cache()
 
+        # ----------------------------------------------------------------
+        # Test evaluation
+        # ----------------------------------------------------------------
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(device)
         t_eval_start = time.time()
@@ -242,14 +240,16 @@ def run_experiment(
         print(f"\n  Test  — mean focal spot error:   {test_metrics['mean_focal_spot_error_mrad']:.2f} mrad")
         print(f"  Test  — median focal spot error: {test_metrics['median_focal_spot_error_mrad']:.2f} mrad")
 
-        # Compute test losses for horizontal reference lines on training curve plots
+        # ----------------------------------------------------------------
+        # Compute test losses for horizontal reference lines
+        # ----------------------------------------------------------------
         phase1_test_loss = test_metrics["mean_focal_spot_error_m"]
         phase2_test_loss = compute_pixel_test_loss(
             scenario=scenario,
             heliostat_data_mapping=test_mapping,
             data_parser=eval_data_parser,
             device=device,
-            blur_sigma=0.0,
+            blur_sigma=2.0,
         )
         with open(exp_dir / "test_loss_values.json", "w") as f:
             json.dump({
@@ -257,6 +257,9 @@ def run_experiment(
                 "phase2_test_loss_pixel_l1": phase2_test_loss,
             }, f, indent=2)
 
+        # ----------------------------------------------------------------
+        # Training curve plots (generated after test_loss is available)
+        # ----------------------------------------------------------------
         plot_training_curves(
             log_file=phase1_dir / "training.log",
             output_dir=phase1_dir,
@@ -317,7 +320,6 @@ def run_experiment(
         with open(exp_dir / "test_metrics.json", "w") as f:
             json.dump(metrics_to_save, f, indent=2)
 
-        # ---- Save kinematic parameters ----
         save_kinematic_parameters(scenario, exp_dir / "all_kinematic_parameters.json")
 
         log.info(f"=== Experiment '{loss_name}' done: {test_metrics['mean_focal_spot_error_mrad']:.2f} mrad ===")
@@ -326,3 +328,84 @@ def run_experiment(
     finally:
         logging.getLogger().removeHandler(exp_log_handler)
         exp_log_handler.close()
+
+
+def plot_resolution_comparison(
+    all_metrics: dict[str, dict],
+    output_dir: pathlib.Path,
+) -> None:
+    """
+    Generate comparison plots across all resolution configurations.
+
+    Produces two PNGs in output_dir/comparison/:
+      - comparison_bar.png    — mean + median focal spot error per config
+      - comparison_boxplot.png— per-heliostat error distribution per config
+    """
+    comp_dir = output_dir / "comparison"
+    comp_dir.mkdir(parents=True, exist_ok=True)
+
+    config_names = list(all_metrics.keys())
+    colors = _COLORS[: len(config_names)]
+
+    # ------------------------------------------------------------------
+    # 1. Bar chart — mean + median per config
+    # ------------------------------------------------------------------
+    means   = [all_metrics[c]["mean_focal_spot_error_mrad"]   for c in config_names]
+    medians = [all_metrics[c]["median_focal_spot_error_mrad"] for c in config_names]
+
+    x = np.arange(len(config_names))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    fig.patch.set_facecolor("white")
+    bars_mean   = ax.bar(x - width / 2, means,   width, label="Mean",   color=colors, alpha=0.85, edgecolor="white")
+    bars_median = ax.bar(x + width / 2, medians, width, label="Median", color=colors, alpha=0.50, edgecolor="white")
+
+    for bar in bars_mean:
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.05,
+                f"{bar.get_height():.2f}", ha="center", va="bottom", fontsize=FONT_TICK)
+    for bar in bars_median:
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.05,
+                f"{bar.get_height():.2f}", ha="center", va="bottom", fontsize=FONT_TICK)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(config_names, rotation=15, ha="right", fontsize=FONT_TICK)
+    ax.legend(fontsize=FONT_LEGEND)
+    ax.grid(axis="y", **GRID_KW)
+    _style_ax(ax, "Resolution configuration", "Focal spot error (mrad)",
+              "Focal Spot Error by Resolution Configuration")
+    plt.tight_layout()
+    plt.savefig(comp_dir / "comparison_bar.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    # ------------------------------------------------------------------
+    # 2. Box plot — per-heliostat error distribution
+    # ------------------------------------------------------------------
+    per_heliostat_errors = []
+    for c in config_names:
+        ph = all_metrics[c]["per_heliostat"]
+        vals = [v["focal_spot_error_mrad"] for v in ph.values() if v["focal_spot_error_mrad"] is not None]
+        per_heliostat_errors.append(vals)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    fig.patch.set_facecolor("white")
+    bp = ax.boxplot(
+        per_heliostat_errors,
+        patch_artist=True,
+        notch=False,
+        medianprops=dict(color="black", linewidth=2),
+        whiskerprops=dict(linewidth=1.2),
+        capprops=dict(linewidth=1.2),
+        flierprops=dict(marker="o", markersize=3, alpha=0.5),
+    )
+    for patch, color in zip(bp["boxes"], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.7)
+    ax.set_xticks(range(1, len(config_names) + 1))
+    ax.set_xticklabels(config_names, rotation=15, ha="right", fontsize=FONT_TICK)
+    ax.grid(axis="y", **GRID_KW)
+    _style_ax(ax, "Resolution configuration", "Focal spot error (mrad)",
+              "Per-Heliostat Error Distribution by Resolution")
+    plt.tight_layout()
+    plt.savefig(comp_dir / "comparison_boxplot.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)

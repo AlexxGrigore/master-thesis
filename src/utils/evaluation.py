@@ -7,6 +7,7 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 from artist.core.heliostat_ray_tracer import HeliostatRayTracer
 from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
 from artist.scenario.scenario import Scenario
@@ -245,9 +246,111 @@ def evaluate_flux_accuracy(
         "median_focal_spot_error_mrad": _safe_median(all_focal_spot_errors_mrad),
         "min_focal_spot_error_mrad": float(np.nanmin(all_focal_spot_errors_mrad)) if all_focal_spot_errors_mrad else float("inf"),
         "max_focal_spot_error_mrad": float(np.nanmax(all_focal_spot_errors_mrad)) if all_focal_spot_errors_mrad else float("inf"),
+        "mean_focal_spot_error_m": _safe_mean(all_focal_spot_errors_m),  # same units as FocalSpotLoss training loss
         "num_samples_evaluated": len(all_focal_spot_errors_m),
         "num_nan_samples": num_nan_samples,
         "nan_heliostat_ids": sorted(nan_heliostat_ids),
         "all_errors_mrad": all_focal_spot_errors_mrad,  # kept in memory for histogram; not saved to JSON
         "per_heliostat": results_per_heliostat,
     }
+
+
+@torch.no_grad()
+def compute_pixel_test_loss(
+    scenario: Scenario,
+    heliostat_data_mapping: list[tuple[str, list[pathlib.Path], list[pathlib.Path]]],
+    data_parser: PaintCalibrationDataParser,
+    device: torch.device,
+    blur_sigma: float = 0.0,
+    bitmap_resolution: torch.Tensor = torch.tensor([256, 256]),
+    ray_tracing_batch_size: int = 32,
+) -> float:
+    """
+    Compute the mean PixelLossL1 value on a data split using the trained scenario.
+
+    Replicates WortbergPixelReconstructor's preprocessing:
+      1. Run ray tracing to get predicted flux.
+      2. Optionally apply Gaussian blur to predicted flux (set blur_sigma to match
+         the value used during Phase 2 training, e.g. 2.0 for the blurr variant).
+      3. Peak-normalise both predicted and measured flux independently per image
+         (same normalization as PixelLoss.__call__).
+      4. Compute sum of |pred - meas| over pixels per sample (PixelLossL1 = L1 + sum reduction).
+
+    Returns the mean per-sample loss as a float (same units as the training loss).
+    Returns nan if no valid samples are found.
+    """
+    def _gaussian_blur_batch(flux: torch.Tensor, sigma: float) -> torch.Tensor:
+        if sigma <= 0:
+            return flux
+        kernel_size = int(4 * sigma + 0.5) * 2 + 1
+        coords = torch.arange(kernel_size, device=flux.device, dtype=flux.dtype) - kernel_size // 2
+        gauss_1d = torch.exp(-0.5 * (coords / sigma) ** 2)
+        gauss_1d = gauss_1d / gauss_1d.sum()
+        kernel = (gauss_1d[:, None] * gauss_1d[None, :]).view(1, 1, kernel_size, kernel_size)
+        return F.conv2d(flux.unsqueeze(1), kernel, padding=kernel_size // 2).squeeze(1)
+
+    all_losses: list[float] = []
+
+    for heliostat_group in scenario.heliostat_field.heliostat_groups:
+        (
+            measured_flux,
+            _focal_spots,
+            incident_ray_directions,
+            _motor_positions,
+            active_heliostats_mask,
+            target_area_mask,
+        ) = data_parser.parse_data_for_reconstruction(
+            heliostat_data_mapping=heliostat_data_mapping,
+            heliostat_group=heliostat_group,
+            scenario=scenario,
+            bitmap_resolution=bitmap_resolution,
+            device=device,
+        )
+
+        if active_heliostats_mask.sum() == 0:
+            continue
+
+        heliostat_group.activate_heliostats(
+            active_heliostats_mask=active_heliostats_mask,
+            device=device,
+        )
+        heliostat_group.align_surfaces_with_incident_ray_directions(
+            aim_points=scenario.target_areas.centers[target_area_mask],
+            incident_ray_directions=incident_ray_directions,
+            active_heliostats_mask=active_heliostats_mask,
+            device=device,
+        )
+
+        ray_tracer = HeliostatRayTracer(
+            scenario=scenario,
+            heliostat_group=heliostat_group,
+            blocking_active=False,
+            batch_size=min(heliostat_group.number_of_active_heliostats, ray_tracing_batch_size),
+            bitmap_resolution=bitmap_resolution.to(device),
+        )
+        predicted_flux = ray_tracer.trace_rays(
+            incident_ray_directions=incident_ray_directions,
+            active_heliostats_mask=active_heliostats_mask,
+            target_area_mask=target_area_mask,
+            device=device,
+        )
+
+        # Gaussian blur — matches WortbergPixelReconstructor._preprocess_eval_flux
+        predicted_flux = _gaussian_blur_batch(predicted_flux, blur_sigma)
+
+        # Peak-normalise — matches PixelLoss.__call__ normalization
+        N = predicted_flux.shape[0]
+        pred_max = predicted_flux.view(N, -1).max(dim=1).values.clamp(min=1e-12)
+        meas_max = measured_flux.view(N, -1).max(dim=1).values.clamp(min=1e-12)
+        pred_norm = predicted_flux / pred_max.view(N, 1, 1)
+        meas_norm = measured_flux / meas_max.view(N, 1, 1)
+
+        # L1 summed over pixels per sample — same reduction as PixelLossL1
+        per_sample = (pred_norm - meas_norm).abs().sum(dim=(1, 2))
+        finite_losses = per_sample[torch.isfinite(per_sample)]
+        if len(finite_losses) > 0:
+            all_losses.extend(finite_losses.cpu().tolist())
+
+    if not all_losses:
+        return float("nan")
+    return float(sum(all_losses) / len(all_losses))

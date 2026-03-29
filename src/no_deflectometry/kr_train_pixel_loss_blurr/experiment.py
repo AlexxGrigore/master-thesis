@@ -16,7 +16,7 @@ from artist_extensions.kinematic_reconstructors import (
     WortbergPixelReconstructor,
 )
 from utils.checkpointing import save_kinematic_parameters
-from utils.evaluation import evaluate_flux_accuracy
+from utils.evaluation import compute_pixel_test_loss, evaluate_flux_accuracy
 from utils.plotting import (
     plot_tracking_error_histogram,
     plot_training_curves,
@@ -142,7 +142,8 @@ def run_experiment(
         logging.getLogger().removeHandler(phase1_log_handler)
         phase1_log_handler.close()
 
-        plot_training_curves(log_file=phase1_dir / "training.log", output_dir=phase1_dir)
+        with open(phase1_dir / "convergence_history.json", "w") as f:
+            json.dump(phase1_reconstructor._convergence_history, f, indent=2)
 
         del phase1_reconstructor
         gc.collect()
@@ -192,7 +193,8 @@ def run_experiment(
         logging.getLogger().removeHandler(phase2_log_handler)
         phase2_log_handler.close()
 
-        plot_training_curves(log_file=phase2_dir / "training.log", output_dir=phase2_dir)
+        with open(phase2_dir / "convergence_history.json", "w") as f:
+            json.dump(phase2_reconstructor._convergence_history, f, indent=2)
 
         # Save Phase 2 training loss summary — NaN/inf counts indicate heliostats
         # that still produced no flux on the target after Phase 1 pretraining.
@@ -239,6 +241,32 @@ def run_experiment(
 
         print(f"\n  Test  — mean focal spot error:   {test_metrics['mean_focal_spot_error_mrad']:.2f} mrad")
         print(f"  Test  — median focal spot error: {test_metrics['median_focal_spot_error_mrad']:.2f} mrad")
+
+        # Compute test losses for horizontal reference lines on training curve plots
+        phase1_test_loss = test_metrics["mean_focal_spot_error_m"]
+        phase2_test_loss = compute_pixel_test_loss(
+            scenario=scenario,
+            heliostat_data_mapping=test_mapping,
+            data_parser=eval_data_parser,
+            device=device,
+            blur_sigma=2.0,
+        )
+        with open(exp_dir / "test_loss_values.json", "w") as f:
+            json.dump({
+                "phase1_test_loss_focal_spot_m": phase1_test_loss,
+                "phase2_test_loss_pixel_l1": phase2_test_loss,
+            }, f, indent=2)
+
+        plot_training_curves(
+            log_file=phase1_dir / "training.log",
+            output_dir=phase1_dir,
+            test_loss=phase1_test_loss,
+        )
+        plot_training_curves(
+            log_file=phase2_dir / "training.log",
+            output_dir=phase2_dir,
+            test_loss=phase2_test_loss,
+        )
 
         plot_tracking_error_histogram(
             errors_mrad=test_metrics["all_errors_mrad"],

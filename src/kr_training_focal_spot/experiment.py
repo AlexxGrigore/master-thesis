@@ -367,8 +367,6 @@ def run_experiment(
         log.info(f"Training — time: {train_time_s/60:.1f} min ({train_time_s:.0f}s), peak GPU: {train_peak_gpu_gb:.2f} GB, end GPU: {train_end_gpu_gb:.2f} GB")
         print(f"  Training — time: {train_time_s/60:.1f} min ({train_time_s:.0f}s), peak GPU: {train_peak_gpu_gb:.2f} GB, end GPU: {train_end_gpu_gb:.2f} GB")
 
-        plot_training_curves(log_file=exp_dir / "training.log", output_dir=exp_dir)
-
         # ---- Parameter convergence curves ----
         with open(exp_dir / "convergence_history.json", "w") as f:
             json.dump(reconstructor._convergence_history, f, indent=2)
@@ -462,6 +460,12 @@ def run_experiment(
 
         print(f"  Test  — mean focal spot error:   {test_metrics['mean_focal_spot_error_mrad']:.2f} mrad")
         print(f"  Test  — median focal spot error: {test_metrics['median_focal_spot_error_mrad']:.2f} mrad")
+
+        test_loss = test_metrics["mean_focal_spot_error_m"]
+        with open(exp_dir / "test_loss_values.json", "w") as f:
+            json.dump({"test_loss_focal_spot_m": test_loss}, f, indent=2)
+
+        plot_training_curves(log_file=exp_dir / "training.log", output_dir=exp_dir, test_loss=test_loss)
 
         # ---- Tracking error histogram ----
         plot_tracking_error_histogram(

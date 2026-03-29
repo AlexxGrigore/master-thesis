@@ -2,7 +2,7 @@
 #SBATCH --job-name=blur_ablation
 #SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/blur_ablation_%j.log
 #SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/blur_ablation_%j.err
-#SBATCH --time=1:00:00
+#SBATCH --time=0:01:24
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:a40:1

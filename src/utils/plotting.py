@@ -31,7 +31,11 @@ def _style_ax(ax, xlabel: str, ylabel: str, title: str) -> None:
     ax.spines["right"].set_visible(False)
 
 
-def plot_training_curves(log_file: pathlib.Path, output_dir: pathlib.Path) -> None:
+def plot_training_curves(
+    log_file: pathlib.Path,
+    output_dir: pathlib.Path,
+    test_loss: float | None = None,
+) -> None:
     """
     Parse training.log and save a loss + learning-rate curve plot.
 
@@ -134,6 +138,12 @@ def plot_training_curves(log_file: pathlib.Path, output_dir: pathlib.Path) -> No
                         label=f"Mean Validation Loss ({len(groups_with_eval)} groups)", zorder=5,
                     )
 
+    if test_loss is not None and np.isfinite(test_loss):
+        ax_loss.axhline(
+            test_loss,
+            color="red", linewidth=1.5, linestyle=":",
+            label=f"Test loss ({test_loss:.4g})", zorder=6,
+        )
     ax_loss.set_yscale("log")
     ax_loss.yaxis.set_major_locator(LogLocator(base=10, numticks=8))
     ax_loss.yaxis.set_major_formatter(LogFormatter(base=10, labelOnlyBase=False))
