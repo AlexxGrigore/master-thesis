@@ -6,7 +6,8 @@ import time
 
 import h5py
 import torch
-from artist.core.loss_functions import FocalSpotLoss, PixelLoss
+from artist.core.loss_functions import FocalSpotLoss
+from artist_extensions.loss_functions_ext import PixelLossL1
 from artist.scenario.scenario import Scenario
 from artist.util import config_dictionary
 
@@ -179,7 +180,7 @@ def run_experiment(
             torch.cuda.reset_peak_memory_stats(device)
         t_phase2_start = time.time()
         phase2_final_loss = phase2_reconstructor.reconstruct_kinematic(
-            loss_definition=PixelLoss(scenario=scenario),
+            loss_definition=PixelLossL1(scenario=scenario),
             device=device,
         )
         phase2_time_s = time.time() - t_phase2_start

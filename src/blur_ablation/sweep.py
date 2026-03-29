@@ -123,6 +123,8 @@ def run_blur_sweep(
     ref_rays: int,
     device: torch.device,
     bitmap_resolution: torch.Tensor = torch.tensor([256, 256]),
+    surface_rays_configs: dict[int, list[int]] | None = None,
+    surface_ref_rays: dict[int, int] | None = None,
 ) -> list[dict]:
     """Run the full (surface_pts × n_rays × sigma) grid and compute MSE vs reference.
 
@@ -148,6 +150,14 @@ def run_blur_sweep(
         Gaussian blur sigma values to sweep, e.g. [0, 1, 2, 3, 5, 7, 10].
     ref_rays : int
         Number of rays for the reference simulation (e.g. 200).
+    surface_rays_configs : dict[int, list[int]] | None
+        Optional per-surface override for the ray sweep.
+        If provided, the list for the current ``surface_pts`` is used instead of
+        ``rays_configs``.
+    surface_ref_rays : dict[int, int] | None
+        Optional per-surface override for the reference rays.
+        If provided, the value for the current ``surface_pts`` is used instead of
+        ``ref_rays``.
     device : torch.device
 
     Returns
@@ -166,15 +176,42 @@ def run_blur_sweep(
     records = []
 
     for surface_pts in sorted(surface_configs):
+        rays_for_surface = sorted(
+            surface_rays_configs.get(surface_pts, rays_configs)
+            if surface_rays_configs is not None
+            else rays_configs
+        )
+        ref_rays_for_surface = (
+            surface_ref_rays.get(surface_pts, ref_rays)
+            if surface_ref_rays is not None
+            else ref_rays
+        )
+
+        if not rays_for_surface:
+            raise ValueError(
+                f"No ray configuration defined for surface_pts={surface_pts}."
+            )
+        if ref_rays_for_surface <= 0:
+            raise ValueError(
+                f"Reference rays must be > 0 for surface_pts={surface_pts}."
+            )
+
         log.info(f"  Loading scenario for {surface_pts}×{surface_pts} …")
         scenario = scenario_loader(surface_pts)
         log.info(f"=== Surface config: {surface_pts}×{surface_pts} ===")
+        log.info(
+            "  Surface-specific ray settings: ref=%s, sweep=%s",
+            ref_rays_for_surface,
+            rays_for_surface,
+        )
 
         # ------------------------------------------------------------------ #
         # Step 1: reference flux for this surface config (ref_rays, no blur)
         # ------------------------------------------------------------------ #
-        log.info(f"  Computing reference flux ({surface_pts}×{surface_pts}, {ref_rays} rays) …")
-        scenario.set_number_of_rays(ref_rays)
+        log.info(
+            f"  Computing reference flux ({surface_pts}×{surface_pts}, {ref_rays_for_surface} rays) …"
+        )
+        scenario.set_number_of_rays(ref_rays_for_surface)
 
         ref_flux = trace_flux_for_mapping(
             scenario=scenario,
@@ -193,10 +230,10 @@ def run_blur_sweep(
         # ------------------------------------------------------------------ #
         # Step 2: sweep (n_rays × sigma) for this surface config
         # ------------------------------------------------------------------ #
-        total_configs = len(rays_configs) * len(sigma_configs)
+        total_configs = len(rays_for_surface) * len(sigma_configs)
         cfg_idx = 0
 
-        for n_rays in rays_configs:
+        for n_rays in rays_for_surface:
             log.info(f"  Setting n_rays = {n_rays} …")
             scenario.set_number_of_rays(n_rays)
 

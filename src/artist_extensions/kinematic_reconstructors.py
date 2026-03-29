@@ -360,6 +360,14 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
             initial_actuator_initial_angle = kinematic._initial_actuator_initial_angle
             initial_actuator_offset = kinematic._initial_actuator_offset
 
+        # Snapshot translation_deviation_parameters nominal values.
+        # These may be non-zero in the scenario (e.g. concentrator_translation_n ≈ 0.175 m),
+        # so bounds must be relative to the loaded values, not absolute ±0.05 m.
+        if not hasattr(kinematic, "_initial_translation_deviation"):
+            kinematic._initial_translation_deviation = (
+                kinematic.translation_deviation_parameters.detach().clone()
+            )
+
         base_lr = float(self.optimization_configuration[config_dictionary.initial_learning_rate])
         # Large-scale parameters (±0.05 m bounds) get 5× the base LR;
         # small-scale parameters (±0.005 rad/m bounds) use the base LR directly.
@@ -561,14 +569,15 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
         """
         Clamp all optimised parameters to their Table 5.3 deviation bounds.
 
-        translation_deviation and rotation_deviation start at zero, so the absolute
-        value equals the deviation.  Actuator parameters start from a non-zero nominal
-        loaded from the scenario, so the clamp is computed relative to that snapshot.
+        Both translation_deviation and actuator parameters may have non-zero nominal
+        values loaded from the scenario (e.g. concentrator_translation_n ≈ 0.175 m),
+        so all clamps are computed relative to the snapshotted initial values.
         """
         kinematic = heliostat_group.kinematic
         with torch.no_grad():
             kinematic.translation_deviation_parameters.data.clamp_(
-                -self._BOUND_TRANSLATION_M, self._BOUND_TRANSLATION_M
+                kinematic._initial_translation_deviation - self._BOUND_TRANSLATION_M,
+                kinematic._initial_translation_deviation + self._BOUND_TRANSLATION_M,
             )
             kinematic.rotation_deviation_parameters.data.clamp_(
                 -self._BOUND_ROTATION_RAD, self._BOUND_ROTATION_RAD
@@ -603,7 +612,7 @@ class RotationsOnlyReconstructor(WortbergKinematicReconstructor):
         kinematic = heliostat_group.kinematic
         kinematic.rotation_deviation_parameters.requires_grad_()
 
-        # Snapshot actuator nominals — required by parent _apply_deviation_bounds.
+        # Snapshot nominals — required by parent _apply_deviation_bounds.
         if not hasattr(kinematic, "_initial_actuator_initial_angle"):
             kinematic._initial_actuator_initial_angle = (
                 kinematic.actuators.optimizable_parameters[
@@ -614,6 +623,10 @@ class RotationsOnlyReconstructor(WortbergKinematicReconstructor):
                 kinematic.actuators.non_optimizable_parameters[
                     :, index_mapping.actuator_offset, :
                 ].detach().clone()
+            )
+        if not hasattr(kinematic, "_initial_translation_deviation"):
+            kinematic._initial_translation_deviation = (
+                kinematic.translation_deviation_parameters.detach().clone()
             )
         initial_actuator_initial_angle = kinematic._initial_actuator_initial_angle
         initial_actuator_offset = kinematic._initial_actuator_offset
@@ -666,6 +679,10 @@ class RotationsActuatorsReconstructor(WortbergKinematicReconstructor):
                     :, index_mapping.actuator_offset, :
                 ].detach().clone()
             )
+        if not hasattr(kinematic, "_initial_translation_deviation"):
+            kinematic._initial_translation_deviation = (
+                kinematic.translation_deviation_parameters.detach().clone()
+            )
         initial_actuator_initial_angle = kinematic._initial_actuator_initial_angle
         initial_actuator_offset = kinematic._initial_actuator_offset
 
@@ -704,6 +721,10 @@ class RotationsTranslationsReconstructor(WortbergKinematicReconstructor):
                 kinematic.actuators.non_optimizable_parameters[
                     :, index_mapping.actuator_offset, :
                 ].detach().clone()
+            )
+        if not hasattr(kinematic, "_initial_translation_deviation"):
+            kinematic._initial_translation_deviation = (
+                kinematic.translation_deviation_parameters.detach().clone()
             )
         initial_actuator_initial_angle = kinematic._initial_actuator_initial_angle
         initial_actuator_offset = kinematic._initial_actuator_offset
@@ -766,9 +787,9 @@ class WortbergPixelReconstructor(WortbergKinematicReconstructor):
         predicted_flux: torch.Tensor,
         ground_truth: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Apply blur + peak-normalize to both images, same as training."""
+        """Apply blur to predicted flux (normalization is handled inside PixelLoss)."""
         blurred = self._gaussian_blur(predicted_flux, self.BLUR_SIGMA)
-        return self._peak_normalize(blurred), self._peak_normalize(ground_truth)
+        return blurred, ground_truth
 
     @staticmethod
     def _gaussian_blur(flux: torch.Tensor, sigma: float) -> torch.Tensor:
@@ -807,13 +828,11 @@ class WortbergPixelReconstructor(WortbergKinematicReconstructor):
         number_of_samples_per_heliostat: int,
         device: torch.device,
     ) -> torch.Tensor:
-        """Blur predicted flux, peak-normalize both images, then compute pixel loss."""
+        """Blur predicted flux then compute pixel loss (normalization is inside PixelLoss)."""
         blurred = self._gaussian_blur(flux_distributions, self.BLUR_SIGMA)
-        pred_norm = self._peak_normalize(blurred)
-        meas_norm = self._peak_normalize(ground_truth[sample_indices])
         loss_per_sample = loss_definition(
-            prediction=pred_norm,
-            ground_truth=meas_norm,
+            prediction=blurred,
+            ground_truth=ground_truth[sample_indices],
             target_area_mask=target_area_mask[sample_indices],
             reduction_dimensions=reduction_dims,
             device=device,

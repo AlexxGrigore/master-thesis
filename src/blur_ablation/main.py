@@ -80,28 +80,92 @@ CALIBRATION_PROPERTIES_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "cali
 FLUX_IMAGE_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "flux_image"
 
 # Sweep parameters.
-SURFACE_CONFIGS = [25, 50, 75, 100]   # N in N×N surface points per facet
-RAYS_CONFIGS    = [10, 20, 50]
+SURFACE_SWEEP_CONFIG = {
+    10: {"rays": [5, 10, 20, 50], "ref_rays": 80},
+    25: {"rays": [5, 10, 20, 50], "ref_rays": 80},
+    50: {"rays": [2, 5, 10, 20, 35], "ref_rays": 60},
+    75: {"rays": [1, 2, 5, 10, 20], "ref_rays": 40},
+}
 SIGMA_CONFIGS   = [0.0, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0]
-REF_RAYS        = 200        # rays for high-quality reference
 SAMPLE_LIMIT    = 10         # measurements per heliostat (train split)
+
+
+def _derive_surface_sweep_values(
+    surface_sweep_config: dict[int, dict[str, int | list[int]]]
+) -> tuple[list[int], dict[int, list[int]], dict[int, int], list[int], list[int]]:
+    """Derive validated per-surface ray configs and convenience views."""
+    surface_configs = sorted(surface_sweep_config.keys())
+    rays_configs_by_surface: dict[int, list[int]] = {}
+    ref_rays_by_surface: dict[int, int] = {}
+    all_rays: set[int] = set()
+
+    for surface_pts in surface_configs:
+        cfg = surface_sweep_config[surface_pts]
+        rays = sorted({int(v) for v in cfg["rays"]})
+        ref_rays = int(cfg["ref_rays"])
+
+        if not rays:
+            raise ValueError(f"No rays configured for surface_pts={surface_pts}.")
+        if rays[0] <= 0 or ref_rays <= 0:
+            raise ValueError(
+                f"Rays and ref_rays must be positive for surface_pts={surface_pts}."
+            )
+
+        rays_configs_by_surface[surface_pts] = rays
+        ref_rays_by_surface[surface_pts] = ref_rays
+        all_rays.update(rays)
+
+    common_rays = sorted(
+        set(rays_configs_by_surface[surface_configs[0]]).intersection(
+            *(set(rays_configs_by_surface[s]) for s in surface_configs[1:])
+        )
+    )
+
+    return (
+        surface_configs,
+        rays_configs_by_surface,
+        ref_rays_by_surface,
+        sorted(all_rays),
+        common_rays,
+    )
+
 
 # Used only for plot labelling (fig4) — reflects how the scenario was originally built.
 HELIOSTATS_PER_CELL = 2
 
 # Smoke test overrides.
 if SMOKE_TEST:
-    SURFACE_CONFIGS = [25, 50]
-    RAYS_CONFIGS    = [10, 20]
+    SURFACE_SWEEP_CONFIG = {
+        10: {"rays": [5, 10], "ref_rays": 20},
+        25: {"rays": [5, 10], "ref_rays": 20},
+    }
     SIGMA_CONFIGS   = [0.0, 5.0]
-    REF_RAYS        = 50
     SAMPLE_LIMIT    = 3
     log.info("[SMOKE TEST] Reduced configs active.")
+
+(
+    SURFACE_CONFIGS,
+    RAYS_CONFIGS_BY_SURFACE,
+    REF_RAYS_BY_SURFACE,
+    RAYS_CONFIGS,
+    COMMON_RAYS_CONFIGS,
+) = _derive_surface_sweep_values(SURFACE_SWEEP_CONFIG)
+
+SIGMA_SWEEP_FIXED_RAYS = (
+    10
+    if 10 in COMMON_RAYS_CONFIGS
+    else (COMMON_RAYS_CONFIGS[0] if COMMON_RAYS_CONFIGS else RAYS_CONFIGS[0])
+)
 
 print(f"Output directory: {OUTPUT_DIR}")
 print(f"Scenario: {SCENARIO_PATH}")
 print(f"Checkpoint: {KINEMATIC_CHECKPOINT}")
 print(f"Surface configs: {SURFACE_CONFIGS}")
+for sp in SURFACE_CONFIGS:
+    print(
+        f"  {sp}×{sp}: ref_rays={REF_RAYS_BY_SURFACE[sp]}, rays={RAYS_CONFIGS_BY_SURFACE[sp]}"
+    )
+print(f"Sigma configs: {SIGMA_CONFIGS}")
 
 
 # ===================================================================
@@ -246,7 +310,8 @@ print(f"\nGPU benchmark on heliostat '{bench_heliostat_mapping[0][0]}' …")
 bench_results = []
 for sp in SURFACE_CONFIGS:
     _bench_scenario = _load_scenario_with_checkpoint(sp)
-    for n_rays in [10, REF_RAYS]:
+    benchmark_rays = sorted({10, REF_RAYS_BY_SURFACE[sp]})
+    for n_rays in benchmark_rays:
         r = _bench_config(_bench_scenario, n_rays, sp, bench_heliostat_mapping)
         bench_results.append(r)
         print(f"  {sp:3d}×{sp:<3d}  {n_rays:4d} rays: {r['wall_time_s']:.3f} s,  peak GPU: {r['peak_gpu_mem_gb']:.4f} GB")
@@ -263,11 +328,18 @@ print(f"  Saved → {OUTPUT_DIR / 'benchmark_gpu.json'}")
 # Run sweep (surface_pts × n_rays × sigma)
 # ===================================================================
 
-print(f"\nRunning sweep: {len(SURFACE_CONFIGS)} surface configs × {len(RAYS_CONFIGS)} ray configs × {len(SIGMA_CONFIGS)} sigma configs")
+total_ray_configs = sum(len(rays) for rays in RAYS_CONFIGS_BY_SURFACE.values())
+print(
+    f"\nRunning sweep: {len(SURFACE_CONFIGS)} surface configs × "
+    f"per-surface ray configs ({total_ray_configs} total) × "
+    f"{len(SIGMA_CONFIGS)} sigma configs"
+)
 print(f"  surface configs: {SURFACE_CONFIGS}")
-print(f"  rays configs: {RAYS_CONFIGS}")
+for sp in SURFACE_CONFIGS:
+    print(
+        f"  {sp}×{sp}: ref_rays={REF_RAYS_BY_SURFACE[sp]}, rays={RAYS_CONFIGS_BY_SURFACE[sp]}"
+    )
 print(f"  sigma configs: {SIGMA_CONFIGS}")
-print(f"  reference rays: {REF_RAYS}")
 
 records = run_blur_sweep(
     scenario_loader=_load_scenario_with_checkpoint,
@@ -276,8 +348,10 @@ records = run_blur_sweep(
     data_parser=data_parser,
     rays_configs=RAYS_CONFIGS,
     sigma_configs=SIGMA_CONFIGS,
-    ref_rays=REF_RAYS,
+    ref_rays=max(REF_RAYS_BY_SURFACE.values()),
     device=device,
+    surface_rays_configs=RAYS_CONFIGS_BY_SURFACE,
+    surface_ref_rays=REF_RAYS_BY_SURFACE,
 )
 
 # Save raw results.
@@ -336,7 +410,7 @@ for sp in SURFACE_CONFIGS:
         records=sp_records,
         heliostat_distances=heliostat_distances,
         output_path=sp_dir / "fig3_sigma_sweep.png",
-        fixed_n_rays=RAYS_CONFIGS[0],
+        fixed_n_rays=SIGMA_SWEEP_FIXED_RAYS,
     )
     print(f"  Figs 1–3 for {sp}×{sp} saved to {sp_dir.name}/")
 

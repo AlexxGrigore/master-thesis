@@ -3,6 +3,22 @@ Custom loss functions that extend ARTIST's built-in loss_functions.py.
 """
 
 import torch
+from artist.core.loss_functions import PixelLoss
+
+
+class PixelLossL1(PixelLoss):
+    """
+    L1 (MAE) variant of PixelLoss.
+
+    Identical to PixelLoss but uses L1Loss instead of MSELoss, making it less
+    sensitive to outlier pixels (e.g. bright specular spots in flux images).
+    Peak normalization and kwargs handling are inherited from PixelLoss.
+    """
+
+    def __init__(self, scenario) -> None:
+        """Initialize with L1Loss instead of MSELoss."""
+        super().__init__(scenario=scenario)
+        self.loss_function = torch.nn.L1Loss(reduction="none")
 
 
 class AlignmentLoss:
