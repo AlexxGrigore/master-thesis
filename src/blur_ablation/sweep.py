@@ -86,7 +86,7 @@ def trace_flux_for_mapping(
             predicted_flux = ray_tracer.trace_rays(
                 incident_ray_directions=incident_ray_directions,
                 active_heliostats_mask=active_heliostats_mask,
-                target_area_mask=target_area_mask,
+                target_area_indices=target_area_mask,
                 device=device,
             )  # [N_active_heliostats * N_meas, H, W]
 

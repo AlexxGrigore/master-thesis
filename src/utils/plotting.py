@@ -185,6 +185,10 @@ def plot_tracking_error_histogram(
         Plot title.
     """
     errors = np.array(errors_mrad)
+    errors = errors[np.isfinite(errors)]
+    if len(errors) == 0:
+        print("WARNING: No finite tracking errors to plot — skipping histogram.")
+        return
     mean_val = float(np.mean(errors))
     median_val = float(np.median(errors))
     std_val = float(np.std(errors))
@@ -289,7 +293,7 @@ def visualize_flux_comparison(
         predicted_flux = ray_tracer.trace_rays(
             incident_ray_directions=incident_ray_directions,
             active_heliostats_mask=active_heliostats_mask,
-            target_area_mask=target_area_mask,
+            target_area_indices=target_area_mask,
             device=device,
         )
 

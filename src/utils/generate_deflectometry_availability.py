@@ -16,11 +16,11 @@ import pathlib
 _HERE = pathlib.Path(__file__).parent          # src/utils/
 _BASE = _HERE.parent.parent                    # master-thesis/
 
-PAINT_DIR = _BASE / "datasets" / "paint_dataset"
+PAINT_DIR = _BASE / "datasets" / "paint" / "heliostats"
 BENCHMARK_CSV = (
     _BASE
     / "datasets"
-    / "paint_benchmarks"
+    / "paint"
     / "splits"
     / "benchmark_split-balanced_train-10_validation-30.csv"
 )

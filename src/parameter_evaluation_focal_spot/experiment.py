@@ -192,7 +192,7 @@ def _plot_parameter_histograms(
         _style_ax(ax, xlabel, "Count", title)
 
     for group_idx, heliostat_group in enumerate(scenario.heliostat_field.heliostat_groups):
-        kinematic = heliostat_group.kinematic
+        kinematic = heliostat_group.kinematics
 
         # ---- Translation deviations [N, 9] ----
         trans = kinematic.translation_deviation_parameters.detach().cpu().numpy()
@@ -348,7 +348,7 @@ def run_experiment(
             train_position_deviation=train_position_deviation,
             data=data,
             optimization_configuration=optimization_configuration,
-            reconstruction_method=config_dictionary.kinematic_reconstruction_raytracing,
+            reconstruction_method=config_dictionary.kinematics_reconstruction_raytracing,
             eval_data=eval_data,
         )
 
@@ -358,7 +358,7 @@ def run_experiment(
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(device)
         t_train_start = time.time()
-        final_loss_per_heliostat = reconstructor.reconstruct_kinematic(
+        final_loss_per_heliostat = reconstructor.reconstruct_kinematics(
             loss_definition=loss_definition, device=device
         )
         train_time_s = time.time() - t_train_start

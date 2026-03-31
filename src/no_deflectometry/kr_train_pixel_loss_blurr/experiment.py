@@ -123,13 +123,13 @@ def run_experiment(
             train_position_deviation=train_position_deviation,
             data=data,
             optimization_configuration=phase1_opt_config,
-            reconstruction_method=config_dictionary.kinematic_reconstruction_raytracing,
+            reconstruction_method=config_dictionary.kinematics_reconstruction_raytracing,
             eval_data=eval_data,
         )
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(device)
         t_phase1_start = time.time()
-        phase1_reconstructor.reconstruct_kinematic(
+        phase1_reconstructor.reconstruct_kinematics(
             loss_definition=FocalSpotLoss(scenario=scenario),
             device=device,
         )
@@ -173,14 +173,14 @@ def run_experiment(
             train_position_deviation=train_position_deviation,
             data=data,
             optimization_configuration=phase2_opt_config,
-            reconstruction_method=config_dictionary.kinematic_reconstruction_raytracing,
+            reconstruction_method=config_dictionary.kinematics_reconstruction_raytracing,
             eval_data=eval_data,
             blur_sigma=2.0,
         )
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(device)
         t_phase2_start = time.time()
-        phase2_final_loss = phase2_reconstructor.reconstruct_kinematic(
+        phase2_final_loss = phase2_reconstructor.reconstruct_kinematics(
             loss_definition=PixelLossL1(scenario=scenario),
             device=device,
         )

@@ -48,10 +48,10 @@ log = logging.getLogger(__name__)
 
 if IS_ON_DAIC:
     BASE_DIR = pathlib.Path("/home/nfs/agrigore/projects/githubProjects/master-thesis")
-    BENCHMARK_DIR = pathlib.Path("/tudelft.net/staff-umbrella/StudentsCVlab/agrigore/src/paint_benchmarks")
 else:
     BASE_DIR = pathlib.Path(__file__).parent.parent.parent
-    BENCHMARK_DIR = BASE_DIR / "datasets" / "paint_benchmarks"
+
+PAINT_DIR = BASE_DIR / "datasets" / "paint"
 
 BENCHMARK_NAME = "benchmark_split-balanced_train-10_validation-30"
 
@@ -75,9 +75,9 @@ _log_handler = logging.FileHandler(OUTPUT_DIR / "blur_ablation.log")
 _log_handler.setFormatter(logging.Formatter("[%(asctime)s][%(name)s][%(levelname)s] - %(message)s"))
 logging.getLogger().addHandler(_log_handler)
 
-BENCHMARK_CSV = BENCHMARK_DIR / "splits" / f"{BENCHMARK_NAME}.csv"
-CALIBRATION_PROPERTIES_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "calibration_properties"
-FLUX_IMAGE_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "flux_image"
+BENCHMARK_CSV = PAINT_DIR / "splits" / f"{BENCHMARK_NAME}.csv"
+CALIBRATION_PROPERTIES_DIR = PAINT_DIR / BENCHMARK_NAME / "calibration_properties"
+FLUX_IMAGE_DIR = PAINT_DIR / BENCHMARK_NAME / "flux_image"
 
 # Sweep parameters.
 SURFACE_SWEEP_CONFIG = {

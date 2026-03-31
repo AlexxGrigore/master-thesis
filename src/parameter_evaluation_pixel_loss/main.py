@@ -1,7 +1,7 @@
 import pathlib
 import sys
 
-_pkg = pathlib.Path(__file__).parent   # .../src/kr_training_defl_only/
+_pkg = pathlib.Path(__file__).parent   # .../src/parameter_evaluation_pixel_loss/
 _src = _pkg.parent                     # .../src/
 sys.path.insert(0, str(_src))
 sys.path.insert(0, str(_pkg))
@@ -26,14 +26,23 @@ import traceback
 
 import torch
 import paint.util.paint_mappings as paint_mappings
-from artist.core.loss_functions import FocalSpotLoss
-from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
 from artist.scenario.scenario import Scenario
 from artist.util import config_dictionary, set_logger_config
 from artist.util.environment_setup import get_device, setup_distributed_environment
-from artist_extensions.kinematic_reconstructors import WortbergKinematicReconstructor
+from artist_extensions.kinematic_reconstructors import (
+    RotationsOnlyReconstructor,
+    RotationsActuatorsReconstructor,
+    RotationsTranslationsReconstructor,
+    FullStructuralReconstructor,
+    WortbergKinematicReconstructor,
+    RotationsOnlyPixelReconstructor,
+    RotationsActuatorsPixelReconstructor,
+    RotationsTranslationsPixelReconstructor,
+    FullStructuralPixelReconstructor,
+    WortbergPixelReconstructor,
+)
 from utils.evaluation import build_heliostat_data_mapping
-from experiment import run_experiment
+from experiment import plot_parameter_comparison, run_experiment
 
 # Set random seeds for reproducibility
 torch.manual_seed(42)
@@ -61,9 +70,9 @@ SCENARIO_PATH = (
 )
 _run_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 OUTPUT_DIR = (
-    BASE_DIR / "outputs" / "local_runs" / f"focal_spot_kr_{_run_timestamp}"
+    BASE_DIR / "outputs" / "local_runs" / f"pixel_loss_param_eval_{_run_timestamp}"
     if not IS_ON_DAIC
-    else BASE_DIR / "outputs" / f"focal_spot_kr_{_run_timestamp}"
+    else BASE_DIR / "outputs" / f"pixel_loss_param_eval_{_run_timestamp}"
 )
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -78,13 +87,12 @@ CALIBRATION_PROPERTIES_DIR = PAINT_DIR / BENCHMARK_NAME / "calibration_propertie
 FLUX_IMAGE_DIR = PAINT_DIR / BENCHMARK_NAME / "flux_image"
 
 SAMPLE_LIMIT_PER_HELIOSTAT = SMOKE_TEST_SAMPLE_LIMIT if SMOKE_TEST else 10
-TRAIN_BASE_POSITION_DEVIATION = True  # False = standard Wortberg Table 5.3 (no position error term)
+TRAIN_BASE_POSITION_DEVIATION = True
 CENTROID_METHOD = paint_mappings.UTIS_KEY
 
 print(f"\nRunning on DAIC: {IS_ON_DAIC}")
 print(f"Base directory: {BASE_DIR}")
-print(f"Benchmark CSV: {BENCHMARK_CSV}")
-print(f"Scenario path: {SCENARIO_PATH}")
+print(f"Output directory: {OUTPUT_DIR}")
 print(f"\nPaths exist:")
 print(f"  Benchmark CSV: {BENCHMARK_CSV.exists()}")
 print(f"  Scenario: {SCENARIO_PATH.exists()}")
@@ -109,6 +117,8 @@ if torch.cuda.is_available():
 # ===================================================================
 
 print("\nBuilding heliostat data mappings...")
+
+from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
 
 train_mapping = build_heliostat_data_mapping(
     benchmark_csv=BENCHMARK_CSV,
@@ -147,12 +157,6 @@ print(f"\nTrain mapping:      {len(train_mapping)} heliostats")
 print(f"Validation mapping: {len(validation_mapping)} heliostats")
 print(f"Test mapping:       {len(test_mapping)} heliostats")
 
-print("\nSample of train mapping:")
-for heliostat_id, cal_paths, flux_paths in train_mapping[:3]:
-    print(f"  Heliostat: {heliostat_id}, Calibration files: {len(cal_paths)}, Flux files: {len(flux_paths)}")
-    print(f"    cal_paths: {cal_paths[0]}")
-    print(f"    flux_paths: {flux_paths[0]}")
-
 
 # ===================================================================
 # Create Data Parsers
@@ -170,7 +174,6 @@ eval_data_parser = PaintCalibrationDataParser(
 
 print(f"\nTrain parser sample limit: {SAMPLE_LIMIT_PER_HELIOSTAT}")
 print(f"Eval parser sample limit: 10")
-print(f"Centroid method: {CENTROID_METHOD}")
 
 
 # ===================================================================
@@ -185,21 +188,32 @@ print(f"Number of heliostat groups: {number_of_heliostat_groups}")
 
 
 # ===================================================================
-# Optimization Configuration
+# Optimization Configurations
+#
+# Phase 1 — FocalSpotLoss warmup (50 epochs).
+#   Gets heliostats roughly aligned before pixel loss takes over.
+#   patience=10, cooldown=5 → first LR drop at ~epoch 15-20; room for ~3
+#   reductions in 50 epochs.  early_stopping_patience > max_epoch so Phase 1
+#   always runs to completion.
+#
+# Phase 2 — PixelLossL1 fine-tuning (300 epochs).
+#   Starts at lr=1e-5 for conservative pixel-level refinement.
+#   patience=30, cooldown=5 → ~35 epochs per LR cycle; early stopping
+#   patience=150 allows ~4 cycles before giving up.
 # ===================================================================
 
-optimization_configuration = {
+PHASE1_OPT_CONFIG = {
     config_dictionary.initial_learning_rate: 1e-4,
     config_dictionary.tolerance: 1e-6,
-    config_dictionary.max_epoch: 11 if SMOKE_TEST else 300,
+    config_dictionary.max_epoch: 6 if SMOKE_TEST else 50,
     config_dictionary.batch_size: 8,
     config_dictionary.log_step: 5,
     config_dictionary.early_stopping_window: 10,
     config_dictionary.early_stopping_delta: 1e-5,
-    config_dictionary.early_stopping_patience: 400,  # > max_epoch → always runs fully
+    config_dictionary.early_stopping_patience: 100,  # > max_epoch → always runs fully
     config_dictionary.scheduler: config_dictionary.reduce_on_plateau,
     "scheduler_parameters": {
-        config_dictionary.min: 1e-6,
+        config_dictionary.min: 1e-8,
         config_dictionary.reduce_factor: 0.5,
         config_dictionary.patience: 10,
         config_dictionary.threshold: 1e-3,
@@ -207,15 +221,75 @@ optimization_configuration = {
     },
 }
 
-print("\nOptimization configuration:")
-for key, value in optimization_configuration.items():
-    if key != "scheduler_parameters":
-        print(f"  {key}: {value}")
+PHASE2_OPT_CONFIG = {
+    config_dictionary.initial_learning_rate: 1e-5,
+    config_dictionary.tolerance: 1e-8,
+    config_dictionary.max_epoch: 6 if SMOKE_TEST else 300,
+    config_dictionary.batch_size: 8,
+    config_dictionary.log_step: 5,
+    config_dictionary.early_stopping_window: 10,
+    config_dictionary.early_stopping_delta: 1e-5,
+    config_dictionary.early_stopping_patience: 150,  # ~4 LR cycles (35 epochs each)
+    config_dictionary.scheduler: config_dictionary.reduce_on_plateau,
+    "scheduler_parameters": {
+        config_dictionary.min: 1e-8,
+        config_dictionary.reduce_factor: 0.5,
+        config_dictionary.patience: 30,
+        config_dictionary.threshold: 1e-3,
+        config_dictionary.cooldown: 5,
+    },
+}
+
+print("\nPhase 1 config:")
+print(f"  lr={PHASE1_OPT_CONFIG[config_dictionary.initial_learning_rate]}, "
+      f"max_epoch={PHASE1_OPT_CONFIG[config_dictionary.max_epoch]}, "
+      f"patience={PHASE1_OPT_CONFIG['scheduler_parameters'][config_dictionary.patience]}")
+print("Phase 2 config:")
+print(f"  lr={PHASE2_OPT_CONFIG[config_dictionary.initial_learning_rate]}, "
+      f"max_epoch={PHASE2_OPT_CONFIG[config_dictionary.max_epoch]}, "
+      f"patience={PHASE2_OPT_CONFIG['scheduler_parameters'][config_dictionary.patience]}")
 
 
 # ===================================================================
-# Run Experiment
+# Parameter configurations to compare
+#
+# Each tuple: (name, phase1_cls, phase2_cls, train_position_deviation)
+#
+# phase1_cls — focal-spot reconstructor (FocalSpotLoss warmup)
+# phase2_cls — pixel reconstructor (PixelLossL1 fine-tuning)
+# Both classes use the same parameter subset so parameters frozen in
+# Phase 1 remain frozen in Phase 2 and vice versa.
 # ===================================================================
+
+CONFIGS = [
+    ("A_rotations_only",
+     RotationsOnlyReconstructor,
+     RotationsOnlyPixelReconstructor,
+     False),
+    ("B_rotations_actuators",
+     RotationsActuatorsReconstructor,
+     RotationsActuatorsPixelReconstructor,
+     False),
+    ("C_rotations_translations",
+     RotationsTranslationsReconstructor,
+     RotationsTranslationsPixelReconstructor,
+     False),
+    ("D_full_structural",
+     FullStructuralReconstructor,
+     FullStructuralPixelReconstructor,
+     False),
+    ("E_full_wortberg",
+     WortbergKinematicReconstructor,
+     WortbergPixelReconstructor,
+     True),
+]
+
+
+# ===================================================================
+# Run all configurations
+# ===================================================================
+
+all_metrics = {}
 
 try:
     with setup_distributed_environment(
@@ -224,27 +298,38 @@ try:
     ) as ddp_setup:
         device = ddp_setup[config_dictionary.device]
 
-        print(f"\n{'=' * 60}")
-        print("EXPERIMENT: focal_spot_loss_deflectometry_only")
-        print("=" * 60)
+        for config_name, phase1_cls, phase2_cls, train_pos_dev in CONFIGS:
+            print(f"\n{'=' * 60}")
+            print(f"EXPERIMENT: {config_name}")
+            print(f"  Phase 1: {phase1_cls.__name__} — FocalSpotLoss, {PHASE1_OPT_CONFIG[config_dictionary.max_epoch]} epochs")
+            print(f"  Phase 2: {phase2_cls.__name__} — PixelLossL1,   {PHASE2_OPT_CONFIG[config_dictionary.max_epoch]} epochs")
+            print("=" * 60)
 
-        metrics = run_experiment(
-            loss_name="focal_spot_loss_deflectometry_only",
-            loss_fn_factory=lambda scenario: FocalSpotLoss(scenario=scenario),
-            reconstructor_cls=WortbergKinematicReconstructor,
-            ddp_setup=ddp_setup,
-            device=device,
-            scenario_path=SCENARIO_PATH,
-            train_mapping=train_mapping,
-            test_mapping=test_mapping,
-            train_data_parser=train_data_parser,
-            eval_data_parser=eval_data_parser,
-            optimization_configuration=optimization_configuration,
-            output_dir=OUTPUT_DIR,
-            save_figures=True,
-            train_position_deviation=TRAIN_BASE_POSITION_DEVIATION,
-            validation_mapping=validation_mapping,
-        )
+            metrics = run_experiment(
+                config_name=config_name,
+                phase1_reconstructor_cls=phase1_cls,
+                phase2_reconstructor_cls=phase2_cls,
+                phase1_opt_config=PHASE1_OPT_CONFIG,
+                phase2_opt_config=PHASE2_OPT_CONFIG,
+                ddp_setup=ddp_setup,
+                device=device,
+                scenario_path=SCENARIO_PATH,
+                train_mapping=train_mapping,
+                test_mapping=test_mapping,
+                train_data_parser=train_data_parser,
+                eval_data_parser=eval_data_parser,
+                output_dir=OUTPUT_DIR,
+                save_figures=True,
+                train_position_deviation=train_pos_dev,
+                validation_mapping=validation_mapping,
+            )
+            all_metrics[config_name] = metrics
+
+        # ---- Cross-experiment comparison plots ----
+        print(f"\n{'=' * 60}")
+        print("Generating comparison plots...")
+        print("=" * 60)
+        plot_parameter_comparison(all_metrics=all_metrics, output_dir=OUTPUT_DIR)
 
 except Exception as e:
     print("\n" + "=" * 60)
@@ -259,13 +344,14 @@ except Exception as e:
 # ===================================================================
 
 print("\n" + "=" * 60)
-print("RESULT  (deflectometry heliostats only)")
+print("RESULTS SUMMARY — Pixel Loss Parameter Ablation")
 print("=" * 60)
-print(f"  Mean focal spot error:   {metrics['mean_focal_spot_error_mrad']:.2f} mrad")
-print(f"  Median focal spot error: {metrics['median_focal_spot_error_mrad']:.2f} mrad")
-print(f"  Min focal spot error:    {metrics['min_focal_spot_error_mrad']:.2f} mrad")
-print(f"  Max focal spot error:    {metrics['max_focal_spot_error_mrad']:.2f} mrad")
-print(f"  Samples evaluated:       {metrics['num_samples_evaluated']}")
+for config_name, metrics in all_metrics.items():
+    print(f"\n  [{config_name}]")
+    print(f"    Mean focal spot error:   {metrics['mean_focal_spot_error_mrad']:.2f} mrad")
+    print(f"    Median focal spot error: {metrics['median_focal_spot_error_mrad']:.2f} mrad")
+    print(f"    Min:  {metrics['min_focal_spot_error_mrad']:.2f} mrad  "
+          f"Max: {metrics['max_focal_spot_error_mrad']:.2f} mrad")
 print("=" * 60)
 
 print("\nDone!")

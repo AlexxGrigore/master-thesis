@@ -4,7 +4,7 @@ Usage (from project root src/):
     python -m blur_ablation.make_selection_plots \
         --run_dir ../outputs/good_runs/blur_ablation_20260317_000052 \
         --scenario ../scenarios/deflectometry_scenario/deflectometry_scenario.h5 \
-        --benchmark_csv ../datasets/paint_benchmarks/splits/benchmark_split-balanced_train-10_validation-30.csv
+        --benchmark_csv ../datasets/paint/splits/benchmark_split-balanced_train-10_validation-30.csv
 """
 
 import argparse
@@ -48,7 +48,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--benchmark_csv",
-        default=pathlib.Path("../datasets/paint_benchmarks/splits/benchmark_split-balanced_train-10_validation-30.csv"),
+        default=pathlib.Path("../datasets/paint/splits/benchmark_split-balanced_train-10_validation-30.csv"),
         type=pathlib.Path,
     )
     args = parser.parse_args()

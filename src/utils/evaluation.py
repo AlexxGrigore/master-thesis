@@ -170,7 +170,7 @@ def evaluate_flux_accuracy(
         predicted_flux = ray_tracer.trace_rays(
             incident_ray_directions=incident_ray_directions,
             active_heliostats_mask=active_heliostats_mask,
-            target_area_mask=target_area_mask,
+            target_area_indices=target_area_mask,
             device=device,
         )
 
@@ -331,7 +331,7 @@ def compute_pixel_test_loss(
         predicted_flux = ray_tracer.trace_rays(
             incident_ray_directions=incident_ray_directions,
             active_heliostats_mask=active_heliostats_mask,
-            target_area_mask=target_area_mask,
+            target_area_indices=target_area_mask,
             device=device,
         )
 

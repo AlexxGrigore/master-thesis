@@ -46,10 +46,10 @@ print("Imports completed successfully!")
 
 if IS_ON_DAIC:
     BASE_DIR = pathlib.Path("/home/nfs/agrigore/projects/githubProjects/master-thesis")
-    BENCHMARK_DIR = pathlib.Path("/tudelft.net/staff-umbrella/StudentsCVlab/agrigore/src/paint_benchmarks")
 else:
     BASE_DIR = pathlib.Path(__file__).parent.parent.parent
-    BENCHMARK_DIR = BASE_DIR / "datasets" / "paint_benchmarks"
+
+PAINT_DIR = BASE_DIR / "datasets" / "paint"
 
 BENCHMARK_NAME = "benchmark_split-balanced_train-10_validation-30"
 SCENARIO_PATH = (
@@ -71,9 +71,9 @@ _log_file_handler.setFormatter(
 )
 logging.getLogger().addHandler(_log_file_handler)
 
-BENCHMARK_CSV = BENCHMARK_DIR / "splits" / f"{BENCHMARK_NAME}.csv"
-CALIBRATION_PROPERTIES_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "calibration_properties"
-FLUX_IMAGE_DIR = BENCHMARK_DIR / "datasets" / BENCHMARK_NAME / "flux_image"
+BENCHMARK_CSV = PAINT_DIR / "splits" / f"{BENCHMARK_NAME}.csv"
+CALIBRATION_PROPERTIES_DIR = PAINT_DIR / BENCHMARK_NAME / "calibration_properties"
+FLUX_IMAGE_DIR = PAINT_DIR / BENCHMARK_NAME / "flux_image"
 
 SAMPLE_LIMIT_PER_HELIOSTAT = SMOKE_TEST_SAMPLE_LIMIT if SMOKE_TEST else 10
 TRAIN_BASE_POSITION_DEVIATION = True
@@ -216,7 +216,7 @@ PHASE1_OPT_CONFIG = {
     config_dictionary.early_stopping_delta: 1e-5,
     config_dictionary.early_stopping_patience: 200,  # > max_epoch → always runs fully
     config_dictionary.scheduler: config_dictionary.reduce_on_plateau,
-    config_dictionary.scheduler_parameters: {
+    "scheduler_parameters": {
         config_dictionary.min: 1e-8,
         config_dictionary.reduce_factor: 0.5,
         config_dictionary.patience: 10,
@@ -235,7 +235,7 @@ PHASE2_OPT_CONFIG = {
     config_dictionary.early_stopping_delta: 1e-5,
     config_dictionary.early_stopping_patience: 150,  # ~4 LR cycles (35 epochs each)
     config_dictionary.scheduler: config_dictionary.reduce_on_plateau,
-    config_dictionary.scheduler_parameters: {
+    "scheduler_parameters": {
         config_dictionary.min: 1e-8,
         config_dictionary.reduce_factor: 0.5,
         config_dictionary.patience: 30,

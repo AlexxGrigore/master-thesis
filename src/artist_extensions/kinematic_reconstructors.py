@@ -14,14 +14,14 @@ import torch.nn.functional as F
 
 from artist.core import core_utils, learning_rate_schedulers
 from artist.core.heliostat_ray_tracer import HeliostatRayTracer
-from artist.core.kinematic_reconstructor import KinematicReconstructor
+from artist.core.kinematics_reconstructor import KinematicsReconstructor
 from artist.util import config_dictionary, index_mapping
 from artist.util.environment_setup import get_device
 
 log = logging.getLogger(__name__)
 
 
-class WortbergKinematicReconstructor(KinematicReconstructor):
+class WortbergKinematicReconstructor(KinematicsReconstructor):
     """
     KinematicReconstructor following the parameter setup of Wortberg (2025) Table 5.3.
 
@@ -58,11 +58,40 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
     _BOUND_BASE_POSITION_M = 0.05      # heliostat base position (e, n, u)
 
     def __init__(self, *args, train_position_deviation: bool = True, eval_data: dict | None = None, **kwargs):
+        if "optimization_configuration" in kwargs:
+            flat = kwargs["optimization_configuration"]
+            if config_dictionary.optimization not in flat:
+                _SCHED_PARAMS = "scheduler_parameters"
+                scheduler_params = flat.get(_SCHED_PARAMS, {})
+                kwargs["optimization_configuration"] = {
+                    config_dictionary.optimization: {
+                        k: v for k, v in flat.items()
+                        if k not in (config_dictionary.scheduler, _SCHED_PARAMS)
+                    },
+                    config_dictionary.scheduler: {
+                        config_dictionary.scheduler_type: flat.get(
+                            config_dictionary.scheduler, config_dictionary.reduce_on_plateau
+                        ),
+                        **scheduler_params,
+                    },
+                }
+
         super().__init__(*args, **kwargs)
         self.train_position_deviation = train_position_deviation
         self.eval_data = eval_data
 
-    def _reconstruct_kinematic_parameters_with_raytracing(
+        self.optimization_configuration = {
+            **self.optimizer_dict,
+            config_dictionary.scheduler: self.scheduler_dict.get(
+                config_dictionary.scheduler_type, config_dictionary.reduce_on_plateau
+            ),
+        }
+        self._scheduler_params = {
+            k: v for k, v in self.scheduler_dict.items()
+            if k != config_dictionary.scheduler_type
+        }
+
+    def _reconstruct_kinematics_parameters_with_raytracing(
         self,
         loss_definition,
         device=None,
@@ -141,7 +170,7 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
                         active_heliostats_mask=active_heliostats_mask, device=device
                     )
 
-                    kinematic = heliostat_group.kinematic
+                    kinematic = heliostat_group.kinematics
 
                     if self.train_position_deviation:
                         # Inject base position deviation into the active positions that
@@ -176,7 +205,7 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
                     flux_distributions = ray_tracer.trace_rays(
                         incident_ray_directions=incident_ray_directions,
                         active_heliostats_mask=active_heliostats_mask,
-                        target_area_mask=target_area_mask,
+                        target_area_indices=target_area_mask,
                         device=device,
                     )
 
@@ -193,7 +222,7 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
                         measured_flux=measured_flux,
                         focal_spots_measured=focal_spots_measured,
                         sample_indices=sample_indices_for_local_rank,
-                        target_area_mask=target_area_mask,
+                        target_area_indices=target_area_mask,
                         loss_definition=loss_definition,
                         ground_truth=ground_truth,
                         reduction_dims=reduction_dims,
@@ -273,20 +302,20 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
                     index_mapping.first_rank_from_group
                 ]
                 torch.distributed.broadcast(
-                    heliostat_group.kinematic.translation_deviation_parameters, src=src
+                    heliostat_group.kinematics.translation_deviation_parameters, src=src
                 )
                 torch.distributed.broadcast(
-                    heliostat_group.kinematic.rotation_deviation_parameters, src=src
+                    heliostat_group.kinematics.rotation_deviation_parameters, src=src
                 )
                 torch.distributed.broadcast(
-                    heliostat_group.kinematic.actuators.optimizable_parameters, src=src
+                    heliostat_group.kinematics.actuators.optimizable_parameters, src=src
                 )
                 torch.distributed.broadcast(
-                    heliostat_group.kinematic.actuators.non_optimizable_parameters, src=src
+                    heliostat_group.kinematics.actuators.non_optimizable_parameters, src=src
                 )
                 if self.train_position_deviation:
                     torch.distributed.broadcast(
-                        heliostat_group.kinematic._base_position_deviation, src=src
+                        heliostat_group.kinematics._base_position_deviation, src=src
                     )
             torch.distributed.all_reduce(
                 final_loss_per_heliostat, op=torch.distributed.ReduceOp.MIN
@@ -301,7 +330,7 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
 
     def _setup_optimizer(self, heliostat_group, device):
         """Enable gradients, register freeze hooks, and return a configured Adam optimizer."""
-        kinematic = heliostat_group.kinematic
+        kinematic = heliostat_group.kinematics
 
         kinematic.translation_deviation_parameters.requires_grad_()
         kinematic.rotation_deviation_parameters.requires_grad_()
@@ -394,7 +423,7 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
         scheduler_type = self.optimization_configuration.get(
             config_dictionary.scheduler, config_dictionary.reduce_on_plateau
         )
-        params = self.optimization_configuration.get(config_dictionary.scheduler_parameters, {})
+        params = self._scheduler_params
 
         if scheduler_type == config_dictionary.reduce_on_plateau:
             return torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -430,7 +459,7 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
         measured_flux: torch.Tensor,
         focal_spots_measured: torch.Tensor,
         sample_indices: torch.Tensor,
-        target_area_mask: torch.Tensor,
+        target_area_indices: torch.Tensor,
         loss_definition,
         ground_truth: torch.Tensor,
         reduction_dims: tuple,
@@ -446,14 +475,13 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
         loss_per_sample = loss_definition(
             prediction=flux_distributions,
             ground_truth=ground_truth[sample_indices],
-            target_area_mask=target_area_mask[sample_indices],
+            target_area_indices=target_area_indices[sample_indices],
             reduction_dimensions=reduction_dims,
             device=device,
         )
         return core_utils.mean_loss_per_heliostat(
             loss_per_sample=loss_per_sample,
             number_of_samples_per_heliostat=number_of_samples_per_heliostat,
-            device=device,
         )
 
     def _get_ground_truth_and_reduction_dims(
@@ -512,7 +540,7 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
             return None
 
         heliostat_group.activate_heliostats(active_heliostats_mask=active_mask, device=device)
-        kinematic = heliostat_group.kinematic
+        kinematic = heliostat_group.kinematics
 
         if self.train_position_deviation and hasattr(kinematic, "_base_position_deviation"):
             active_base_dev = kinematic._base_position_deviation.repeat_interleave(active_mask, dim=0)
@@ -540,7 +568,7 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
         flux = ray_tracer.trace_rays(
             incident_ray_directions=incident_ray_directions,
             active_heliostats_mask=active_mask,
-            target_area_mask=target_mask,
+            target_area_indices=target_mask,
             device=device,
         )
         sample_indices = ray_tracer.get_sampler_indices()
@@ -554,14 +582,13 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
         loss_per_sample = loss_definition(
             prediction=flux_eval,
             ground_truth=gt_eval[sample_indices],
-            target_area_mask=target_mask[sample_indices],
+            target_area_indices=target_mask[sample_indices],
             reduction_dimensions=reduction_dims,
             device=device,
         )
         loss_per_heliostat = core_utils.mean_loss_per_heliostat(
             loss_per_sample=loss_per_sample,
             number_of_samples_per_heliostat=n_samples,
-            device=device,
         )
         return loss_per_heliostat.mean().item()
 
@@ -573,7 +600,7 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
         values loaded from the scenario (e.g. concentrator_translation_n ≈ 0.175 m),
         so all clamps are computed relative to the snapshotted initial values.
         """
-        kinematic = heliostat_group.kinematic
+        kinematic = heliostat_group.kinematics
         with torch.no_grad():
             kinematic.translation_deviation_parameters.data.clamp_(
                 kinematic._initial_translation_deviation - self._BOUND_TRANSLATION_M,
@@ -600,16 +627,21 @@ class WortbergKinematicReconstructor(KinematicReconstructor):
                 )
 
 
-class RotationsOnlyReconstructor(WortbergKinematicReconstructor):
-    """
-    Config A: only ``rotation_deviation_parameters`` (4 main-axis tilts) are optimised.
+# ---------------------------------------------------------------------------
+# Optimizer setup mixins
+#
+# Each mixin encodes the _setup_optimizer logic for one parameter subset.
+# Combining a mixin with WortbergKinematicReconstructor gives the focal-spot
+# variant; combining it with WortbergPixelReconstructor gives the pixel-loss
+# variant.  This avoids duplicating the optimizer setup code across the two
+# reconstructor families.
+# ---------------------------------------------------------------------------
 
-    All other parameters (translations, actuators, base position) are frozen.
-    Use this as the minimal structural baseline.
-    """
+class _RotationsOnlyMixin:
+    """Optimizer mixin: only rotation_deviation_parameters are optimised."""
 
     def _setup_optimizer(self, heliostat_group, device):
-        kinematic = heliostat_group.kinematic
+        kinematic = heliostat_group.kinematics
         kinematic.rotation_deviation_parameters.requires_grad_()
 
         # Snapshot nominals — required by parent _apply_deviation_bounds.
@@ -639,15 +671,11 @@ class RotationsOnlyReconstructor(WortbergKinematicReconstructor):
         return optimizer, initial_actuator_initial_angle, initial_actuator_offset
 
 
-class RotationsActuatorsReconstructor(WortbergKinematicReconstructor):
-    """
-    Config B: ``rotation_deviation_parameters`` + actuator params (aᵢ, cᵢ).
-
-    Translations and base position are frozen.
-    """
+class _RotationsActuatorsMixin:
+    """Optimizer mixin: rotation_deviation_parameters + actuator params (aᵢ, cᵢ)."""
 
     def _setup_optimizer(self, heliostat_group, device):
-        kinematic = heliostat_group.kinematic
+        kinematic = heliostat_group.kinematics
         kinematic.rotation_deviation_parameters.requires_grad_()
         kinematic.actuators.optimizable_parameters.requires_grad_()
         kinematic.actuators.non_optimizable_parameters.requires_grad_()
@@ -698,16 +726,11 @@ class RotationsActuatorsReconstructor(WortbergKinematicReconstructor):
         return optimizer, initial_actuator_initial_angle, initial_actuator_offset
 
 
-class RotationsTranslationsReconstructor(WortbergKinematicReconstructor):
-    """
-    Config C: ``rotation_deviation_parameters`` + ``translation_deviation_parameters``.
-
-    Actuators and base position are frozen.
-    Translations use 5× the base LR (large-scale params, same as Wortberg).
-    """
+class _RotationsTranslationsMixin:
+    """Optimizer mixin: rotation_deviation_parameters + translation_deviation_parameters."""
 
     def _setup_optimizer(self, heliostat_group, device):
-        kinematic = heliostat_group.kinematic
+        kinematic = heliostat_group.kinematics
         kinematic.rotation_deviation_parameters.requires_grad_()
         kinematic.translation_deviation_parameters.requires_grad_()
 
@@ -738,6 +761,36 @@ class RotationsTranslationsReconstructor(WortbergKinematicReconstructor):
             lr=base_lr,
         )
         return optimizer, initial_actuator_initial_angle, initial_actuator_offset
+
+
+# ---------------------------------------------------------------------------
+# Focal-spot ablation variants (A–E)
+# ---------------------------------------------------------------------------
+
+class RotationsOnlyReconstructor(_RotationsOnlyMixin, WortbergKinematicReconstructor):
+    """
+    Config A: only ``rotation_deviation_parameters`` (4 main-axis tilts) are optimised.
+
+    All other parameters (translations, actuators, base position) are frozen.
+    Use this as the minimal structural baseline.
+    """
+
+
+class RotationsActuatorsReconstructor(_RotationsActuatorsMixin, WortbergKinematicReconstructor):
+    """
+    Config B: ``rotation_deviation_parameters`` + actuator params (aᵢ, cᵢ).
+
+    Translations and base position are frozen.
+    """
+
+
+class RotationsTranslationsReconstructor(_RotationsTranslationsMixin, WortbergKinematicReconstructor):
+    """
+    Config C: ``rotation_deviation_parameters`` + ``translation_deviation_parameters``.
+
+    Actuators and base position are frozen.
+    Translations use 5× the base LR (large-scale params, same as Wortberg).
+    """
 
 
 class FullStructuralReconstructor(WortbergKinematicReconstructor):
@@ -821,7 +874,7 @@ class WortbergPixelReconstructor(WortbergKinematicReconstructor):
         measured_flux: torch.Tensor,
         focal_spots_measured: torch.Tensor,
         sample_indices: torch.Tensor,
-        target_area_mask: torch.Tensor,
+        target_area_indices: torch.Tensor,
         loss_definition,
         ground_truth: torch.Tensor,
         reduction_dims: tuple,
@@ -833,15 +886,54 @@ class WortbergPixelReconstructor(WortbergKinematicReconstructor):
         loss_per_sample = loss_definition(
             prediction=blurred,
             ground_truth=ground_truth[sample_indices],
-            target_area_mask=target_area_mask[sample_indices],
+            target_area_indices=target_area_indices[sample_indices],
             reduction_dimensions=reduction_dims,
             device=device,
         )
         return core_utils.mean_loss_per_heliostat(
             loss_per_sample=loss_per_sample,
             number_of_samples_per_heliostat=number_of_samples_per_heliostat,
-            device=device,
         )
+
+
+# ---------------------------------------------------------------------------
+# Pixel-loss ablation variants (A–E)
+#
+# Each class combines one of the optimizer-setup mixins with
+# WortbergPixelReconstructor so that the same parameter subset is active
+# during pixel-loss fine-tuning as during focal-spot pretraining.
+# ---------------------------------------------------------------------------
+
+class RotationsOnlyPixelReconstructor(_RotationsOnlyMixin, WortbergPixelReconstructor):
+    """
+    Config A (pixel): only ``rotation_deviation_parameters`` optimised, pixel loss.
+    """
+
+
+class RotationsActuatorsPixelReconstructor(_RotationsActuatorsMixin, WortbergPixelReconstructor):
+    """
+    Config B (pixel): rotation_deviation_parameters + actuators (aᵢ, cᵢ), pixel loss.
+    """
+
+
+class RotationsTranslationsPixelReconstructor(_RotationsTranslationsMixin, WortbergPixelReconstructor):
+    """
+    Config C (pixel): rotation_deviation_parameters + translations, pixel loss.
+    Translations use 5× base LR.
+    """
+
+
+class FullStructuralPixelReconstructor(WortbergPixelReconstructor):
+    """
+    Config D (pixel): rotations + translations + actuators, no base position, pixel loss.
+    """
+
+    def __init__(self, *args, **kwargs):
+        kwargs["train_position_deviation"] = False
+        super().__init__(*args, **kwargs)
+
+
+# Config E (pixel): WortbergPixelReconstructor directly (all params, pixel loss).
 
 
 class WortbergAnnealingReconstructor(WortbergKinematicReconstructor):
@@ -876,7 +968,7 @@ class WortbergAnnealingReconstructor(WortbergKinematicReconstructor):
         measured_flux: torch.Tensor,
         focal_spots_measured: torch.Tensor,
         sample_indices: torch.Tensor,
-        target_area_mask: torch.Tensor,
+        target_area_indices: torch.Tensor,
         loss_definition,           # unused — uses self._focal_loss_fn / _pixel_loss_fn
         ground_truth: torch.Tensor,  # unused
         reduction_dims: tuple,       # unused
@@ -891,28 +983,26 @@ class WortbergAnnealingReconstructor(WortbergKinematicReconstructor):
         focal_per_sample = self._focal_loss_fn(
             prediction=flux_distributions,
             ground_truth=focal_spots_measured[sample_indices],
-            target_area_mask=target_area_mask[sample_indices],
+            target_area_indices=target_area_indices[sample_indices],
             reduction_dimensions=(index_mapping.focal_spots,),
             device=device,
         )
         focal_per_heliostat = core_utils.mean_loss_per_heliostat(
             loss_per_sample=focal_per_sample,
             number_of_samples_per_heliostat=number_of_samples_per_heliostat,
-            device=device,
         )
 
         # ---- Pixel loss ----
         pixel_per_sample = self._pixel_loss_fn(
             prediction=flux_distributions,
             ground_truth=measured_flux[sample_indices],
-            target_area_mask=target_area_mask[sample_indices],
+            target_area_indices=target_area_indices[sample_indices],
             reduction_dimensions=(index_mapping.batched_bitmap_e, index_mapping.batched_bitmap_u),
             device=device,
         )
         pixel_per_heliostat = core_utils.mean_loss_per_heliostat(
             loss_per_sample=pixel_per_sample,
             number_of_samples_per_heliostat=number_of_samples_per_heliostat,
-            device=device,
         )
 
         # ---- Normalise by initial values (set on first call) ----
@@ -941,7 +1031,7 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
     both predicted and measured motor positions to joint angles (radians) before computing MSE.
     """
 
-    def _reconstruct_kinematic_parameters_with_raytracing(
+    def _reconstruct_kinematics_parameters_with_raytracing(
         self,
         loss_definition,
         device=None,
@@ -1022,7 +1112,7 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
                 heliostat_group.activate_heliostats(
                     active_heliostats_mask=active_heliostats_mask, device=device
                 )
-                kinematic = heliostat_group.kinematic
+                kinematic = heliostat_group.kinematics
 
                 if self.train_position_deviation:
                     active_base_dev = kinematic._base_position_deviation.repeat_interleave(
@@ -1122,20 +1212,20 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
                     index_mapping.first_rank_from_group
                 ]
                 torch.distributed.broadcast(
-                    heliostat_group.kinematic.translation_deviation_parameters, src=src
+                    heliostat_group.kinematics.translation_deviation_parameters, src=src
                 )
                 torch.distributed.broadcast(
-                    heliostat_group.kinematic.rotation_deviation_parameters, src=src
+                    heliostat_group.kinematics.rotation_deviation_parameters, src=src
                 )
                 torch.distributed.broadcast(
-                    heliostat_group.kinematic.actuators.optimizable_parameters, src=src
+                    heliostat_group.kinematics.actuators.optimizable_parameters, src=src
                 )
                 torch.distributed.broadcast(
-                    heliostat_group.kinematic.actuators.non_optimizable_parameters, src=src
+                    heliostat_group.kinematics.actuators.non_optimizable_parameters, src=src
                 )
                 if self.train_position_deviation:
                     torch.distributed.broadcast(
-                        heliostat_group.kinematic._base_position_deviation, src=src
+                        heliostat_group.kinematics._base_position_deviation, src=src
                     )
             torch.distributed.all_reduce(
                 final_loss_per_heliostat, op=torch.distributed.ReduceOp.MIN
@@ -1170,7 +1260,7 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
             return None
 
         heliostat_group.activate_heliostats(active_heliostats_mask=active_mask, device=device)
-        kinematic = heliostat_group.kinematic
+        kinematic = heliostat_group.kinematics
 
         if self.train_position_deviation and hasattr(kinematic, "_base_position_deviation"):
             active_base_dev = kinematic._base_position_deviation.repeat_interleave(active_mask, dim=0)

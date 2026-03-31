@@ -122,7 +122,7 @@ def plot_heatmap(
             grid,
             aspect="auto",
             origin="upper",
-            cmap="viridis_r",
+            cmap="RdYlGn_r",
             vmin=vmin,
             vmax=vmax,
         )
@@ -359,6 +359,146 @@ def plot_surface_pts_comparison(
         ax.legend(fontsize=9)
         ax.grid(True, alpha=0.3)
 
+    plt.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+
+def plot_rays_convergence_by_surface(
+    records: list[dict],
+    heliostat_distances: dict[str, float],
+    optimal_sigmas: dict[int, float],
+    output_path: pathlib.Path,
+) -> None:
+    """Figure 7: MSE vs n_rays with one line per surface config, one row per distance band.
+
+    3 rows (near / mid / far) × 2 columns (blur OFF / blur ON at per-surface optimal sigma).
+    All panels share a common y-axis so the effect of surface_pts is directly visible.
+    """
+    import pandas as pd
+
+    df = pd.DataFrame(records)
+    df["distance_m"] = df["heliostat_id"].map(heliostat_distances)
+    df["band"] = df["distance_m"].map(_assign_band)
+
+    bands = ["near", "mid", "far"]
+    surface_configs = sorted(df["surface_pts"].unique())
+
+    cmap = plt.cm.get_cmap("plasma", len(surface_configs))
+    colors = {sp: cmap(i) for i, sp in enumerate(surface_configs)}
+
+    # Use only n_rays values present in ALL surface configs so the x-axis is shared.
+    rays_per_surface = {sp: set(df[df["surface_pts"] == sp]["n_rays"].unique()) for sp in surface_configs}
+    common_rays = sorted(set.intersection(*rays_per_surface.values()))
+
+    fig, axes = plt.subplots(len(bands), 2, figsize=(12, 3.5 * len(bands)), sharey="row", sharex="col")
+    fig.suptitle("MSE vs #rays by surface resolution (common rays only)", fontsize=12)
+
+    for row, band in enumerate(bands):
+        for col, (sigma_label, get_sigma) in enumerate([
+            ("Blur OFF (σ=0)", lambda sp: 0.0),
+            ("Blur ON (per-surface optimal σ)", lambda sp: optimal_sigmas.get(sp, 0.0)),
+        ]):
+            ax = axes[row, col]
+            for sp in surface_configs:
+                sub = df[(df["surface_pts"] == sp) & (df["band"] == band) & (df["sigma"] == get_sigma(sp))]
+                if sub.empty:
+                    continue
+                means = sub.groupby("n_rays")["mse"].mean().reindex(common_rays)
+                stds  = sub.groupby("n_rays")["mse"].std().reindex(common_rays).fillna(0)
+                ax.plot(common_rays, means.values, marker="o", label=f"{sp}×{sp}",
+                        color=colors[sp])
+                ax.fill_between(common_rays,
+                                (means - stds).clip(lower=0).values,
+                                (means + stds).values,
+                                alpha=0.15, color=colors[sp])
+
+            if row == 0:
+                ax.set_title(sigma_label, fontsize=10)
+            if row == len(bands) - 1:
+                ax.set_xlabel("Number of rays")
+                ax.set_xticks(common_rays)
+            ax.set_ylabel(f"{_band_label(band)}\nMSE (peak-norm.)")
+            ax.legend(fontsize=8, loc="upper right")
+            ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+
+def plot_surface_pts_grid(
+    records: list[dict],
+    heliostat_distances: dict[str, float],
+    optimal_sigmas: dict[int, float],
+    output_path: pathlib.Path,
+) -> None:
+    """Figure 8: 4-panel heatmap (one per surface config) of n_rays × distance_band.
+
+    All panels share the same color scale so you can directly compare surface configs.
+    Each panel shows MSE at the per-surface optimal sigma.
+    """
+    import pandas as pd
+
+    df = pd.DataFrame(records)
+    df["distance_m"] = df["heliostat_id"].map(heliostat_distances)
+    df["band"] = df["distance_m"].map(_assign_band)
+
+    bands = ["near", "mid", "far"]
+    surface_configs = sorted(df["surface_pts"].unique())
+
+    # Compute grids for each surface config (at optimal sigma).
+    grids: dict[int, np.ndarray] = {}
+    rays_per_surface: dict[int, list] = {}
+    for sp in surface_configs:
+        sigma_val = optimal_sigmas.get(sp, 0.0)
+        sub = df[(df["surface_pts"] == sp) & (df["sigma"] == sigma_val)]
+        rays = sorted(sub["n_rays"].unique())
+        rays_per_surface[sp] = rays
+        grid = np.full((len(bands), len(rays)), np.nan)
+        for bi, band in enumerate(bands):
+            for ri, n in enumerate(rays):
+                cell = sub[(sub["band"] == band) & (sub["n_rays"] == n)]["mse"]
+                if not cell.empty:
+                    grid[bi, ri] = cell.mean()
+        grids[sp] = grid
+
+    # Shared color scale across all panels.
+    all_vals = np.concatenate([g.flatten() for g in grids.values()])
+    vmin, vmax = np.nanmin(all_vals), np.nanmax(all_vals)
+
+    n_cols = len(surface_configs)
+    fig, axes = plt.subplots(1, n_cols, figsize=(4.5 * n_cols, 4))
+    fig.suptitle(
+        "MSE (peak-norm.) at optimal blur sigma — shared color scale across all surface configs",
+        fontsize=11,
+    )
+
+    for ax, sp in zip(axes, surface_configs):
+        grid = grids[sp]
+        rays = rays_per_surface[sp]
+        sigma_val = optimal_sigmas.get(sp, 0.0)
+        im = ax.imshow(grid, aspect="auto", origin="upper",
+                       cmap="RdYlGn_r", vmin=vmin, vmax=vmax)
+        ax.set_title(f"{sp}×{sp} pts  (σ={sigma_val})", fontsize=10)
+        ax.set_xticks(range(len(rays)))
+        ax.set_xticklabels([str(r) for r in rays])
+        ax.set_xlabel("Number of rays")
+        ax.set_yticks(range(len(bands)))
+        ax.set_yticklabels([_band_label(b) for b in bands])
+
+        for bi in range(len(bands)):
+            for ri in range(len(rays)):
+                val = grid[bi, ri]
+                if not np.isnan(val):
+                    text_color = "white" if val < (vmin + vmax) / 2 else "black"
+                    ax.text(ri, bi, f"{val:.4f}", ha="center", va="center",
+                            fontsize=8, color=text_color)
+
+    # Shared colorbar on the right.
+    fig.colorbar(im, ax=axes[-1], label="MSE (peak-normalised)", shrink=0.8)
     plt.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=150, bbox_inches="tight")

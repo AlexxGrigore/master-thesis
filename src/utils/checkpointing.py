@@ -19,7 +19,7 @@ def save_kinematic_parameters(scenario: Scenario, output_path: pathlib.Path) -> 
     """
     all_params = {}
     for group_index, heliostat_group in enumerate(scenario.heliostat_field.heliostat_groups):
-        kinematic = heliostat_group.kinematic
+        kinematic = heliostat_group.kinematics
         group_entry = {
             "heliostat_names": heliostat_group.names,
             "translation_deviation_parameters": kinematic.translation_deviation_parameters.detach().cpu().tolist(),
@@ -58,7 +58,7 @@ def load_kinematic_parameters(scenario: Scenario, checkpoint_path: pathlib.Path,
             }
 
     for heliostat_group in scenario.heliostat_field.heliostat_groups:
-        kinematic = heliostat_group.kinematic
+        kinematic = heliostat_group.kinematics
 
         missing = [n for n in heliostat_group.names if n not in name_to_params]
         if missing:
