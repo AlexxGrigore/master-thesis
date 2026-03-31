@@ -90,11 +90,13 @@ BLUR_ABLATION_HELIOSTAT_IDS = frozenset({
 
 # Resolution configurations: (name, surface_pts_per_facet, n_rays)
 RESOLUTION_CONFIGS = [
-    ("low_10x5",    10,  5),
-    ("med_25x10",   25, 10),
-    ("med_25x20",   25, 20),
-    ("high_50x20",  50, 20),
-    ("best_75x20",  75, 20),
+    ("10x10_5rays",   10,  5),
+    ("10x10_10rays",  10, 10),
+    ("25x25_5rays",   25,  5),
+    ("25x25_10rays",  25, 10),
+    ("25x25_20rays",  25, 20),
+    ("50x50_5rays",   50,  5),
+    ("50x50_10rays",  50, 10),
 ]
 
 print(f"\nRunning on DAIC: {IS_ON_DAIC}")
@@ -218,12 +220,12 @@ print(f"Number of heliostat groups: {number_of_heliostat_groups}")
 PHASE1_OPT_CONFIG = {
     config_dictionary.initial_learning_rate: 1e-4,
     config_dictionary.tolerance: 1e-6,
-    config_dictionary.max_epoch: 11 if SMOKE_TEST else 100,
+    config_dictionary.max_epoch: 6 if SMOKE_TEST else 50,
     config_dictionary.batch_size: 8,
     config_dictionary.log_step: 5,
     config_dictionary.early_stopping_window: 10,
     config_dictionary.early_stopping_delta: 1e-5,
-    config_dictionary.early_stopping_patience: 200,  # > max_epoch → always runs fully
+    config_dictionary.early_stopping_patience: 100,  # > max_epoch → always runs fully
     config_dictionary.scheduler: config_dictionary.reduce_on_plateau,
     "scheduler_parameters": {
         config_dictionary.min: 1e-8,
@@ -237,7 +239,7 @@ PHASE1_OPT_CONFIG = {
 PHASE2_OPT_CONFIG = {
     config_dictionary.initial_learning_rate: 1e-5,
     config_dictionary.tolerance: 1e-8,
-    config_dictionary.max_epoch: 11 if SMOKE_TEST else 300,
+    config_dictionary.max_epoch: 6 if SMOKE_TEST else 200,
     config_dictionary.batch_size: 8,
     config_dictionary.log_step: 5,
     config_dictionary.early_stopping_window: 10,

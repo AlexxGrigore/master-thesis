@@ -30,6 +30,8 @@ from artist.scenario.scenario import Scenario
 from artist.util import config_dictionary, set_logger_config
 from artist.util.environment_setup import get_device, setup_distributed_environment
 from artist_extensions.kinematic_reconstructors import (
+    FirstJointRotationsReconstructor,
+    FirstJointRotationsPixelReconstructor,
     RotationsOnlyReconstructor,
     RotationsActuatorsReconstructor,
     RotationsTranslationsReconstructor,
@@ -39,10 +41,12 @@ from artist_extensions.kinematic_reconstructors import (
     RotationsActuatorsPixelReconstructor,
     RotationsTranslationsPixelReconstructor,
     FullStructuralPixelReconstructor,
+    SecondJointRotationsReconstructor,
+    SecondJointRotationsPixelReconstructor,
     WortbergPixelReconstructor,
 )
 from utils.evaluation import build_heliostat_data_mapping
-from experiment import plot_parameter_comparison, run_experiment
+from experiment import plot_parameter_comparison, run_experiment, save_parameter_deviation_summary
 
 # Set random seeds for reproducibility
 torch.manual_seed(42)
@@ -227,7 +231,7 @@ PHASE1_OPT_CONFIG = {
 PHASE2_OPT_CONFIG = {
     config_dictionary.initial_learning_rate: 1e-5,
     config_dictionary.tolerance: 1e-8,
-    config_dictionary.max_epoch: 6 if SMOKE_TEST else 300,
+    config_dictionary.max_epoch: 6 if SMOKE_TEST else 200,
     config_dictionary.batch_size: 8,
     config_dictionary.log_step: 5,
     config_dictionary.early_stopping_window: 10,
@@ -265,6 +269,14 @@ print(f"  lr={PHASE2_OPT_CONFIG[config_dictionary.initial_learning_rate]}, "
 # ===================================================================
 
 CONFIGS = [
+    ("0a_first_joint_only",
+     FirstJointRotationsReconstructor,
+     FirstJointRotationsPixelReconstructor,
+     False),
+    ("0b_second_joint_only",
+     SecondJointRotationsReconstructor,
+     SecondJointRotationsPixelReconstructor,
+     False),
     ("A_rotations_only",
      RotationsOnlyReconstructor,
      RotationsOnlyPixelReconstructor,
@@ -333,6 +345,14 @@ try:
         print("Generating comparison plots...")
         print("=" * 60)
         plot_parameter_comparison(all_metrics=all_metrics, output_dir=OUTPUT_DIR)
+
+        # ---- Parameter deviation summary ----
+        save_parameter_deviation_summary(
+            config_names=list(all_metrics.keys()),
+            scenario_path=SCENARIO_PATH,
+            output_dir=OUTPUT_DIR,
+            device=device,
+        )
 
 except Exception as e:
     print("\n" + "=" * 60)

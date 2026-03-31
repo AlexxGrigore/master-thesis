@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=blur_ablation
-#SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/blur_ablation_%j.log
-#SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/blur_ablation_%j.err
+#SBATCH --job-name=blur_ablation_sweep
+#SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/blur_ablation_sweep_out_%j.log
+#SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/blur_ablation_sweep_err_%j.log
 #SBATCH --time=0:01:24
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G

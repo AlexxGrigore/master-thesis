@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=kinematic_training_no_defl
-#SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/output_%j.log
-#SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/error_%j.log
+#SBATCH --job-name=no_defl_focal_spot
+#SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/no_defl_focal_spot_out_%j.log
+#SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/no_defl_focal_spot_err_%j.log
 #SBATCH --time=1:31:36
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G

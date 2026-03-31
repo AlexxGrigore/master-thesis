@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=kinematic_training
-#SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/output_%j.log
-#SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/error_%j.log
+#SBATCH --job-name=focal_spot
+#SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/focal_spot_out_%j.log
+#SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/focal_spot_err_%j.log
 #SBATCH --time=1:32:30
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G

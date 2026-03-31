@@ -344,6 +344,8 @@ def run_experiment(
 # ---------------------------------------------------------------------------
 
 _CONFIG_COLORS = [
+    "#607D8B",  # 0a — blue-grey
+    "#795548",  # 0b — brown
     "#2196F3",  # A — blue
     "#FF9800",  # B — orange
     "#4CAF50",  # C — green
@@ -525,3 +527,130 @@ def plot_parameter_comparison(
     plt.tight_layout()
     plt.savefig(comp_dir / "comparison_field_map.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+
+def save_parameter_deviation_summary(
+    config_names: list[str],
+    scenario_path: pathlib.Path,
+    output_dir: pathlib.Path,
+    device: torch.device,
+) -> None:
+    """
+    For each config, compare final kinematic parameters against the fresh
+    scenario (initial values) and save a JSON showing which params moved.
+
+    Output: output_dir/comparison/parameter_deviation_summary.json
+    """
+    from artist.util import index_mapping as idx
+
+    # Load fresh scenario to get initial values.
+    with h5py.File(scenario_path, "r") as f:
+        scenario_init = Scenario.load_scenario_from_hdf5(
+            scenario_file=f, device=device,
+            number_of_surface_points_per_facet=torch.tensor([25, 25]),
+        )
+
+    # Snapshot initial values (first group — single-group scenario).
+    hg0 = scenario_init.heliostat_field.heliostat_groups[0]
+    kin0 = hg0.kinematics
+    init_translation = kin0.translation_deviation_parameters.detach().cpu()
+    init_rotation = kin0.rotation_deviation_parameters.detach().cpu()
+    init_act_angle = kin0.actuators.optimizable_parameters[:, idx.actuator_initial_angle, :].detach().cpu()
+    init_act_offset = kin0.actuators.non_optimizable_parameters[:, idx.actuator_offset, :].detach().cpu()
+
+    translation_names = [
+        "joint1_trans_e", "joint1_trans_n", "joint1_trans_u",
+        "joint2_trans_e", "joint2_trans_n", "joint2_trans_u",
+        "conc_trans_e",   "conc_trans_n",   "conc_trans_u",
+    ]
+    rotation_names = [
+        "joint1_tilt_n", "joint1_tilt_u",
+        "joint2_tilt_e", "joint2_tilt_n",
+    ]
+
+    summary = {}
+    for config_name in config_names:
+        params_file = output_dir / config_name / "all_kinematic_parameters.json"
+        if not params_file.exists():
+            log.warning(f"Missing {params_file}, skipping.")
+            continue
+
+        with open(params_file) as f:
+            saved = json.load(f)
+
+        # Reconstruct tensors from the saved JSON (first group).
+        group_data = saved["group_0"]
+        final_translation = torch.tensor(group_data["translation_deviation_parameters"])
+        final_rotation = torch.tensor(group_data["rotation_deviation_parameters"])
+        final_act_opt = torch.tensor(group_data["actuator_optimizable_parameters"])
+        final_act_nonopt = torch.tensor(group_data["actuator_nonoptimizable_parameters"])
+        final_act_angle = final_act_opt[:, idx.actuator_initial_angle, :]
+        final_act_offset = final_act_nonopt[:, idx.actuator_offset, :]
+
+        # Compute deviations from initial.
+        d_trans = (final_translation - init_translation).abs()
+        d_rot = (final_rotation - init_rotation).abs()
+        d_angle = (final_act_angle - init_act_angle).abs()
+        d_offset = (final_act_offset - init_act_offset).abs()
+
+        has_base_pos = "base_position_deviation_parameters" in group_data
+        base_pos_stats = None
+        if has_base_pos:
+            base_pos = torch.tensor(group_data["base_position_deviation_parameters"])
+            # Initial is always 0 (injected fresh each run).
+            base_pos_stats = {
+                "mean_abs_deviation": [round(base_pos[:, i].abs().mean().item(), 8) for i in range(3)],
+                "max_abs_deviation":  [round(base_pos[:, i].abs().max().item(), 8) for i in range(3)],
+                "names": ["base_pos_e", "base_pos_n", "base_pos_u"],
+            }
+
+        entry = {
+            "translation_deviation": {
+                "mean_abs_deviation": [round(d_trans[:, i].mean().item(), 8) for i in range(9)],
+                "max_abs_deviation":  [round(d_trans[:, i].max().item(), 8) for i in range(9)],
+                "names": translation_names,
+            },
+            "rotation_deviation": {
+                "mean_abs_deviation": [round(d_rot[:, i].mean().item(), 8) for i in range(4)],
+                "max_abs_deviation":  [round(d_rot[:, i].max().item(), 8) for i in range(4)],
+                "names": rotation_names,
+            },
+            "actuator_initial_angle": {
+                "mean_abs_deviation": [round(d_angle[:, i].mean().item(), 8) for i in range(d_angle.shape[1])],
+                "max_abs_deviation":  [round(d_angle[:, i].max().item(), 8) for i in range(d_angle.shape[1])],
+                "names": [f"actuator_{i}" for i in range(d_angle.shape[1])],
+            },
+            "actuator_offset": {
+                "mean_abs_deviation": [round(d_offset[:, i].mean().item(), 8) for i in range(d_offset.shape[1])],
+                "max_abs_deviation":  [round(d_offset[:, i].max().item(), 8) for i in range(d_offset.shape[1])],
+                "names": [f"actuator_{i}" for i in range(d_offset.shape[1])],
+            },
+        }
+        if base_pos_stats:
+            entry["base_position_deviation"] = base_pos_stats
+
+        # Flag which parameter groups actually moved (mean_abs > 1e-7).
+        moved = []
+        param_group_keys = [
+            "translation_deviation", "rotation_deviation",
+            "actuator_initial_angle", "actuator_offset",
+        ]
+        if base_pos_stats:
+            param_group_keys.append("base_position_deviation")
+        for group_key in param_group_keys:
+            group_val = entry[group_key]
+            for name, val in zip(group_val["names"], group_val["mean_abs_deviation"]):
+                if val > 1e-7:
+                    moved.append(f"{group_key}/{name}")
+        entry["parameters_that_moved"] = moved
+        entry["num_params_moved"] = len(moved)
+
+        summary[config_name] = entry
+
+    comp_dir = output_dir / "comparison"
+    comp_dir.mkdir(parents=True, exist_ok=True)
+    out_path = comp_dir / "parameter_deviation_summary.json"
+    with open(out_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    log.info(f"Saved parameter deviation summary to {out_path}")
+    print(f"Saved parameter deviation summary to {out_path}")

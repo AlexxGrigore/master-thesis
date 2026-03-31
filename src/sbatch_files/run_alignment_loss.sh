@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=kinematic_training
-#SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/output_%j.log
-#SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/error_%j.log
+#SBATCH --job-name=alignment
+#SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/alignment_out_%j.log
+#SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/alignment_err_%j.log
 #SBATCH --time=1:02:17
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G

@@ -637,6 +637,68 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
 # reconstructor families.
 # ---------------------------------------------------------------------------
 
+class _SingleAxisRotationMixin:
+    """Optimizer mixin: only a subset of rotation_deviation_parameters are optimised.
+
+    Subclasses set ``_ROTATION_INDICES`` to select which of the 4 rotation
+    deviations receive gradients.  All other parameters (translations,
+    actuators, base position) are frozen.
+    """
+
+    _ROTATION_INDICES: tuple[int, ...] = ()  # override in subclasses
+
+    def _setup_optimizer(self, heliostat_group, device):
+        kinematic = heliostat_group.kinematics
+        kinematic.rotation_deviation_parameters.requires_grad_()
+
+        # Mask gradients to the selected rotation indices only.
+        active = set(self._ROTATION_INDICES)
+
+        def _mask_rotation_grad(grad: torch.Tensor) -> torch.Tensor:
+            mask = torch.zeros_like(grad)
+            for idx in active:
+                mask[:, idx] = 1.0
+            return grad * mask
+
+        kinematic.rotation_deviation_parameters.register_hook(_mask_rotation_grad)
+
+        # Snapshot nominals — required by parent _apply_deviation_bounds.
+        if not hasattr(kinematic, "_initial_actuator_initial_angle"):
+            kinematic._initial_actuator_initial_angle = (
+                kinematic.actuators.optimizable_parameters[
+                    :, index_mapping.actuator_initial_angle, :
+                ].detach().clone()
+            )
+            kinematic._initial_actuator_offset = (
+                kinematic.actuators.non_optimizable_parameters[
+                    :, index_mapping.actuator_offset, :
+                ].detach().clone()
+            )
+        if not hasattr(kinematic, "_initial_translation_deviation"):
+            kinematic._initial_translation_deviation = (
+                kinematic.translation_deviation_parameters.detach().clone()
+            )
+        initial_actuator_initial_angle = kinematic._initial_actuator_initial_angle
+        initial_actuator_offset = kinematic._initial_actuator_offset
+
+        base_lr = float(self.optimization_configuration[config_dictionary.initial_learning_rate])
+        optimizer = torch.optim.Adam(
+            [{"params": kinematic.rotation_deviation_parameters, "lr": base_lr}],
+            lr=base_lr,
+        )
+        return optimizer, initial_actuator_initial_angle, initial_actuator_offset
+
+
+class _FirstJointRotationsOnlyMixin(_SingleAxisRotationMixin):
+    """Optimizer mixin: only first joint tilts (elevation axis) — indices 0, 1."""
+    _ROTATION_INDICES = (0, 1)
+
+
+class _SecondJointRotationsOnlyMixin(_SingleAxisRotationMixin):
+    """Optimizer mixin: only second joint tilts (azimuth axis) — indices 2, 3."""
+    _ROTATION_INDICES = (2, 3)
+
+
 class _RotationsOnlyMixin:
     """Optimizer mixin: only rotation_deviation_parameters are optimised."""
 
@@ -776,6 +838,23 @@ class RotationsOnlyReconstructor(_RotationsOnlyMixin, WortbergKinematicReconstru
     """
 
 
+class FirstJointRotationsReconstructor(_FirstJointRotationsOnlyMixin, WortbergKinematicReconstructor):
+    """
+    Config 0a: only first joint tilts (elevation axis, 2 params) are optimised.
+
+    Even more minimal than Config A — tests whether the elevation axis alone
+    can explain the tracking error.
+    """
+
+
+class SecondJointRotationsReconstructor(_SecondJointRotationsOnlyMixin, WortbergKinematicReconstructor):
+    """
+    Config 0b: only second joint tilts (azimuth axis, 2 params) are optimised.
+
+    Counterpart to 0a — tests whether the azimuth axis alone is sufficient.
+    """
+
+
 class RotationsActuatorsReconstructor(_RotationsActuatorsMixin, WortbergKinematicReconstructor):
     """
     Config B: ``rotation_deviation_parameters`` + actuator params (aᵢ, cᵢ).
@@ -907,6 +986,18 @@ class WortbergPixelReconstructor(WortbergKinematicReconstructor):
 class RotationsOnlyPixelReconstructor(_RotationsOnlyMixin, WortbergPixelReconstructor):
     """
     Config A (pixel): only ``rotation_deviation_parameters`` optimised, pixel loss.
+    """
+
+
+class FirstJointRotationsPixelReconstructor(_FirstJointRotationsOnlyMixin, WortbergPixelReconstructor):
+    """
+    Config 0a (pixel): only first joint tilts (elevation axis, 2 params), pixel loss.
+    """
+
+
+class SecondJointRotationsPixelReconstructor(_SecondJointRotationsOnlyMixin, WortbergPixelReconstructor):
+    """
+    Config 0b (pixel): only second joint tilts (azimuth axis, 2 params), pixel loss.
     """
 
 

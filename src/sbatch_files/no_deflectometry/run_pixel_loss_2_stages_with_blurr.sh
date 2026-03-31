@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=kinematic_training_no_defl
-#SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/output_%j.log
-#SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/error_%j.log
+#SBATCH --job-name=no_defl_pixel_blurr
+#SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/no_defl_pixel_blurr_out_%j.log
+#SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/no_defl_pixel_blurr_err_%j.log
 #SBATCH --time=2:05:56
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G

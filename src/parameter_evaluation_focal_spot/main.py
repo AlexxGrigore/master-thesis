@@ -32,14 +32,16 @@ from artist.scenario.scenario import Scenario
 from artist.util import config_dictionary, set_logger_config
 from artist.util.environment_setup import get_device, setup_distributed_environment
 from artist_extensions.kinematic_reconstructors import (
+    FirstJointRotationsReconstructor,
     FullStructuralReconstructor,
     RotationsActuatorsReconstructor,
     RotationsOnlyReconstructor,
     RotationsTranslationsReconstructor,
+    SecondJointRotationsReconstructor,
     WortbergKinematicReconstructor,
 )
 from utils.evaluation import build_heliostat_data_mapping
-from experiment import plot_parameter_comparison, run_experiment
+from experiment import plot_parameter_comparison, run_experiment, save_parameter_deviation_summary
 
 # Set random seeds for reproducibility
 torch.manual_seed(42)
@@ -227,6 +229,8 @@ for key, value in optimization_configuration.items():
 # ===================================================================
 
 CONFIGS = [
+    ("0a_first_joint_only",          FirstJointRotationsReconstructor,      False),
+    ("0b_second_joint_only",         SecondJointRotationsReconstructor,     False),
     ("A_rotations_only",             RotationsOnlyReconstructor,            False),
     ("B_rotations_actuators",        RotationsActuatorsReconstructor,       False),
     ("C_rotations_translations",     RotationsTranslationsReconstructor,    False),
@@ -276,6 +280,14 @@ try:
         print("Generating comparison plots...")
         print("=" * 60)
         plot_parameter_comparison(all_metrics=all_metrics, output_dir=OUTPUT_DIR)
+
+        # ---- Parameter deviation summary ----
+        save_parameter_deviation_summary(
+            config_names=list(all_metrics.keys()),
+            scenario_path=SCENARIO_PATH,
+            output_dir=OUTPUT_DIR,
+            device=device,
+        )
 
 except Exception as e:
     print("\n" + "=" * 60)
