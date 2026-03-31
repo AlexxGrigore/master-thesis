@@ -60,7 +60,10 @@ if IS_ON_DAIC:
 else:
     BASE_DIR = pathlib.Path(__file__).parent.parent.parent
 
-PAINT_DIR = BASE_DIR / "datasets" / "paint"
+if IS_ON_DAIC:
+    PAINT_DIR = pathlib.Path("/tudelft.net/staff-umbrella/StudentsCVlab/agrigore/datasets/paint")
+else:
+    PAINT_DIR = BASE_DIR / "datasets" / "paint"
 
 BENCHMARK_NAME = "benchmark_split-balanced_train-10_validation-30"
 SCENARIO_PATH = (
