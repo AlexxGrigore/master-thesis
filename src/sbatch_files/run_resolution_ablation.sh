@@ -2,7 +2,7 @@
 #SBATCH --job-name=resolution_ablation
 #SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/resolution_ablation_out_%j.log
 #SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/resolution_ablation_err_%j.log
-#SBATCH --time=3:00:00
+#SBATCH --time=5:00:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:a40:1
