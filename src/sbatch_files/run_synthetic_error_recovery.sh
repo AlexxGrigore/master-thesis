@@ -2,7 +2,7 @@
 #SBATCH --job-name=recovery_benchmark
 #SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/recovery_benchmark_out_%j.log
 #SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/recovery_benchmark_err_%j.log
-#SBATCH --time=3:00:00
+#SBATCH --time=4:00:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:a40:1
