@@ -270,9 +270,18 @@ def evaluate_tracking_accuracy(
             device=device,
         )
 
-        target_centers = scenario.target_areas.centers[target_area_mask]
-        target_widths = scenario.target_areas.dimensions[target_area_mask][:, index_mapping.target_area_width]
-        target_heights = scenario.target_areas.dimensions[target_area_mask][:, index_mapping.target_area_height]
+        # The RestrictedDistributedSampler truncates to floor(total/N_unique)*N_unique
+        # when total samples are not evenly divisible by the number of unique heliostats
+        # (e.g. EVAL_SAMPLE_LIMIT=30 but some heliostats have fewer images).
+        # predicted_flux therefore has fewer rows than target_area_mask.
+        # Use get_sampler_indices() to subset everything to the actually-traced instances.
+        sample_indices = ray_tracer.get_sampler_indices()
+        target_area_mask_sampled = target_area_mask[sample_indices]
+        focal_spots_measured_sampled = focal_spots_measured[sample_indices]
+
+        target_centers = scenario.target_areas.centers[target_area_mask_sampled]
+        target_widths = scenario.target_areas.dimensions[target_area_mask_sampled][:, index_mapping.target_area_width]
+        target_heights = scenario.target_areas.dimensions[target_area_mask_sampled][:, index_mapping.target_area_height]
         focal_spots_predicted = get_center_of_mass(
             bitmaps=predicted_flux,
             target_centers=target_centers,
@@ -282,7 +291,7 @@ def evaluate_tracking_accuracy(
         )
 
         focal_spot_error_m = torch.norm(
-            focal_spots_predicted[:, :3] - focal_spots_measured[:, :3], dim=1
+            focal_spots_predicted[:, :3] - focal_spots_measured_sampled[:, :3], dim=1
         )
         all_errors_m.extend(focal_spot_error_m.cpu().tolist())
 

@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=recovery_benchmark
-#SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/recovery_benchmark_out_%j.log
-#SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/recovery_benchmark_err_%j.log
-#SBATCH --time=2:00:00
+#SBATCH --job-name=artist_baseline
+#SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/artist_baseline_out_%j.log
+#SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/artist_baseline_err_%j.log
+#SBATCH --time=1:00:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:a40:1
@@ -14,4 +14,4 @@ cd /home/nfs/agrigore/projects/githubProjects/master-thesis/src
 apptainer exec --nv \
     --bind /tudelft.net:/tudelft.net \
     /tudelft.net/staff-umbrella/StudentsCVlab/agrigore/artist-local.sif \
-    python experiments/synthetic_error_recovery/main.py
+    python experiments/default_artist_focal_spot_kr/main.py

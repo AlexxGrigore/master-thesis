@@ -236,7 +236,39 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                     loss = loss_per_heliostat.mean()
                     loss.backward()
 
-                    # Capture gradient magnitudes before optimizer clears them.
+                    # DDP nested: reduce gradients across ranks within the heliostat group,
+                    # then divide by group world size (mirrors ARTIST KinematicsReconstructor).
+                    if self.ddp_setup[config_dictionary.is_nested]:
+                        for param_group in optimizer.param_groups:
+                            for param in param_group["params"]:
+                                if param.grad is not None:
+                                    param.grad = (
+                                        torch.distributed.nn.functional.all_reduce(
+                                            param.grad,
+                                            op=torch.distributed.ReduceOp.SUM,
+                                            group=self.ddp_setup[
+                                                config_dictionary.process_subgroup
+                                            ],
+                                        )
+                                    )
+                                    param.grad /= self.ddp_setup[
+                                        config_dictionary.heliostat_group_world_size
+                                    ]
+
+                    # Gradient clipping — keeps large-scale parameters (translations,
+                    # base position) from taking destabilizing steps, matching the
+                    # max_norm=1.0 used in ARTIST's base KinematicsReconstructor.
+                    _clip_params = [
+                        kinematic.translation_deviation_parameters,
+                        kinematic.rotation_deviation_parameters,
+                        kinematic.actuators.optimizable_parameters,
+                        kinematic.actuators.non_optimizable_parameters,
+                    ]
+                    if self.train_position_deviation and hasattr(kinematic, "_base_position_deviation"):
+                        _clip_params.append(kinematic._base_position_deviation)
+                    torch.nn.utils.clip_grad_norm_(_clip_params, max_norm=1.0)
+
+                    # Capture gradient magnitudes after clipping, before optimizer clears them.
                     def _grad_mean(t: torch.Tensor) -> float:
                         return t.grad.abs().mean().item() if t.grad is not None else 0.0
 
