@@ -116,8 +116,9 @@ def evaluate_flux_accuracy(
     Evaluate flux image prediction accuracy after kinematic reconstruction.
 
     Returns a dict with min/mean/median/max focal spot errors in mrad, the
-    sample count, per-heliostat mrad errors, and the raw error list (needed
-    for histogram plotting but not persisted to JSON).
+    sample count, per-heliostat mrad errors, and the raw error list. Callers
+    can persist the raw error list when they need downstream histogram or
+    distribution analysis.
     """
     all_focal_spot_errors_m = []
     all_focal_spot_errors_mrad = []
@@ -250,7 +251,7 @@ def evaluate_flux_accuracy(
         "num_samples_evaluated": len(all_focal_spot_errors_m),
         "num_nan_samples": num_nan_samples,
         "nan_heliostat_ids": sorted(nan_heliostat_ids),
-        "all_errors_mrad": all_focal_spot_errors_mrad,  # kept in memory for histogram; not saved to JSON
+        "all_errors_mrad": all_focal_spot_errors_mrad,
         "per_heliostat": results_per_heliostat,
     }
 
