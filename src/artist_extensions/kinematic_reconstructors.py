@@ -160,6 +160,9 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                     else self.optimization_configuration[config_dictionary.log_step]
                 )
 
+                # Cache parsed eval data once so we avoid re-loading PNG files every epoch.
+                _eval_cache = self._parse_eval_data_for_group(heliostat_group, device)
+
                 while (
                     loss > float(self.optimization_configuration[config_dictionary.tolerance])
                     and epoch <= self.optimization_configuration[config_dictionary.max_epoch]
@@ -172,7 +175,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
 
                     kinematic = heliostat_group.kinematics
 
-                    if self.train_position_deviation:
+                    if self.train_position_deviation and hasattr(kinematic, "_base_position_deviation"):
                         # Inject base position deviation into the active positions that
                         # ARTIST just set.  We overwrite with a new tensor (no in-place op)
                         # so autograd traces through repeat_interleave → _base_position_deviation.
@@ -232,6 +235,20 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
 
                     loss = loss_per_heliostat.mean()
                     loss.backward()
+
+                    # Capture gradient magnitudes before optimizer clears them.
+                    def _grad_mean(t: torch.Tensor) -> float:
+                        return t.grad.abs().mean().item() if t.grad is not None else 0.0
+
+                    grad_rotation = _grad_mean(kinematic.rotation_deviation_parameters)
+                    grad_act_angle = _grad_mean(kinematic.actuators.optimizable_parameters)
+                    grad_act_offset = _grad_mean(kinematic.actuators.non_optimizable_parameters)
+                    grad_base_pos = (
+                        _grad_mean(kinematic._base_position_deviation)
+                        if self.train_position_deviation and hasattr(kinematic, "_base_position_deviation")
+                        else 0.0
+                    )
+
                     optimizer.step()
 
                     self._apply_deviation_bounds(
@@ -240,8 +257,13 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                         initial_actuator_offset,
                     )
 
+                    # Eval every epoch from cached parsed data (no PNG re-loading).
+                    eval_loss = self._compute_eval_loss_from_cache(
+                        _eval_cache, heliostat_group, loss_definition, device
+                    )
+
                     if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                        scheduler.step(loss.detach())
+                        scheduler.step(eval_loss if eval_loss is not None else loss.detach())
                     else:
                         scheduler.step()
 
@@ -253,6 +275,8 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                             f"LR: {optimizer.param_groups[index_mapping.optimizer_param_group_0]['lr']}, "
                             f"GPU mem: {mem_alloc:.2f} GB (peak: {mem_peak:.2f} GB)"
                         )
+                        if eval_loss is not None:
+                            log.info(f"Rank: {rank}, Epoch: {epoch}, Eval Loss: {eval_loss:.6f}")
                         entry = {
                             "epoch": epoch,
                             "group": heliostat_group_index,
@@ -267,15 +291,17 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                                 kinematic.actuators.non_optimizable_parameters[:, index_mapping.actuator_offset, :]
                                 - initial_actuator_offset
                             ).abs().mean().item(),
+                            "grad_rotation": grad_rotation,
+                            "grad_act_angle": grad_act_angle,
+                            "grad_act_offset": grad_act_offset,
+                            "grad_base_pos": grad_base_pos,
                         }
-                        if self.train_position_deviation:
+                        if self.train_position_deviation and hasattr(kinematic, "_base_position_deviation"):
                             entry["base_pos_dev_e_mean_abs"] = kinematic._base_position_deviation[:, 0].abs().mean().item()
                             entry["base_pos_dev_n_mean_abs"] = kinematic._base_position_deviation[:, 1].abs().mean().item()
                             entry["base_pos_dev_u_mean_abs"] = kinematic._base_position_deviation[:, 2].abs().mean().item()
-                        eval_loss = self._compute_eval_loss_no_grad(heliostat_group, loss_definition, device)
                         if eval_loss is not None:
                             entry["eval_loss"] = eval_loss
-                            log.info(f"Rank: {rank}, Epoch: {epoch}, Eval Loss: {eval_loss:.6f}")
                         self._convergence_history.append(entry)
 
                     if early_stopper.step(loss):
@@ -313,7 +339,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                 torch.distributed.broadcast(
                     heliostat_group.kinematics.actuators.non_optimizable_parameters, src=src
                 )
-                if self.train_position_deviation:
+                if self.train_position_deviation and hasattr(heliostat_group.kinematics, "_base_position_deviation"):
                     torch.distributed.broadcast(
                         heliostat_group.kinematics._base_position_deviation, src=src
                     )
@@ -592,6 +618,97 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
         )
         return loss_per_heliostat.mean().item()
 
+    def _parse_eval_data_for_group(self, heliostat_group, device):
+        """Load and return eval tensors once — avoids re-reading PNG files every epoch.
+
+        Returns a tuple (measured_flux, focal_spots_measured, incident_ray_directions,
+        active_mask, target_mask), or None if no eval_data was configured.
+        """
+        if self.eval_data is None:
+            return None
+        eval_parser = self.eval_data["data_parser"]
+        eval_mapping = self.eval_data["heliostat_data_mapping"]
+        (
+            measured_flux,
+            focal_spots_measured,
+            incident_ray_directions,
+            _,
+            active_mask,
+            target_mask,
+        ) = eval_parser.parse_data_for_reconstruction(
+            heliostat_data_mapping=eval_mapping,
+            heliostat_group=heliostat_group,
+            scenario=self.scenario,
+            device=device,
+        )
+        if active_mask.sum() == 0:
+            return None
+        return measured_flux, focal_spots_measured, incident_ray_directions, active_mask, target_mask
+
+    def _compute_eval_loss_from_cache(self, eval_cache, heliostat_group, loss_definition, device) -> float | None:
+        """Compute eval loss using pre-parsed tensors (no PNG re-loading).
+
+        Parameters are read from the current state of heliostat_group, so this
+        correctly reflects the latest optimised values each epoch.
+        """
+        if eval_cache is None:
+            return None
+        measured_flux, focal_spots_measured, incident_ray_directions, active_mask, target_mask = eval_cache
+
+        with torch.no_grad():
+            heliostat_group.activate_heliostats(active_heliostats_mask=active_mask, device=device)
+            kinematic = heliostat_group.kinematics
+
+            if self.train_position_deviation and hasattr(kinematic, "_base_position_deviation"):
+                active_base_dev = kinematic._base_position_deviation.repeat_interleave(active_mask, dim=0)
+                pad = torch.zeros(active_base_dev.shape[0], 1, device=device)
+                kinematic.active_heliostat_positions = (
+                    kinematic.active_heliostat_positions + torch.cat([active_base_dev, pad], dim=1)
+                )
+
+            heliostat_group.align_surfaces_with_incident_ray_directions(
+                aim_points=self.scenario.target_areas.centers[target_mask],
+                incident_ray_directions=incident_ray_directions,
+                active_heliostats_mask=active_mask,
+                device=device,
+            )
+
+            ray_tracer = HeliostatRayTracer(
+                scenario=self.scenario,
+                heliostat_group=heliostat_group,
+                blocking_active=False,
+                world_size=self.ddp_setup[config_dictionary.heliostat_group_world_size],
+                rank=self.ddp_setup[config_dictionary.heliostat_group_rank],
+                batch_size=self.optimization_configuration[config_dictionary.batch_size],
+                random_seed=self.ddp_setup[config_dictionary.heliostat_group_rank],
+            )
+            flux = ray_tracer.trace_rays(
+                incident_ray_directions=incident_ray_directions,
+                active_heliostats_mask=active_mask,
+                target_area_indices=target_mask,
+                device=device,
+            )
+            sample_indices = ray_tracer.get_sampler_indices()
+            n_samples = int(active_mask.sum() / (active_mask > 0).sum())
+
+            ground_truth, reduction_dims = self._get_ground_truth_and_reduction_dims(
+                measured_flux, focal_spots_measured
+            )
+            flux_eval, gt_eval = self._preprocess_eval_flux(flux, ground_truth)
+
+            loss_per_sample = loss_definition(
+                prediction=flux_eval,
+                ground_truth=gt_eval[sample_indices],
+                target_area_indices=target_mask[sample_indices],
+                reduction_dimensions=reduction_dims,
+                device=device,
+            )
+            loss_per_heliostat = core_utils.mean_loss_per_heliostat(
+                loss_per_sample=loss_per_sample,
+                number_of_samples_per_heliostat=n_samples,
+            )
+            return loss_per_heliostat.mean().item()
+
     def _apply_deviation_bounds(self, heliostat_group, initial_actuator_initial_angle, initial_actuator_offset):
         """
         Clamp all optimised parameters to their Table 5.3 deviation bounds.
@@ -621,7 +738,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                 initial_actuator_offset - self._BOUND_ACTUATOR_OFFSET_M,
                 initial_actuator_offset + self._BOUND_ACTUATOR_OFFSET_M,
             )
-            if self.train_position_deviation:
+            if self.train_position_deviation and hasattr(kinematic, "_base_position_deviation"):
                 kinematic._base_position_deviation.data.clamp_(
                     -self._BOUND_BASE_POSITION_M, self._BOUND_BASE_POSITION_M
                 )
@@ -837,6 +954,10 @@ class RotationsOnlyReconstructor(_RotationsOnlyMixin, WortbergKinematicReconstru
     Use this as the minimal structural baseline.
     """
 
+    def __init__(self, *args, **kwargs):
+        kwargs["train_position_deviation"] = False
+        super().__init__(*args, **kwargs)
+
 
 class FirstJointRotationsReconstructor(_FirstJointRotationsOnlyMixin, WortbergKinematicReconstructor):
     """
@@ -846,6 +967,10 @@ class FirstJointRotationsReconstructor(_FirstJointRotationsOnlyMixin, WortbergKi
     can explain the tracking error.
     """
 
+    def __init__(self, *args, **kwargs):
+        kwargs["train_position_deviation"] = False
+        super().__init__(*args, **kwargs)
+
 
 class SecondJointRotationsReconstructor(_SecondJointRotationsOnlyMixin, WortbergKinematicReconstructor):
     """
@@ -853,6 +978,10 @@ class SecondJointRotationsReconstructor(_SecondJointRotationsOnlyMixin, Wortberg
 
     Counterpart to 0a — tests whether the azimuth axis alone is sufficient.
     """
+
+    def __init__(self, *args, **kwargs):
+        kwargs["train_position_deviation"] = False
+        super().__init__(*args, **kwargs)
 
 
 class RotationsActuatorsReconstructor(_RotationsActuatorsMixin, WortbergKinematicReconstructor):
@@ -862,6 +991,10 @@ class RotationsActuatorsReconstructor(_RotationsActuatorsMixin, WortbergKinemati
     Translations and base position are frozen.
     """
 
+    def __init__(self, *args, **kwargs):
+        kwargs["train_position_deviation"] = False
+        super().__init__(*args, **kwargs)
+
 
 class RotationsTranslationsReconstructor(_RotationsTranslationsMixin, WortbergKinematicReconstructor):
     """
@@ -870,6 +1003,10 @@ class RotationsTranslationsReconstructor(_RotationsTranslationsMixin, WortbergKi
     Actuators and base position are frozen.
     Translations use 5× the base LR (large-scale params, same as Wortberg).
     """
+
+    def __init__(self, *args, **kwargs):
+        kwargs["train_position_deviation"] = False
+        super().__init__(*args, **kwargs)
 
 
 class FullStructuralReconstructor(WortbergKinematicReconstructor):
@@ -882,6 +1019,51 @@ class FullStructuralReconstructor(WortbergKinematicReconstructor):
 
     def __init__(self, *args, **kwargs):
         kwargs["train_position_deviation"] = False
+        super().__init__(*args, **kwargs)
+
+
+class _RotationsActuatorsBasePosMixin(_RotationsActuatorsMixin):
+    """Optimizer mixin: rotations + actuators (aᵢ, cᵢ) + base position.
+
+    Translations are frozen. Base position deviation (δe, δn, δu) is trained.
+    This is the largest parameter set that excludes the poorly-identifiable
+    translation_deviation_parameters.
+    """
+
+    def _setup_optimizer(self, heliostat_group, device):
+        # Delegate the rotation + actuator setup to the parent mixin.
+        optimizer, initial_actuator_initial_angle, initial_actuator_offset = (
+            super()._setup_optimizer(heliostat_group, device)
+        )
+        kinematic = heliostat_group.kinematics
+
+        # Initialise (or re-enable) base position deviation.
+        if hasattr(kinematic, "_base_position_deviation"):
+            kinematic._base_position_deviation = (
+                kinematic._base_position_deviation.detach().requires_grad_(True)
+            )
+        else:
+            kinematic._base_position_deviation = torch.zeros(
+                kinematic.number_of_heliostats, 3, device=device, requires_grad=True
+            )
+
+        base_lr = float(self.optimization_configuration[config_dictionary.initial_learning_rate])
+        optimizer.add_param_group(
+            {"params": kinematic._base_position_deviation, "lr": base_lr * 5.0}
+        )
+        return optimizer, initial_actuator_initial_angle, initial_actuator_offset
+
+
+class RotationsActuatorsBasePosReconstructor(_RotationsActuatorsBasePosMixin, WortbergKinematicReconstructor):
+    """
+    Config C (no-translation variant): rotations + actuators (aᵢ, cᵢ) + base position (11 params).
+
+    Translations are excluded. This is the recommended full config when translations
+    are found to be non-identifiable from focal-spot data.
+    """
+
+    def __init__(self, *args, **kwargs):
+        kwargs["train_position_deviation"] = True
         super().__init__(*args, **kwargs)
 
 
@@ -1205,7 +1387,7 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
                 )
                 kinematic = heliostat_group.kinematics
 
-                if self.train_position_deviation:
+                if self.train_position_deviation and hasattr(kinematic, "_base_position_deviation"):
                     active_base_dev = kinematic._base_position_deviation.repeat_interleave(
                         active_heliostats_mask, dim=0
                     )
@@ -1275,7 +1457,7 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
                             - initial_actuator_offset
                         ).abs().mean().item(),
                     }
-                    if self.train_position_deviation:
+                    if self.train_position_deviation and hasattr(kinematic, "_base_position_deviation"):
                         entry["base_pos_dev_e_mean_abs"] = kinematic._base_position_deviation[:, 0].abs().mean().item()
                         entry["base_pos_dev_n_mean_abs"] = kinematic._base_position_deviation[:, 1].abs().mean().item()
                         entry["base_pos_dev_u_mean_abs"] = kinematic._base_position_deviation[:, 2].abs().mean().item()
@@ -1314,7 +1496,7 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
                 torch.distributed.broadcast(
                     heliostat_group.kinematics.actuators.non_optimizable_parameters, src=src
                 )
-                if self.train_position_deviation:
+                if self.train_position_deviation and hasattr(heliostat_group.kinematics, "_base_position_deviation"):
                     torch.distributed.broadcast(
                         heliostat_group.kinematics._base_position_deviation, src=src
                     )
