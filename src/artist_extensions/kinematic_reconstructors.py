@@ -974,6 +974,92 @@ class _RotationsTranslationsMixin:
         return optimizer, initial_actuator_initial_angle, initial_actuator_offset
 
 
+class NoParametersReconstructor(WortbergKinematicReconstructor):
+    """
+    Sanity-check reconstructor: run the full training loop with all kinematic parameters frozen.
+
+    A single dummy scalar is optimized so backward, scheduler, and optimizer logic still execute.
+    If any kinematic parameter changes in this configuration, the change comes from leakage
+    elsewhere in the pipeline rather than from the intended optimization set.
+    """
+
+    def __init__(self, *args, **kwargs):
+        kwargs["train_position_deviation"] = False
+        super().__init__(*args, **kwargs)
+        self._dummy_train_anchor: torch.nn.Parameter | None = None
+
+    def _setup_optimizer(self, heliostat_group, device):
+        kinematic = heliostat_group.kinematics
+
+        kinematic.translation_deviation_parameters.requires_grad_(False)
+        kinematic.rotation_deviation_parameters.requires_grad_(False)
+        kinematic.actuators.optimizable_parameters.requires_grad_(False)
+        kinematic.actuators.non_optimizable_parameters.requires_grad_(False)
+
+        if hasattr(kinematic, "_base_position_deviation"):
+            kinematic._base_position_deviation = kinematic._base_position_deviation.detach()
+
+        if not hasattr(kinematic, "_initial_actuator_initial_angle"):
+            kinematic._initial_actuator_initial_angle = (
+                kinematic.actuators.optimizable_parameters[
+                    :, index_mapping.actuator_initial_angle, :
+                ]
+                .detach()
+                .clone()
+            )
+            kinematic._initial_actuator_offset = (
+                kinematic.actuators.non_optimizable_parameters[
+                    :, index_mapping.actuator_offset, :
+                ]
+                .detach()
+                .clone()
+            )
+        if not hasattr(kinematic, "_initial_translation_deviation"):
+            kinematic._initial_translation_deviation = (
+                kinematic.translation_deviation_parameters.detach().clone()
+            )
+
+        self._dummy_train_anchor = torch.nn.Parameter(torch.zeros(1, device=device))
+        base_lr = float(self.optimization_configuration[config_dictionary.initial_learning_rate])
+        optimizer = torch.optim.Adam([self._dummy_train_anchor], lr=base_lr)
+        return (
+            optimizer,
+            kinematic._initial_actuator_initial_angle,
+            kinematic._initial_actuator_offset,
+        )
+
+    def _compute_epoch_loss(
+        self,
+        epoch: int,
+        flux_distributions: torch.Tensor,
+        measured_flux: torch.Tensor,
+        focal_spots_measured: torch.Tensor,
+        sample_indices: torch.Tensor,
+        target_area_indices: torch.Tensor,
+        loss_definition,
+        ground_truth: torch.Tensor,
+        reduction_dims: tuple,
+        number_of_samples_per_heliostat: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        loss_per_heliostat = super()._compute_epoch_loss(
+            epoch=epoch,
+            flux_distributions=flux_distributions,
+            measured_flux=measured_flux,
+            focal_spots_measured=focal_spots_measured,
+            sample_indices=sample_indices,
+            target_area_indices=target_area_indices,
+            loss_definition=loss_definition,
+            ground_truth=ground_truth,
+            reduction_dims=reduction_dims,
+            number_of_samples_per_heliostat=number_of_samples_per_heliostat,
+            device=device,
+        )
+        if self._dummy_train_anchor is None:
+            return loss_per_heliostat
+        return loss_per_heliostat + (0.0 * self._dummy_train_anchor.sum())
+
+
 # ---------------------------------------------------------------------------
 # Focal-spot ablation variants (A–E)
 # ---------------------------------------------------------------------------
@@ -1387,7 +1473,6 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
             )
 
             if active_heliostats_mask.sum() == 0:
-                loss_per_heliostat_all.append(torch.tensor(float("inf"), device=device))
                 continue
 
             optimizer, initial_actuator_initial_angle, initial_actuator_offset = (

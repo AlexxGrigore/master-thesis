@@ -21,6 +21,84 @@ from utils.plotting import (
 log = logging.getLogger(__name__)
 
 
+def _snapshot_kinematic_tensors(scenario: Scenario) -> list[dict[str, torch.Tensor]]:
+    snapshots = []
+    for heliostat_group in scenario.heliostat_field.heliostat_groups:
+        kinematic = heliostat_group.kinematics
+        entry = {
+            "translation": kinematic.translation_deviation_parameters.detach().cpu().clone(),
+            "rotation": kinematic.rotation_deviation_parameters.detach().cpu().clone(),
+            "actuator_optimizable": kinematic.actuators.optimizable_parameters.detach().cpu().clone(),
+            "actuator_nonoptimizable": kinematic.actuators.non_optimizable_parameters.detach().cpu().clone(),
+        }
+        if hasattr(kinematic, "_base_position_deviation"):
+            entry["base_position"] = kinematic._base_position_deviation.detach().cpu().clone()
+        snapshots.append(entry)
+    return snapshots
+
+
+def _max_abs_delta(current: torch.Tensor, initial: torch.Tensor) -> float:
+    return float((current.detach().cpu() - initial).abs().max().item())
+
+
+def _summarize_parameter_drift(
+    scenario: Scenario,
+    initial_snapshots: list[dict[str, torch.Tensor]],
+) -> dict:
+    per_group = []
+    global_max_abs_drift = 0.0
+
+    for group_index, (heliostat_group, initial_group) in enumerate(
+        zip(scenario.heliostat_field.heliostat_groups, initial_snapshots)
+    ):
+        kinematic = heliostat_group.kinematics
+        group_drift = {
+            "group_index": group_index,
+            "translation_max_abs_delta": _max_abs_delta(
+                kinematic.translation_deviation_parameters,
+                initial_group["translation"],
+            ),
+            "rotation_max_abs_delta": _max_abs_delta(
+                kinematic.rotation_deviation_parameters,
+                initial_group["rotation"],
+            ),
+            "actuator_optimizable_max_abs_delta": _max_abs_delta(
+                kinematic.actuators.optimizable_parameters,
+                initial_group["actuator_optimizable"],
+            ),
+            "actuator_nonoptimizable_max_abs_delta": _max_abs_delta(
+                kinematic.actuators.non_optimizable_parameters,
+                initial_group["actuator_nonoptimizable"],
+            ),
+        }
+
+        if "base_position" in initial_group or hasattr(kinematic, "_base_position_deviation"):
+            initial_base = initial_group.get(
+                "base_position",
+                torch.zeros_like(getattr(kinematic, "_base_position_deviation")),
+            )
+            current_base = getattr(
+                kinematic,
+                "_base_position_deviation",
+                torch.zeros_like(initial_base, device=kinematic.translation_deviation_parameters.device),
+            )
+            group_drift["base_position_max_abs_delta"] = _max_abs_delta(current_base, initial_base)
+
+        group_max = max(
+            value
+            for key, value in group_drift.items()
+            if key.endswith("_max_abs_delta")
+        )
+        group_drift["group_max_abs_drift"] = group_max
+        global_max_abs_drift = max(global_max_abs_drift, group_max)
+        per_group.append(group_drift)
+
+    return {
+        "global_max_abs_drift": global_max_abs_drift,
+        "per_group": per_group,
+    }
+
+
 def run_experiment(
     loss_name: str,
     loss_fn_factory,
@@ -68,6 +146,8 @@ def run_experiment(
         scenario.set_number_of_rays(10)
         log.info("Number of rays set to 10.")
         print(f"  Heliostats: {scenario.heliostat_field.number_of_heliostats_per_group.sum().item()}")
+        initial_parameter_snapshots = _snapshot_kinematic_tensors(scenario)
+        save_kinematic_parameters(scenario, exp_dir / "initial_kinematic_parameters.json")
 
         # ------------------------------------------------------------------
         # Baseline evaluation — untrained scenario parameters
@@ -240,9 +320,14 @@ def run_experiment(
 
         save_kinematic_parameters(scenario, exp_dir / "all_kinematic_parameters.json")
 
+        parameter_drift = _summarize_parameter_drift(scenario, initial_parameter_snapshots)
+        with open(exp_dir / "parameter_drift.json", "w") as f:
+            json.dump(parameter_drift, f, indent=2)
+
         test_metrics["baseline_mean_mrad"] = baseline_mrad
         test_metrics["improvement_mrad"] = improvement
         test_metrics["convergence_history"] = convergence_history
+        test_metrics["parameter_drift"] = parameter_drift
         log.info(f"=== Experiment '{loss_name}' done: {final_mrad:.2f} mrad (baseline {baseline_mrad:.2f} mrad) ===")
         return test_metrics
 
