@@ -58,7 +58,7 @@ if IS_ON_DAIC:
 else:
     PAINT_DIR = BASE_DIR / "datasets" / "paint"
 
-BENCHMARK_NAME = "benchmark_split-balanced_train-10_validation-30"
+BENCHMARK_NAME = "benchmark_split-balanced_train-50_validation-10"
 SCENARIO_PATH = (
     BASE_DIR / "scenarios" / "one_heliostat_scenarios" / "scenario1.h5"
     if SMOKE_TEST
@@ -82,7 +82,7 @@ BENCHMARK_CSV = PAINT_DIR / "splits" / f"{BENCHMARK_NAME}.csv"
 CALIBRATION_PROPERTIES_DIR = PAINT_DIR / BENCHMARK_NAME / "calibration_properties"
 FLUX_IMAGE_DIR = PAINT_DIR / BENCHMARK_NAME / "flux_image"
 
-SAMPLE_LIMIT_PER_HELIOSTAT = SMOKE_TEST_SAMPLE_LIMIT if SMOKE_TEST else 10
+SAMPLE_LIMIT_PER_HELIOSTAT = SMOKE_TEST_SAMPLE_LIMIT if SMOKE_TEST else 50
 TRAIN_BASE_POSITION_DEVIATION = True  # False = standard Wortberg Table 5.3 (no position error term)
 CENTROID_METHOD = paint_mappings.UTIS_KEY
 

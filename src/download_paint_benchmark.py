@@ -43,8 +43,8 @@ from paint.util import set_logger_config
 PAINT_DIR = pathlib.Path(__file__).parent.parent / "datasets" / "paint"
 
 SPLIT_TYPE = mappings.BALANCED_SPLIT
-TRAIN_SIZE = 10
-VAL_SIZE = 30
+TRAIN_SIZE = 50
+VAL_SIZE = 10
 
 ITEM_TYPES = [
     mappings.CALIBRATION_PROPERTIES_KEY,
