@@ -162,6 +162,8 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
 
                 # Cache parsed eval data once so we avoid re-loading PNG files every epoch.
                 _eval_cache = self._parse_eval_data_for_group(heliostat_group, device)
+                best_eval_loss = float("inf")
+                best_params: dict | None = None
 
                 while (
                     loss > float(self.optimization_configuration[config_dictionary.tolerance])
@@ -293,6 +295,9 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                     eval_loss = self._compute_eval_loss_from_cache(
                         _eval_cache, heliostat_group, loss_definition, device
                     )
+                    if eval_loss is not None and eval_loss < best_eval_loss:
+                        best_eval_loss = eval_loss
+                        best_params = self._snapshot_kinematic_params(heliostat_group.kinematics)
 
                     if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
                         scheduler.step(eval_loss if eval_loss is not None else loss.detach())
@@ -341,6 +346,10 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                         break
 
                     epoch += 1
+
+                if best_params is not None:
+                    self._restore_kinematic_params(heliostat_group.kinematics, best_params)
+                    log.info(f"Restored best kinematic parameters (val_loss={best_eval_loss:.6f}).")
 
                 local_indices = (
                     sample_indices_for_local_rank[::number_of_samples_per_heliostat]
@@ -741,8 +750,31 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
             )
             return loss_per_heliostat.mean().item()
 
-    def _apply_deviation_bounds(self, heliostat_group, initial_actuator_initial_angle, initial_actuator_offset):
-        """
+    @staticmethod
+    def _snapshot_kinematic_params(kinematic) -> dict:
+        """Copy all optimisable kinematic tensors — used for best-val-loss checkpointing."""
+        snap = {
+            "translation": kinematic.translation_deviation_parameters.detach().clone(),
+            "rotation": kinematic.rotation_deviation_parameters.detach().clone(),
+            "opt_params": kinematic.actuators.optimizable_parameters.detach().clone(),
+            "nonopt_params": kinematic.actuators.non_optimizable_parameters.detach().clone(),
+        }
+        if hasattr(kinematic, "_base_position_deviation"):
+            snap["base_pos"] = kinematic._base_position_deviation.detach().clone()
+        return snap
+
+    @staticmethod
+    def _restore_kinematic_params(kinematic, snap: dict) -> None:
+        """Restore kinematic tensors from a snapshot produced by _snapshot_kinematic_params."""
+        with torch.no_grad():
+            kinematic.translation_deviation_parameters.copy_(snap["translation"])
+            kinematic.rotation_deviation_parameters.copy_(snap["rotation"])
+            kinematic.actuators.optimizable_parameters.copy_(snap["opt_params"])
+            kinematic.actuators.non_optimizable_parameters.copy_(snap["nonopt_params"])
+            if "base_pos" in snap and hasattr(kinematic, "_base_position_deviation"):
+                kinematic._base_position_deviation.copy_(snap["base_pos"])
+
+    def _apply_deviation_bounds(self, heliostat_group, initial_actuator_initial_angle, initial_actuator_offset):        """
         Clamp all optimised parameters to their Table 5.3 deviation bounds.
 
         Both translation_deviation and actuator parameters may have non-zero nominal
@@ -1493,6 +1525,9 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
                 else self.optimization_configuration[config_dictionary.log_step]
             )
 
+            best_eval_loss = float("inf")
+            best_params: dict | None = None
+
             while (
                 loss > float(self.optimization_configuration[config_dictionary.tolerance])
                 and epoch <= self.optimization_configuration[config_dictionary.max_epoch]
@@ -1582,6 +1617,9 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
                     if eval_loss is not None:
                         entry["eval_loss"] = eval_loss
                         log.info(f"Rank: {rank}, Epoch: {epoch}, Eval Loss: {eval_loss:.6f}")
+                        if eval_loss < best_eval_loss:
+                            best_eval_loss = eval_loss
+                            best_params = self._snapshot_kinematic_params(heliostat_group.kinematics)
                     self._convergence_history.append(entry)
 
                 if early_stopper.step(loss):
@@ -1589,6 +1627,10 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
                     break
 
                 epoch += 1
+
+            if best_params is not None:
+                self._restore_kinematic_params(heliostat_group.kinematics, best_params)
+                log.info(f"Restored best kinematic parameters (val_loss={best_eval_loss:.6f}).")
 
             # Map per-heliostat loss back into the global result tensor
             global_active_indices = torch.nonzero(active_heliostats_mask != 0, as_tuple=True)[0]
