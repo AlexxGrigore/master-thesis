@@ -81,7 +81,7 @@ def run_experiment(
             scenario = Scenario.load_scenario_from_hdf5(
                 scenario_file=scenario_file,
                 device=device,
-                number_of_surface_points_per_facet=torch.tensor([25, 25]),
+                number_of_surface_points_per_facet=torch.tensor([15, 15]),
             )
 
         scenario.set_number_of_rays(10)
