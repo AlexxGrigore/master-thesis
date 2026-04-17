@@ -774,7 +774,8 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
             if "base_pos" in snap and hasattr(kinematic, "_base_position_deviation"):
                 kinematic._base_position_deviation.copy_(snap["base_pos"])
 
-    def _apply_deviation_bounds(self, heliostat_group, initial_actuator_initial_angle, initial_actuator_offset):        """
+    def _apply_deviation_bounds(self, heliostat_group, initial_actuator_initial_angle, initial_actuator_offset):
+        """
         Clamp all optimised parameters to their Table 5.3 deviation bounds.
 
         Both translation_deviation and actuator parameters may have non-zero nominal
