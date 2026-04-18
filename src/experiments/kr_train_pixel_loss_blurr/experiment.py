@@ -81,7 +81,7 @@ def run_experiment(
             scenario = Scenario.load_scenario_from_hdf5(
                 scenario_file=scenario_file,
                 device=device,
-                number_of_surface_points_per_facet=torch.tensor([15, 15]),
+                number_of_surface_points_per_facet=torch.tensor([25, 25]),
             )
 
         scenario.set_number_of_rays(10)
@@ -125,6 +125,7 @@ def run_experiment(
             optimization_configuration=phase1_opt_config,
             reconstruction_method=config_dictionary.kinematics_reconstruction_raytracing,
             eval_data=eval_data,
+            sample_mini_batch_size=10,
         )
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(device)
@@ -176,6 +177,7 @@ def run_experiment(
             reconstruction_method=config_dictionary.kinematics_reconstruction_raytracing,
             eval_data=eval_data,
             blur_sigma=2.0,
+            sample_mini_batch_size=10,
         )
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(device)

@@ -322,7 +322,7 @@ def run_experiment(
             scenario = Scenario.load_scenario_from_hdf5(
                 scenario_file=scenario_file,
                 device=device,
-                number_of_surface_points_per_facet=torch.tensor([15, 15]),
+                number_of_surface_points_per_facet=torch.tensor([25, 25]),
             )
 
         scenario.set_number_of_rays(10)
@@ -350,6 +350,7 @@ def run_experiment(
             optimization_configuration=optimization_configuration,
             reconstruction_method=config_dictionary.kinematics_reconstruction_raytracing,
             eval_data=eval_data,
+            sample_mini_batch_size=10,
         )
 
         loss_definition = loss_fn_factory(scenario)

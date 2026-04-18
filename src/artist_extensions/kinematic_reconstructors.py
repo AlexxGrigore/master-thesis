@@ -57,7 +57,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
     _BOUND_ACTUATOR_OFFSET_M = 0.005   # c_i — joint's distance offset
     _BOUND_BASE_POSITION_M = 0.05      # heliostat base position (e, n, u)
 
-    def __init__(self, *args, train_position_deviation: bool = True, eval_data: dict | None = None, **kwargs):
+    def __init__(self, *args, train_position_deviation: bool = True, eval_data: dict | None = None, sample_mini_batch_size: int | None = None, **kwargs):
         if "optimization_configuration" in kwargs:
             flat = kwargs["optimization_configuration"]
             if config_dictionary.optimization not in flat:
@@ -79,6 +79,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
         super().__init__(*args, **kwargs)
         self.train_position_deviation = train_position_deviation
         self.eval_data = eval_data
+        self.sample_mini_batch_size = sample_mini_batch_size
 
         self.optimization_configuration = {
             **self.optimizer_dict,
@@ -165,81 +166,136 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                 best_eval_loss = float("inf")
                 best_params: dict | None = None
 
+                # Sample mini-batch setup.
+                # incident_ray_directions layout: [h0_s0..h0_s(N-1), h1_s0..., ...]
+                # where N = n_samples_full. With mini-batching we run K forward passes
+                # per epoch (each with mb_size samples), accumulating gradients before
+                # the optimizer step. This avoids OOM on large fields (e.g. 1315 × 50).
+                n_samples_full = int(active_heliostats_mask[active_heliostats_mask > 0][0].item())
+                n_active_heliostats = int((active_heliostats_mask > 0).sum().item())
+                mb_size = (
+                    self.sample_mini_batch_size
+                    if self.sample_mini_batch_size is not None
+                    else n_samples_full
+                )
+                n_mini_batches = (n_samples_full + mb_size - 1) // mb_size
+                # Precompute per-heliostat start offsets into the flat tensor.
+                h_offsets = torch.arange(n_active_heliostats, device=device) * n_samples_full
+
+                if n_mini_batches > 1:
+                    log.info(
+                        f"Sample mini-batching enabled: {n_samples_full} samples split into "
+                        f"{n_mini_batches} mini-batches of up to {mb_size} samples each."
+                    )
+
+                # ground_truth_full is the full-dataset reference tensor (measured_flux or
+                # focal_spots_measured) that gets sliced to sub_ground_truth each mini-batch.
+                ground_truth_full = ground_truth
+
+                # Initialise loop-scoped variables that are read after the while loop.
+                sample_indices_for_local_rank = torch.arange(
+                    n_active_heliostats * mb_size, device=device
+                )
+                number_of_samples_per_heliostat = mb_size
+
                 while (
                     loss > float(self.optimization_configuration[config_dictionary.tolerance])
                     and epoch <= self.optimization_configuration[config_dictionary.max_epoch]
                 ):
                     optimizer.zero_grad()
-
-                    heliostat_group.activate_heliostats(
-                        active_heliostats_mask=active_heliostats_mask, device=device
-                    )
-
                     kinematic = heliostat_group.kinematics
+                    loss_per_heliostat_accum: torch.Tensor | None = None
 
-                    if self.train_position_deviation and hasattr(kinematic, "_base_position_deviation"):
-                        # Inject base position deviation into the active positions that
-                        # ARTIST just set.  We overwrite with a new tensor (no in-place op)
-                        # so autograd traces through repeat_interleave → _base_position_deviation.
-                        active_base_dev = kinematic._base_position_deviation.repeat_interleave(
-                            active_heliostats_mask, dim=0
-                        )  # [N_active, 3]
-                        pad = torch.zeros(active_base_dev.shape[0], 1, device=device)
-                        kinematic.active_heliostat_positions = (
-                            kinematic.active_heliostat_positions
-                            + torch.cat([active_base_dev, pad], dim=1)
+                    for mb in range(n_mini_batches):
+                        s_start = mb * mb_size
+                        s_end = min(s_start + mb_size, n_samples_full)
+                        current_mb_size = s_end - s_start
+
+                        sample_range = torch.arange(s_start, s_end, device=device)
+                        indices = (h_offsets.unsqueeze(1) + sample_range.unsqueeze(0)).reshape(-1)
+
+                        sub_rays = incident_ray_directions[indices]
+                        sub_ground_truth = ground_truth_full[indices]
+                        sub_target_mask = target_area_mask[indices]
+                        sub_measured_flux = measured_flux[indices]
+                        sub_focal_spots = focal_spots_measured[indices]
+                        sub_mask = (active_heliostats_mask > 0).to(torch.long) * current_mb_size
+
+                        heliostat_group.activate_heliostats(
+                            active_heliostats_mask=sub_mask, device=device
                         )
 
-                    heliostat_group.align_surfaces_with_incident_ray_directions(
-                        aim_points=self.scenario.target_areas.centers[target_area_mask],
-                        incident_ray_directions=incident_ray_directions,
-                        active_heliostats_mask=active_heliostats_mask,
-                        device=device,
-                    )
+                        if self.train_position_deviation and hasattr(kinematic, "_base_position_deviation"):
+                            # Inject base position deviation into the active positions that
+                            # ARTIST just set.  We overwrite with a new tensor (no in-place op)
+                            # so autograd traces through repeat_interleave → _base_position_deviation.
+                            active_base_dev = kinematic._base_position_deviation.repeat_interleave(
+                                sub_mask, dim=0
+                            )  # [N_active, 3]
+                            pad = torch.zeros(active_base_dev.shape[0], 1, device=device)
+                            kinematic.active_heliostat_positions = (
+                                kinematic.active_heliostat_positions
+                                + torch.cat([active_base_dev, pad], dim=1)
+                            )
 
-                    ray_tracer = HeliostatRayTracer(
-                        scenario=self.scenario,
-                        heliostat_group=heliostat_group,
-                        blocking_active=False,
-                        world_size=self.ddp_setup[config_dictionary.heliostat_group_world_size],
-                        rank=self.ddp_setup[config_dictionary.heliostat_group_rank],
-                        batch_size=self.optimization_configuration[config_dictionary.batch_size],
-                        random_seed=self.ddp_setup[config_dictionary.heliostat_group_rank],
-                    )
+                        heliostat_group.align_surfaces_with_incident_ray_directions(
+                            aim_points=self.scenario.target_areas.centers[sub_target_mask],
+                            incident_ray_directions=sub_rays,
+                            active_heliostats_mask=sub_mask,
+                            device=device,
+                        )
 
-                    flux_distributions = ray_tracer.trace_rays(
-                        incident_ray_directions=incident_ray_directions,
-                        active_heliostats_mask=active_heliostats_mask,
-                        target_area_indices=target_area_mask,
-                        device=device,
-                    )
+                        ray_tracer = HeliostatRayTracer(
+                            scenario=self.scenario,
+                            heliostat_group=heliostat_group,
+                            blocking_active=False,
+                            world_size=self.ddp_setup[config_dictionary.heliostat_group_world_size],
+                            rank=self.ddp_setup[config_dictionary.heliostat_group_rank],
+                            batch_size=self.optimization_configuration[config_dictionary.batch_size],
+                            random_seed=self.ddp_setup[config_dictionary.heliostat_group_rank],
+                        )
 
-                    sample_indices_for_local_rank = ray_tracer.get_sampler_indices()
+                        flux_distributions = ray_tracer.trace_rays(
+                            incident_ray_directions=sub_rays,
+                            active_heliostats_mask=sub_mask,
+                            target_area_indices=sub_target_mask,
+                            device=device,
+                        )
 
-                    number_of_samples_per_heliostat = int(
-                        heliostat_group.active_heliostats_mask.sum()
-                        / (heliostat_group.active_heliostats_mask > 0).sum()
-                    )
+                        sample_indices_for_local_rank = ray_tracer.get_sampler_indices()
+                        number_of_samples_per_heliostat = current_mb_size
 
-                    loss_per_heliostat = self._compute_epoch_loss(
-                        epoch=epoch,
-                        flux_distributions=flux_distributions,
-                        measured_flux=measured_flux,
-                        focal_spots_measured=focal_spots_measured,
-                        sample_indices=sample_indices_for_local_rank,
-                        target_area_indices=target_area_mask,
-                        loss_definition=loss_definition,
-                        ground_truth=ground_truth,
-                        reduction_dims=reduction_dims,
-                        number_of_samples_per_heliostat=number_of_samples_per_heliostat,
-                        device=device,
-                    )
+                        loss_per_heliostat = self._compute_epoch_loss(
+                            epoch=epoch,
+                            flux_distributions=flux_distributions,
+                            measured_flux=sub_measured_flux,
+                            focal_spots_measured=sub_focal_spots,
+                            sample_indices=sample_indices_for_local_rank,
+                            target_area_indices=sub_target_mask,
+                            loss_definition=loss_definition,
+                            ground_truth=sub_ground_truth,
+                            reduction_dims=reduction_dims,
+                            number_of_samples_per_heliostat=number_of_samples_per_heliostat,
+                            device=device,
+                        )
 
+                        # Divide by n_mini_batches before backward so gradients accumulate
+                        # to the correct epoch-level mean across all mini-batches.
+                        (loss_per_heliostat.mean() / n_mini_batches).backward()
+
+                        if loss_per_heliostat_accum is None:
+                            loss_per_heliostat_accum = loss_per_heliostat.detach() / n_mini_batches
+                        else:
+                            loss_per_heliostat_accum = (
+                                loss_per_heliostat_accum + loss_per_heliostat.detach() / n_mini_batches
+                            )
+
+                    loss_per_heliostat = loss_per_heliostat_accum
                     loss = loss_per_heliostat.mean()
-                    loss.backward()
 
                     # DDP nested: reduce gradients across ranks within the heliostat group,
                     # then divide by group world size (mirrors ARTIST KinematicsReconstructor).
+                    # Done once after all mini-batch backward passes.
                     if self.ddp_setup[config_dictionary.is_nested]:
                         for param_group in optimizer.param_groups:
                             for param in param_group["params"]:
