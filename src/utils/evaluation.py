@@ -175,13 +175,19 @@ def evaluate_flux_accuracy(
             device=device,
         )
 
-        target_centers = scenario.target_areas.centers[target_area_mask]
-        target_widths = scenario.target_areas.dimensions[target_area_mask][
+        # The ray tracer sampler may process a subset of instances when heliostats
+        # have heterogeneous sample counts.  Use get_sampler_indices() to align
+        # the predictions with the correct ground-truth rows (same pattern as training).
+        sample_indices = ray_tracer.get_sampler_indices()
+
+        target_centers = scenario.target_areas.centers[target_area_mask[sample_indices]]
+        target_widths = scenario.target_areas.dimensions[target_area_mask[sample_indices]][
             :, index_mapping.target_area_width
         ]
-        target_heights = scenario.target_areas.dimensions[target_area_mask][
+        target_heights = scenario.target_areas.dimensions[target_area_mask[sample_indices]][
             :, index_mapping.target_area_height
         ]
+        focal_spots = focal_spots[sample_indices]
 
         predicted_focal_spots = get_center_of_mass(
             bitmaps=predicted_flux,
@@ -335,6 +341,9 @@ def compute_pixel_test_loss(
             target_area_indices=target_area_mask,
             device=device,
         )
+
+        sample_indices = ray_tracer.get_sampler_indices()
+        measured_flux = measured_flux[sample_indices]
 
         # Gaussian blur — matches WortbergPixelReconstructor._preprocess_eval_flux
         predicted_flux = _gaussian_blur_batch(predicted_flux, blur_sigma)
