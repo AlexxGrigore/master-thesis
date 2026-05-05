@@ -158,7 +158,7 @@ def plot_linear_weights_heatmap(
     *,
     linear_weight: torch.Tensor,
     linear_bias: torch.Tensor,
-    feature_names: tuple[str, ...],
+    n_measurements: int,
     parameter_names: tuple[str, ...],
     output_path: pathlib.Path,
 ) -> None:
@@ -167,6 +167,16 @@ def plot_linear_weights_heatmap(
     vmax = float(np.max(np.abs(weight)))
     if vmax == 0.0:
         vmax = 1.0
+
+    # Build sparse x-axis ticks: heliostat_pos (3), kinematic (20), then one tick per measurement block.
+    _N_HEL = 3
+    _N_KIN = 20
+    _N_PER = 8
+    section_ticks = [0, _N_HEL, _N_HEL + _N_KIN]
+    section_labels = ["helpos_0", "kin_0", "meas_0"]
+    for i in range(n_measurements):
+        section_ticks.append(_N_HEL + _N_KIN + i * _N_PER)
+        section_labels.append(f"m{i}")
 
     fig, (ax_heatmap, ax_bias) = plt.subplots(
         1,
@@ -177,8 +187,8 @@ def plot_linear_weights_heatmap(
     fig.patch.set_facecolor("white")
 
     image = ax_heatmap.imshow(weight, aspect="auto", cmap="coolwarm", vmin=-vmax, vmax=vmax)
-    ax_heatmap.set_xticks(np.arange(len(feature_names)))
-    ax_heatmap.set_xticklabels(feature_names, rotation=45, ha="right")
+    ax_heatmap.set_xticks(section_ticks)
+    ax_heatmap.set_xticklabels(section_labels, rotation=60, ha="right", fontsize=7)
     ax_heatmap.set_yticks(np.arange(len(parameter_names)))
     ax_heatmap.set_yticklabels(parameter_names)
     ax_heatmap.set_title("Linear Weight Matrix")

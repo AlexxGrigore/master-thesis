@@ -1,27 +1,34 @@
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 import pathlib
 import sys
+from dataclasses import dataclass
 
 _pkg = pathlib.Path(__file__).parent
 _src = _pkg.parent
-# Run this from thesisenv, ideally with the working directory set to src/.
-# In that setup, ARTIST and PAINT already resolve to the workspace checkouts.
 sys.path.insert(0, str(_src))
 
 import h5py
 import torch
+from artist.core.loss_functions import FocalSpotLoss, PixelLoss
 from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
 from artist.scenario.scenario import Scenario
 from artist.util import set_logger_config
 from artist.util.environment_setup import get_device
 
+from artist_extensions.loss_functions_ext import AlignmentLoss
+from five_heliostats_synth.data import SyntheticDatasetParser
 from full_training_pipeline.config import PipelineConfig, build_default_config
-from full_training_pipeline.data import build_group_feature_tensors, build_split_bundle
+from full_training_pipeline.data import (
+    SplitDataBundle,
+    build_group_calibration_inputs,
+    build_split_bundle,
+    build_split_bundle_synth,
+)
 from full_training_pipeline.evaluate import apply_model_to_scenario, evaluate_model_tracking_accuracy
+from full_training_pipeline.features import HeliostatCalibrationInput
 from full_training_pipeline.model import SHARED_WORTBERG_PARAMETER_NAMES, SharedLinearResidualModel
 from full_training_pipeline.pipeline import FineErrorLearningPipeline, capture_all_group_parameter_states
 from full_training_pipeline.plotting import (
@@ -40,14 +47,84 @@ logging.getLogger().setLevel(logging.INFO)
 log = logging.getLogger(__name__)
 
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train the FEL V1 linear residual pipeline.")
-    parser.add_argument("--on-daic", action="store_true", help="Use DAIC path defaults.")
-    parser.add_argument("--smoke-test", action="store_true", help="Run a minimal local smoke configuration.")
-    parser.add_argument("--epochs", type=int, default=None, help="Override the default epoch count.")
-    parser.add_argument("--output-dir", type=pathlib.Path, default=None, help="Optional output directory.")
-    return parser.parse_args()
+# ---------------------------------------------------------------------------
+# Loss factory
+# ---------------------------------------------------------------------------
 
+_LOSS_CONFIGS = {
+    "focal_spot": lambda scenario: FocalSpotLoss(scenario=scenario),
+    "pixel":      lambda scenario: PixelLoss(scenario=scenario),
+    "alignment":  lambda _: AlignmentLoss(),
+}
+
+
+def _build_loss_fn(config: PipelineConfig, scenario):
+    if config.loss_type not in _LOSS_CONFIGS:
+        raise ValueError(f"Unknown loss_type {config.loss_type!r}. Choose from {list(_LOSS_CONFIGS)}.")
+    return _LOSS_CONFIGS[config.loss_type](scenario)
+
+
+# ---------------------------------------------------------------------------
+# Data parsers factory
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DataParsers:
+    train: object
+    validation: object
+    test: object
+
+
+def _build_parsers(config: PipelineConfig) -> DataParsers:
+    if config.dataset_type == "synthetic":
+        return DataParsers(
+            train=SyntheticDatasetParser(config.synthetic_data_base_dir / "train"),
+            validation=SyntheticDatasetParser(config.synthetic_data_base_dir / "val"),
+            test=SyntheticDatasetParser(config.synthetic_data_base_dir / "test"),
+        )
+    parser = PaintCalibrationDataParser(
+        sample_limit=config.sample_limit_per_heliostat,
+        centroid_extraction_method=config.centroid_method,
+    )
+    return DataParsers(train=parser, validation=parser, test=parser)
+
+
+# ---------------------------------------------------------------------------
+# Bundle factory
+# ---------------------------------------------------------------------------
+
+def _build_bundle(
+    config: PipelineConfig,
+    split: str,
+    scenario,
+    group_states,
+    norm_stats=None,
+) -> SplitDataBundle:
+    if config.dataset_type == "synthetic":
+        split_dir_map = {"train": "train", "validation": "val", "test": "test"}
+        return build_split_bundle_synth(
+            split_dir=config.synthetic_data_base_dir / split_dir_map[split],
+            sample_limit_per_heliostat=config.sample_limit_per_heliostat,
+            scenario=scenario,
+            group_states=group_states,
+            norm_stats=norm_stats,
+        )
+    return build_split_bundle(
+        benchmark_csv=config.benchmark_csv,
+        calibration_properties_dir=config.calibration_properties_dir,
+        flux_image_dir=config.flux_image_dir,
+        split=split,
+        sample_limit_per_heliostat=config.sample_limit_per_heliostat,
+        centroid_method=config.centroid_method,
+        scenario=scenario,
+        group_states=group_states,
+        norm_stats=norm_stats,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _write_json(output_path: pathlib.Path, payload: object) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,9 +140,8 @@ def _save_model_checkpoint(
     *,
     output_path: pathlib.Path,
     model_state_dict: dict[str, torch.Tensor],
-    feature_names: tuple[str, ...],
-    feature_mean: torch.Tensor,
-    feature_std: torch.Tensor,
+    norm_stats_dict: dict[str, list[float]],
+    n_measurements: int,
     selected_epoch: int,
     selected_validation_mean_mrad: float,
     selection_tag: str,
@@ -73,9 +149,8 @@ def _save_model_checkpoint(
     torch.save(
         {
             "model_state_dict": model_state_dict,
-            "feature_names": feature_names,
-            "feature_mean": feature_mean,
-            "feature_std": feature_std,
+            "norm_stats": norm_stats_dict,
+            "n_measurements": n_measurements,
             "selected_epoch": selected_epoch,
             "selected_validation_mean_focal_spot_error_mrad": selected_validation_mean_mrad,
             "selection_tag": selection_tag,
@@ -88,9 +163,8 @@ def _save_model_checkpoint_json(
     *,
     output_path: pathlib.Path,
     model_state_dict: dict[str, torch.Tensor],
-    feature_names: tuple[str, ...],
-    feature_mean: torch.Tensor,
-    feature_std: torch.Tensor,
+    norm_stats_dict: dict[str, list[float]],
+    n_measurements: int,
     selected_epoch: int,
     selected_validation_mean_mrad: float,
     selection_tag: str,
@@ -101,10 +175,9 @@ def _save_model_checkpoint_json(
             "selection_tag": selection_tag,
             "selected_epoch": selected_epoch,
             "selected_validation_mean_focal_spot_error_mrad": selected_validation_mean_mrad,
-            "feature_names": list(feature_names),
+            "n_measurements": n_measurements,
             "parameter_names": list(SHARED_WORTBERG_PARAMETER_NAMES),
-            "feature_mean": feature_mean.tolist(),
-            "feature_std": feature_std.tolist(),
+            "norm_stats": norm_stats_dict,
             "residual_bounds": model_state_dict["residual_bounds"].tolist(),
             "linear_weight": model_state_dict["linear.weight"].tolist(),
             "linear_bias": model_state_dict["linear.bias"].tolist(),
@@ -149,15 +222,15 @@ def _build_training_summary(
     }
 
 
+@torch.no_grad()
 def _predict_residual_tensor(
     *,
     residual_model: torch.nn.Module,
-    group_feature_tensors: list[torch.Tensor],
+    group_calibration_inputs: list[list],
 ) -> torch.Tensor:
     rows: list[torch.Tensor] = []
-    with torch.no_grad():
-        for group_features in group_feature_tensors:
-            rows.append(residual_model(group_features))
+    for group_inputs in group_calibration_inputs:
+        rows.append(residual_model(group_inputs))
     return torch.cat(rows, dim=0)
 
 
@@ -165,54 +238,43 @@ def _write_pipeline_markdown(
     *,
     output_path: pathlib.Path,
     config: PipelineConfig,
-    feature_names: tuple[str, ...],
+    n_measurements: int,
 ) -> None:
-    feature_lines = "\n".join(f"- `{name}`" for name in feature_names)
+    input_dim = 3 + 20 + n_measurements * 8
     parameter_lines = "\n".join(f"- `{name}`" for name in SHARED_WORTBERG_PARAMETER_NAMES)
     markdown = f"""# Full Training Pipeline
 
 ## Overview
 
-This run trains the V1 fine-error-learning baseline for heliostat kinematic correction.
-The pipeline starts from a frozen coarse kinematic checkpoint and learns a shared linear residual model that predicts a 20-dimensional Wortberg-style correction vector for every heliostat.
+This run trains the fine-error-learning baseline for heliostat kinematic correction.
+The pipeline starts from a frozen coarse kinematic checkpoint and learns a shared linear
+residual model that predicts a 20-dimensional Wortberg-style correction vector for every heliostat.
 
 ## Inputs
 
 - Scenario file: `{config.scenario_path}`
 - Coarse checkpoint: `{config.coarse_checkpoint_path}`
-- Benchmark CSV: `{config.benchmark_csv}`
-- Calibration properties directory: `{config.calibration_properties_dir}`
-- Flux image directory: `{config.flux_image_dir}`
-- Train split: `{config.train_split}`
-- Validation split: `{config.validation_split}`
-- Test split: `{config.test_split}`
+- Dataset type: `{config.dataset_type}`
+- Loss type: `{config.loss_type}`
 
 ## Feature Construction
 
-Each heliostat is represented by an aggregated feature vector computed from its calibration samples in a split.
+Each heliostat is represented by a flat vector built from its calibration measurements.
 
-Per-sample features:
+Input layout (total {input_dim}D):
+- `heliostat_position` (3D): absolute ENU position from scenario
+- `kinematic_params` (20D): coarse checkpoint parameters
+- Per measurement × {n_measurements} (8D each):
+  - `sun_x, sun_y, sun_z`: sun direction unit vector (pointing TO sun)
+  - `motor_1, motor_2`: motor axis positions
+  - `centroid_e, centroid_n, centroid_u`: measured flux centroid in ENU
 
-- 3D sun direction derived from elevation and azimuth
-- Axis 1 motor position
-- Axis 2 motor position
-
-Aggregated heliostat features:
-
-- Mean of each per-sample feature
-- Standard deviation of each per-sample feature
-- Sample count
-
-Feature names:
-
-{feature_lines}
+Measurements are sorted by sun elevation (ascending) before flattening.
+All features are z-score normalised using training-set statistics.
 
 ## Linear Model
 
-The model is a single shared linear layer used for all heliostats.
-It maps the normalized heliostat feature vector to a 20-dimensional residual vector.
-
-- Input dimension: {len(feature_names)}
+- Input dimension: {input_dim}
 - Output dimension: 20
 - Shared across all heliostats: yes
 - Output activation: `tanh`
@@ -222,36 +284,15 @@ The output parameters are:
 
 {parameter_lines}
 
-## Training Loop
-
-At each epoch:
-
-1. Load the frozen coarse parameters as the base state.
-2. Predict a residual correction per heliostat using the shared linear model.
-3. Add the residual to the coarse parameters.
-4. Run ARTIST ray tracing with the corrected parameters.
-5. Compute focal-spot loss on the training split.
-6. Evaluate the current model on the validation split.
-7. Keep the checkpoint with the best validation mean tracking error.
-
-## Output Layout
-
-- `training_summary.json`: concise top-level summary
-- `training.log`: raw log output
-- `pipeline_details.md`: this file
-- `plots/`: generated figures
-- `json/`: run metadata and metrics
-- `models/`: `.pt`, `.json`, and corrected parameter exports
-
 ## Run Configuration
 
+- Dataset type: {config.dataset_type}
+- Loss type: {config.loss_type}
 - Max epochs: {config.max_epochs}
 - Learning rate: {config.learning_rate}
 - Weight decay: {config.weight_decay}
 - Residual L2 weight: {config.residual_l2_weight}
 - Number of rays: {config.number_of_rays}
-- Bitmap resolution: {config.bitmap_resolution}
-- Surface points per facet: {config.surface_points_per_facet}
 - Sample limit per heliostat: {config.sample_limit_per_heliostat}
 - Smoke test: {config.smoke_test}
 - Running on DAIC: {config.is_on_daic}
@@ -259,13 +300,6 @@ At each epoch:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as handle:
         handle.write(markdown)
-
-
-def _build_data_parser(config: PipelineConfig) -> PaintCalibrationDataParser:
-    return PaintCalibrationDataParser(
-        sample_limit=config.sample_limit_per_heliostat,
-        centroid_extraction_method=config.centroid_method,
-    )
 
 
 def _load_scenario(config: PipelineConfig, device: torch.device) -> Scenario:
@@ -280,18 +314,11 @@ def _load_scenario(config: PipelineConfig, device: torch.device) -> Scenario:
     return scenario
 
 
-def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
-    return build_default_config(
-        is_on_daic=args.on_daic,
-        smoke_test=args.smoke_test,
-        max_epochs=args.epochs,
-        output_dir=args.output_dir,
-    )
+# ---------------------------------------------------------------------------
+# Main training entry point
+# ---------------------------------------------------------------------------
 
-
-def main() -> None:
-    args = _parse_args()
-    config = _build_config_from_args(args)
+def run(config: PipelineConfig) -> None:
     if config.max_epochs < 1:
         raise ValueError("max_epochs must be at least 1.")
     config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -310,94 +337,65 @@ def main() -> None:
     logging.getLogger().addHandler(file_handler)
 
     try:
-        log.info("Starting full training pipeline V1.")
+        log.info("Starting full training pipeline.")
+        log.info("Dataset type: %s | Loss type: %s", config.dataset_type, config.loss_type)
         _write_json(json_dir / "config.json", config.to_jsonable_dict())
         device = get_device()
         bitmap_resolution = torch.tensor(config.bitmap_resolution)
         log.info("Using device: %s", device)
 
-        train_bundle = build_split_bundle(
-            benchmark_csv=config.benchmark_csv,
-            calibration_properties_dir=config.calibration_properties_dir,
-            flux_image_dir=config.flux_image_dir,
-            split=config.train_split,
-            sample_limit_per_heliostat=config.sample_limit_per_heliostat,
+        # Load scenario first — bundles need heliostat positions and kinematic params.
+        scenario = _load_scenario(config, device)
+        group_parameter_states = capture_all_group_parameter_states(scenario, device=device)
+
+        train_bundle = _build_bundle(config, "train", scenario, group_parameter_states)
+        validation_bundle = _build_bundle(
+            config, "validation", scenario, group_parameter_states,
+            norm_stats=train_bundle.norm_stats,
         )
-        validation_bundle = build_split_bundle(
-            benchmark_csv=config.benchmark_csv,
-            calibration_properties_dir=config.calibration_properties_dir,
-            flux_image_dir=config.flux_image_dir,
-            split=config.validation_split,
-            sample_limit_per_heliostat=config.sample_limit_per_heliostat,
-            feature_mean=train_bundle.feature_mean,
-            feature_std=train_bundle.feature_std,
-        )
-        test_bundle = build_split_bundle(
-            benchmark_csv=config.benchmark_csv,
-            calibration_properties_dir=config.calibration_properties_dir,
-            flux_image_dir=config.flux_image_dir,
-            split=config.test_split,
-            sample_limit_per_heliostat=config.sample_limit_per_heliostat,
-            feature_mean=train_bundle.feature_mean,
-            feature_std=train_bundle.feature_std,
+        test_bundle = _build_bundle(
+            config, "test", scenario, group_parameter_states,
+            norm_stats=train_bundle.norm_stats,
         )
 
-        _write_json(
-            json_dir / "feature_normalization.json",
-            {
-                "feature_names": list(train_bundle.feature_names),
-                "feature_mean": train_bundle.feature_mean.tolist(),
-                "feature_std": train_bundle.feature_std.tolist(),
-            },
-        )
+        _write_json(json_dir / "norm_stats.json", train_bundle.norm_stats.to_dict())
         _write_pipeline_markdown(
             output_path=config.output_dir / "pipeline_details.md",
             config=config,
-            feature_names=train_bundle.feature_names,
+            n_measurements=config.sample_limit_per_heliostat,
         )
 
-        scenario = _load_scenario(config, device)
-        group_parameter_states = capture_all_group_parameter_states(scenario, device=device)
-        train_group_features = build_group_feature_tensors(
-            scenario,
-            feature_summaries=train_bundle.normalized_feature_summaries,
-            feature_dim=train_bundle.feature_dim,
-            device=device,
-        )
-        validation_group_features = build_group_feature_tensors(
-            scenario,
-            feature_summaries=validation_bundle.normalized_feature_summaries,
-            feature_dim=validation_bundle.feature_dim,
-            device=device,
-        )
-        test_group_features = build_group_feature_tensors(
-            scenario,
-            feature_summaries=test_bundle.normalized_feature_summaries,
-            feature_dim=test_bundle.feature_dim,
-            device=device,
-        )
+        train_group_cal = build_group_calibration_inputs(scenario, train_bundle.calibration_inputs)
+        validation_group_cal = build_group_calibration_inputs(scenario, validation_bundle.calibration_inputs)
+        test_group_cal = build_group_calibration_inputs(scenario, test_bundle.calibration_inputs)
 
-        residual_model = SharedLinearResidualModel(input_dim=train_bundle.feature_dim).to(device)
+        parsers = _build_parsers(config)
+        loss_fn = _build_loss_fn(config, scenario)
+
+        residual_model = SharedLinearResidualModel(
+            n_measurements=config.sample_limit_per_heliostat
+        ).to(device)
         pipeline = FineErrorLearningPipeline(
             scenario=scenario,
             residual_model=residual_model,
             group_parameter_states=group_parameter_states,
             bitmap_resolution=bitmap_resolution,
             ray_tracing_batch_size=config.ray_tracing_batch_size,
+            loss_fn=loss_fn,
+            loss_type=config.loss_type,
         )
         optimizer = torch.optim.Adam(
             residual_model.parameters(),
             lr=config.learning_rate,
             weight_decay=config.weight_decay,
         )
-        data_parser = _build_data_parser(config)
         history: list[dict[str, float]] = []
 
         baseline_validation_scenario = _load_scenario(config, device)
         baseline_validation_metrics = evaluate_flux_accuracy(
             scenario=baseline_validation_scenario,
             heliostat_data_mapping=validation_bundle.heliostat_data_mapping,
-            data_parser=data_parser,
+            data_parser=parsers.validation,
             device=device,
             bitmap_resolution=bitmap_resolution,
             ray_tracing_batch_size=config.ray_tracing_batch_size,
@@ -406,7 +404,7 @@ def main() -> None:
         baseline_test_metrics = evaluate_flux_accuracy(
             scenario=baseline_test_scenario,
             heliostat_data_mapping=test_bundle.heliostat_data_mapping,
-            data_parser=data_parser,
+            data_parser=parsers.test,
             device=device,
             bitmap_resolution=bitmap_resolution,
             ray_tracing_batch_size=config.ray_tracing_batch_size,
@@ -426,8 +424,8 @@ def main() -> None:
 
             train_loss, residual_penalty = pipeline.compute_dataset_loss(
                 heliostat_data_mapping=train_bundle.heliostat_data_mapping,
-                data_parser=data_parser,
-                group_feature_tensors=train_group_features,
+                data_parser=parsers.train,
+                group_calibration_inputs=train_group_cal,
                 device=device,
             )
             objective = train_loss + config.residual_l2_weight * residual_penalty
@@ -441,9 +439,9 @@ def main() -> None:
                 scenario=validation_scenario,
                 residual_model=residual_model,
                 group_parameter_states=validation_group_states,
-                group_feature_tensors=validation_group_features,
+                group_calibration_inputs=validation_group_cal,
                 heliostat_data_mapping=validation_bundle.heliostat_data_mapping,
-                data_parser=data_parser,
+                data_parser=parsers.validation,
                 device=device,
                 bitmap_resolution=bitmap_resolution,
                 ray_tracing_batch_size=config.ray_tracing_batch_size,
@@ -506,9 +504,9 @@ def main() -> None:
             scenario=last_test_scenario,
             residual_model=residual_model,
             group_parameter_states=last_test_group_states,
-            group_feature_tensors=test_group_features,
+            group_calibration_inputs=test_group_cal,
             heliostat_data_mapping=test_bundle.heliostat_data_mapping,
-            data_parser=data_parser,
+            data_parser=parsers.test,
             device=device,
             bitmap_resolution=bitmap_resolution,
             ray_tracing_batch_size=config.ray_tracing_batch_size,
@@ -516,70 +514,49 @@ def main() -> None:
 
         _write_json(json_dir / "history.json", history)
 
-        _save_model_checkpoint(
-            output_path=models_dir / "linear_residual_model.pt",
-            model_state_dict=best_model_state_dict,
-            feature_names=train_bundle.feature_names,
-            feature_mean=train_bundle.feature_mean,
-            feature_std=train_bundle.feature_std,
-            selected_epoch=int(best_epoch_record["epoch"]),
-            selected_validation_mean_mrad=float(
-                best_epoch_record["validation_mean_focal_spot_error_mrad"]
-            ),
-            selection_tag="best_validation",
-        )
-        _save_model_checkpoint_json(
-            output_path=models_dir / "linear_residual_model.json",
-            model_state_dict=best_model_state_dict,
-            feature_names=train_bundle.feature_names,
-            feature_mean=train_bundle.feature_mean,
-            feature_std=train_bundle.feature_std,
-            selected_epoch=int(best_epoch_record["epoch"]),
-            selected_validation_mean_mrad=float(
-                best_epoch_record["validation_mean_focal_spot_error_mrad"]
-            ),
-            selection_tag="best_validation",
-        )
-        _save_model_checkpoint(
-            output_path=models_dir / "linear_residual_model_last_epoch.pt",
-            model_state_dict=last_model_state_dict,
-            feature_names=train_bundle.feature_names,
-            feature_mean=train_bundle.feature_mean,
-            feature_std=train_bundle.feature_std,
-            selected_epoch=int(last_epoch_record["epoch"]),
-            selected_validation_mean_mrad=float(
-                last_epoch_record["validation_mean_focal_spot_error_mrad"]
-            ),
-            selection_tag="last_epoch",
-        )
-        _save_model_checkpoint_json(
-            output_path=models_dir / "linear_residual_model_last_epoch.json",
-            model_state_dict=last_model_state_dict,
-            feature_names=train_bundle.feature_names,
-            feature_mean=train_bundle.feature_mean,
-            feature_std=train_bundle.feature_std,
-            selected_epoch=int(last_epoch_record["epoch"]),
-            selected_validation_mean_mrad=float(
-                last_epoch_record["validation_mean_focal_spot_error_mrad"]
-            ),
-            selection_tag="last_epoch",
-        )
+        norm_stats_dict = train_bundle.norm_stats.to_dict()
+        for tag, state_dict, epoch_record_for_tag in [
+            ("best_validation", best_model_state_dict, best_epoch_record),
+            ("last_epoch",      last_model_state_dict, last_epoch_record),
+        ]:
+            suffix = "" if tag == "best_validation" else "_last_epoch"
+            _save_model_checkpoint(
+                output_path=models_dir / f"linear_residual_model{suffix}.pt",
+                model_state_dict=state_dict,
+                norm_stats_dict=norm_stats_dict,
+                n_measurements=config.sample_limit_per_heliostat,
+                selected_epoch=int(epoch_record_for_tag["epoch"]),
+                selected_validation_mean_mrad=float(
+                    epoch_record_for_tag["validation_mean_focal_spot_error_mrad"]
+                ),
+                selection_tag=tag,
+            )
+            _save_model_checkpoint_json(
+                output_path=models_dir / f"linear_residual_model{suffix}.json",
+                model_state_dict=state_dict,
+                norm_stats_dict=norm_stats_dict,
+                n_measurements=config.sample_limit_per_heliostat,
+                selected_epoch=int(epoch_record_for_tag["epoch"]),
+                selected_validation_mean_mrad=float(
+                    epoch_record_for_tag["validation_mean_focal_spot_error_mrad"]
+                ),
+                selection_tag=tag,
+            )
 
         residual_model.load_state_dict(best_model_state_dict)
         residual_model.eval()
 
         best_validation_scenario = _load_scenario(config, device)
         best_validation_group_states = capture_all_group_parameter_states(
-            best_validation_scenario,
-            device=device,
+            best_validation_scenario, device=device,
         )
         best_validation_metrics = evaluate_model_tracking_accuracy(
             scenario=best_validation_scenario,
             residual_model=residual_model,
             group_parameter_states=best_validation_group_states,
-            group_feature_tensors=validation_group_features,
+            group_calibration_inputs=validation_group_cal,
             heliostat_data_mapping=validation_bundle.heliostat_data_mapping,
-            data_parser=data_parser,
+            data_parser=parsers.validation,
             device=device,
             bitmap_resolution=bitmap_resolution,
             ray_tracing_batch_size=config.ray_tracing_batch_size,
@@ -588,7 +565,7 @@ def main() -> None:
             scenario=best_validation_scenario,
             residual_model=residual_model,
             group_parameter_states=best_validation_group_states,
-            group_feature_tensors=validation_group_features,
+            group_calibration_inputs=validation_group_cal,
         )
 
         best_test_scenario = _load_scenario(config, device)
@@ -597,9 +574,9 @@ def main() -> None:
             scenario=best_test_scenario,
             residual_model=residual_model,
             group_parameter_states=best_test_group_states,
-            group_feature_tensors=test_group_features,
+            group_calibration_inputs=test_group_cal,
             heliostat_data_mapping=test_bundle.heliostat_data_mapping,
-            data_parser=data_parser,
+            data_parser=parsers.test,
             device=device,
             bitmap_resolution=bitmap_resolution,
             ray_tracing_batch_size=config.ray_tracing_batch_size,
@@ -625,7 +602,7 @@ def main() -> None:
 
         predicted_residuals = _predict_residual_tensor(
             residual_model=residual_model,
-            group_feature_tensors=test_group_features,
+            group_calibration_inputs=test_group_cal,
         )
         plot_loss_curves(
             history=history,
@@ -649,7 +626,7 @@ def main() -> None:
         plot_linear_weights_heatmap(
             linear_weight=best_model_state_dict["linear.weight"],
             linear_bias=best_model_state_dict["linear.bias"],
-            feature_names=train_bundle.feature_names,
+            n_measurements=config.sample_limit_per_heliostat,
             parameter_names=SHARED_WORTBERG_PARAMETER_NAMES,
             output_path=plots_dir / "linear_weights_heatmap.png",
         )
@@ -671,7 +648,3 @@ def main() -> None:
     finally:
         logging.getLogger().removeHandler(file_handler)
         file_handler.close()
-
-
-if __name__ == "__main__":
-    main()

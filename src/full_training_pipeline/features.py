@@ -1,31 +1,43 @@
 from __future__ import annotations
 
 import math
-from typing import Iterable
+from dataclasses import dataclass
 
 import numpy as np
+import torch
 
-SAMPLE_FEATURE_NAMES: tuple[str, ...] = (
-    "sun_x",
-    "sun_y",
-    "sun_z",
-    "axis_1_motor_position",
-    "axis_2_motor_position",
-)
 
-SUMMARY_FEATURE_NAMES: tuple[str, ...] = (
-    "mean_sun_x",
-    "mean_sun_y",
-    "mean_sun_z",
-    "mean_axis_1_motor_position",
-    "mean_axis_2_motor_position",
-    "std_sun_x",
-    "std_sun_y",
-    "std_sun_z",
-    "std_axis_1_motor_position",
-    "std_axis_2_motor_position",
-    "sample_count",
-)
+@dataclass
+class HeliostatCalibrationInput:
+    heliostat_name: str
+    kinematic_params: torch.Tensor      # (20,)  from coarse checkpoint
+    heliostat_position: torch.Tensor    # (3,)   ENU absolute position
+    sun_directions: torch.Tensor        # (N_meas, 3)  unit vectors pointing TO sun
+    motor_positions: torch.Tensor       # (N_meas, 2)
+    centroids: torch.Tensor             # (N_meas, 3)  ENU centroid on receiver
+    flux_images: torch.Tensor | None    # (N_meas, H, W)  unused by linear model
+
+
+@dataclass
+class CalibrationNormStats:
+    """Z-score normalisation statistics computed from the training split."""
+    sun_mean: torch.Tensor          # (3,)
+    sun_std: torch.Tensor           # (3,)
+    motor_mean: torch.Tensor        # (2,)
+    motor_std: torch.Tensor         # (2,)
+    centroid_mean: torch.Tensor     # (3,)
+    centroid_std: torch.Tensor      # (3,)
+    heliostat_pos_mean: torch.Tensor  # (3,)
+    heliostat_pos_std: torch.Tensor   # (3,)
+    kinematic_mean: torch.Tensor    # (20,)
+    kinematic_std: torch.Tensor     # (20,)
+
+    def to_dict(self) -> dict[str, list[float]]:
+        return {k: v.tolist() for k, v in self.__dict__.items()}
+
+    @staticmethod
+    def from_dict(d: dict[str, list[float]]) -> CalibrationNormStats:
+        return CalibrationNormStats(**{k: torch.tensor(v, dtype=torch.float32) for k, v in d.items()})
 
 
 def sun_angles_to_unit_vector(sun_elevation_deg: float, sun_azimuth_deg: float) -> np.ndarray:
@@ -40,34 +52,3 @@ def sun_angles_to_unit_vector(sun_elevation_deg: float, sun_azimuth_deg: float) 
         ],
         dtype=np.float32,
     )
-
-
-def build_sample_feature_vector(calibration_metadata: dict[str, object]) -> np.ndarray:
-    motor_position = calibration_metadata["motor_position"]
-    sun_direction = sun_angles_to_unit_vector(
-        sun_elevation_deg=float(calibration_metadata["sun_elevation"]),
-        sun_azimuth_deg=float(calibration_metadata["sun_azimuth"]),
-    )
-    return np.asarray(
-        [
-            sun_direction[0],
-            sun_direction[1],
-            sun_direction[2],
-            float(motor_position["axis_1_motor_position"]),
-            float(motor_position["axis_2_motor_position"]),
-        ],
-        dtype=np.float32,
-    )
-
-
-def build_heliostat_feature_summary(
-    calibration_metadata_items: Iterable[dict[str, object]],
-) -> np.ndarray:
-    sample_vectors = np.stack(
-        [build_sample_feature_vector(metadata) for metadata in calibration_metadata_items],
-        axis=0,
-    )
-    mean_features = sample_vectors.mean(axis=0)
-    std_features = sample_vectors.std(axis=0)
-    sample_count = np.asarray([sample_vectors.shape[0]], dtype=np.float32)
-    return np.concatenate([mean_features, std_features, sample_count], axis=0).astype(np.float32)

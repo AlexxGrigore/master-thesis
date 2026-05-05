@@ -1,0 +1,17 @@
+Bootstrap: docker
+From: python:3.10
+
+%files
+    /home/nfs/agrigore/projects/ARTIST-full-field /opt/ARTIST
+    /home/nfs/agrigore/projects/PAINT /opt/PAINT
+
+%post
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+    cd /opt/PAINT
+    pip install -e ".[dev]"
+    cd /opt/ARTIST
+    pip install -e ".[dev,examples]"
+    pip install jupyter
+
+%runscript
+    exec python "$@"

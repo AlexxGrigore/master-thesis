@@ -276,7 +276,9 @@ def visualize_flux_comparison(
             device=device,
         )
         heliostat_group.align_surfaces_with_incident_ray_directions(
-            aim_points=scenario.target_areas.centers[target_area_mask],
+            aim_points=scenario.solar_tower.get_centers_of_target_areas(
+                target_area_mask, device=device
+            ),
             incident_ray_directions=incident_ray_directions,
             active_heliostats_mask=active_heliostats_mask,
             device=device,
@@ -290,7 +292,7 @@ def visualize_flux_comparison(
             bitmap_resolution=torch.tensor([256, 256], device=device),
         )
 
-        predicted_flux = ray_tracer.trace_rays(
+        predicted_flux, _, _, _ = ray_tracer.trace_rays(
             incident_ray_directions=incident_ray_directions,
             active_heliostats_mask=active_heliostats_mask,
             target_area_indices=target_area_mask,

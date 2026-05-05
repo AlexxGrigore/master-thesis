@@ -12,7 +12,7 @@ from artist.core.heliostat_ray_tracer import HeliostatRayTracer
 from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
 from artist.scenario.scenario import Scenario
 from artist.util import index_mapping
-from artist.util.utils import get_center_of_mass
+from artist.util.utils import get_center_of_mass, bitmap_coordinates_to_target_coordinates
 
 log = logging.getLogger(__name__)
 
@@ -115,19 +115,21 @@ def evaluate_flux_accuracy(
     """
     Evaluate flux image prediction accuracy after kinematic reconstruction.
 
-    Returns a dict with min/mean/median/max focal spot errors in mrad, the
-    sample count, per-heliostat mrad errors, and the raw error list. Callers
-    can persist the raw error list when they need downstream histogram or
-    distribution analysis.
+    Returns a dict with:
+      - min/mean/median/max focal spot errors in mrad (centroid-based)
+      - mean/median peak-normalised per-pixel L1 loss (image-based)
+      - per-heliostat breakdown of both metrics
     """
     all_focal_spot_errors_m = []
     all_focal_spot_errors_mrad = []
+    all_pixel_losses = []
     results_per_heliostat = {}
     nan_heliostat_ids = set()
 
-    # Reference target center (mean over all target areas) used for distance computation.
-    # All heliostats aim at roughly the same tower, so this is a good approximation.
-    reference_target = scenario.target_areas.centers[:, :3].mean(dim=0).to(device)
+    # Reference target center used for distance computation.
+    reference_target = scenario.solar_tower.target_areas[
+        index_mapping.planar_target_areas
+    ].centers[:, :3].mean(dim=0).to(device)
 
     for heliostat_group in scenario.heliostat_field.heliostat_groups:
         (
@@ -154,7 +156,9 @@ def evaluate_flux_accuracy(
         )
 
         heliostat_group.align_surfaces_with_incident_ray_directions(
-            aim_points=scenario.target_areas.centers[target_area_mask],
+            aim_points=scenario.solar_tower.get_centers_of_target_areas(
+                target_area_mask, device=device
+            ),
             incident_ray_directions=incident_ray_directions,
             active_heliostats_mask=active_heliostats_mask,
             device=device,
@@ -168,37 +172,42 @@ def evaluate_flux_accuracy(
             bitmap_resolution=bitmap_resolution.to(device),
         )
 
-        predicted_flux = ray_tracer.trace_rays(
+        predicted_flux, _, _, _ = ray_tracer.trace_rays(
             incident_ray_directions=incident_ray_directions,
             active_heliostats_mask=active_heliostats_mask,
             target_area_indices=target_area_mask,
             device=device,
         )
 
-        # The ray tracer sampler may process a subset of instances when heliostats
-        # have heterogeneous sample counts.  Use get_sampler_indices() to align
-        # the predictions with the correct ground-truth rows (same pattern as training).
+        # Align ground-truth focal spots with sampler order.
         sample_indices = ray_tracer.get_sampler_indices()
-
-        target_centers = scenario.target_areas.centers[target_area_mask[sample_indices]]
-        target_widths = scenario.target_areas.dimensions[target_area_mask[sample_indices]][
-            :, index_mapping.target_area_width
-        ]
-        target_heights = scenario.target_areas.dimensions[target_area_mask[sample_indices]][
-            :, index_mapping.target_area_height
-        ]
         focal_spots = focal_spots[sample_indices]
 
-        predicted_focal_spots = get_center_of_mass(
-            bitmaps=predicted_flux,
-            target_centers=target_centers,
-            target_widths=target_widths,
-            target_heights=target_heights,
+        bitmap_coords = get_center_of_mass(bitmaps=predicted_flux, device=device)
+        predicted_focal_spots = bitmap_coordinates_to_target_coordinates(
+            bitmap_coordinates=bitmap_coords,
+            bitmap_resolution=ray_tracer.bitmap_resolution,
+            solar_tower=scenario.solar_tower,
+            target_area_indices=target_area_mask[sample_indices],
             device=device,
         )
 
         focal_spot_error = torch.norm(predicted_focal_spots[:, :3] - focal_spots[:, :3], dim=1)
         all_focal_spot_errors_m.extend(focal_spot_error.cpu().tolist())
+
+        # Pixel-wise L1 loss — blur both images (sigma=1) to smooth out ray-tracing
+        # noise, then peak-normalise so the comparison is scale-invariant
+        # (predicted flux is in physical units, measured is in [0,1]).
+        # measured_flux is in natural order; align it to sampler order first.
+        measured_flux_sampler = measured_flux[sample_indices]
+        pred_blurred = _gaussian_blur_batch(predicted_flux,       sigma=1.0)
+        meas_blurred = _gaussian_blur_batch(measured_flux_sampler, sigma=1.0)
+        N = pred_blurred.shape[0]
+        pred_peak = pred_blurred.view(N, -1).max(dim=1).values.clamp(min=1e-12)
+        meas_peak = meas_blurred.view(N, -1).max(dim=1).values.clamp(min=1e-12)
+        pred_pnorm = pred_blurred / pred_peak.view(N, 1, 1)
+        meas_pnorm = meas_blurred / meas_peak.view(N, 1, 1)
+        pixel_loss_sampler = (pred_pnorm - meas_pnorm).abs().sum(dim=(1, 2))  # [N], sampler order
 
         # Compute per-heliostat distances to the reference target for mrad conversion.
         active_indices = torch.where(active_heliostats_mask.bool())[0]
@@ -211,32 +220,60 @@ def evaluate_flux_accuracy(
             for idx, dist in zip(active_indices, distances)
         }
 
-        # Repeat distances to match number of focal spot error samples
-        # (there may be multiple measurements per heliostat).
-        num_active = active_indices.shape[0]
-        num_focal_spots = focal_spot_error.shape[0]
-        samples_per_heliostat = max(num_focal_spots // num_active, 1)
-        distances_per_sample = distances.repeat_interleave(samples_per_heliostat)[:num_focal_spots]
-        focal_spot_error_mrad = (focal_spot_error / distances_per_sample) * 1000.0
+        # Number of samples per heliostat, read from the mask (each active entry holds
+        # the replication count N_samples, so mask[active_indices] gives [N, N, ..., N]).
+        samples_per_heliostat_tensor = active_heliostats_mask[active_indices].long()
+
+        # Build a per-sample distance tensor in natural (incident_rays) order.
+        distances_natural = distances.repeat_interleave(samples_per_heliostat_tensor)
+
+        # Both focal_spot_error and pixel_loss_sampler are in sampler order; invert
+        # back to natural order so per-heliostat slicing is well-defined.
+        inv_perm = torch.argsort(sample_indices)
+        focal_spot_error_natural = focal_spot_error[inv_perm]
+        pixel_loss_natural = pixel_loss_sampler[inv_perm]
+
+        focal_spot_error_mrad = (focal_spot_error_natural / distances_natural) * 1000.0
         all_focal_spot_errors_mrad.extend(focal_spot_error_mrad.cpu().tolist())
+        all_pixel_losses.extend(
+            pixel_loss_natural[torch.isfinite(pixel_loss_natural)].cpu().tolist()
+        )
 
         # Track heliostats that produced NaN focal spot errors (zero flux on target).
-        nan_sample_indices = torch.where(torch.isnan(focal_spot_error))[0].tolist()
-        for sample_idx in nan_sample_indices:
-            heliostat_idx = sample_idx // samples_per_heliostat
-            if heliostat_idx < num_active:
-                nan_heliostat_ids.add(heliostat_group.names[active_indices[heliostat_idx].item()])
+        # Work in natural order so heliostat index arithmetic is well-defined.
+        nan_natural_indices = torch.where(torch.isnan(focal_spot_error_natural))[0].tolist()
+        offset = 0
+        for j, idx in enumerate(active_indices):
+            n = samples_per_heliostat_tensor[j].item()
+            for k in nan_natural_indices:
+                if offset <= k < offset + n:
+                    nan_heliostat_ids.add(heliostat_group.names[idx.item()])
+                    break
+            offset += n
 
-        heliostat_names = [
-            name for name, _, _ in heliostat_data_mapping
-            if name in heliostat_group.names
-        ]
-        for i, name in enumerate(heliostat_names):
-            if i < len(focal_spot_error):
-                fse_m = focal_spot_error[i].item()
-                dist_m = name_to_distance.get(name)
-                fse_mrad = (fse_m / dist_m * 1000.0) if dist_m else None
-                results_per_heliostat[name] = {"focal_spot_error_mrad": fse_mrad}
+        # Per-heliostat mean focal spot error and pixel loss.
+        offset = 0
+        for j, idx in enumerate(active_indices):
+            name = heliostat_group.names[idx.item()]
+            n = samples_per_heliostat_tensor[j].item()
+            fse_slice = focal_spot_error_natural[offset : offset + n]
+            pix_slice = pixel_loss_natural[offset : offset + n]
+            offset += n
+
+            fse_valid = fse_slice[torch.isfinite(fse_slice)]
+            pix_valid = pix_slice[torch.isfinite(pix_slice)]
+
+            fse_mrad = None
+            if len(fse_valid) > 0:
+                dist_m = name_to_distance[name]
+                fse_mrad = fse_valid.mean().item() / dist_m * 1000.0
+
+            pixel_loss_mean = pix_valid.mean().item() if len(pix_valid) > 0 else None
+
+            results_per_heliostat[name] = {
+                "focal_spot_error_mrad": fse_mrad,
+                "pixel_loss": pixel_loss_mean,
+            }
 
     def _safe_mean(lst):
         valid = [x for x in lst if not math.isnan(x)]
@@ -249,17 +286,35 @@ def evaluate_flux_accuracy(
     num_nan_samples = sum(1 for x in all_focal_spot_errors_mrad if math.isnan(x))
 
     return {
-        "mean_focal_spot_error_mrad": _safe_mean(all_focal_spot_errors_mrad),
+        "mean_focal_spot_error_mrad":   _safe_mean(all_focal_spot_errors_mrad),
         "median_focal_spot_error_mrad": _safe_median(all_focal_spot_errors_mrad),
-        "min_focal_spot_error_mrad": float(np.nanmin(all_focal_spot_errors_mrad)) if all_focal_spot_errors_mrad else float("inf"),
-        "max_focal_spot_error_mrad": float(np.nanmax(all_focal_spot_errors_mrad)) if all_focal_spot_errors_mrad else float("inf"),
-        "mean_focal_spot_error_m": _safe_mean(all_focal_spot_errors_m),  # same units as FocalSpotLoss training loss
-        "num_samples_evaluated": len(all_focal_spot_errors_m),
-        "num_nan_samples": num_nan_samples,
-        "nan_heliostat_ids": sorted(nan_heliostat_ids),
-        "all_errors_mrad": all_focal_spot_errors_mrad,
-        "per_heliostat": results_per_heliostat,
+        "mean_focal_spot_error_m":      _safe_mean(all_focal_spot_errors_m),
+        "all_errors_mrad":              all_focal_spot_errors_mrad,
+        # Legacy aliases used by five_heliostats_synth and full_field_200_samples.
+        "mean_mrad":                    _safe_mean(all_focal_spot_errors_mrad),
+        "median_mrad":                  _safe_median(all_focal_spot_errors_mrad),
+        "mean_m":                       _safe_mean(all_focal_spot_errors_m),
+        "min_mrad":                     float(np.nanmin(all_focal_spot_errors_mrad)) if all_focal_spot_errors_mrad else float("inf"),
+        "max_mrad":                     float(np.nanmax(all_focal_spot_errors_mrad)) if all_focal_spot_errors_mrad else float("inf"),
+        "mean_pixel_loss":              _safe_mean(all_pixel_losses),
+        "median_pixel_loss":            _safe_median(all_pixel_losses),
+        "num_samples":                  len(all_focal_spot_errors_m),
+        "num_nan_samples":              num_nan_samples,
+        "nan_heliostat_ids":            sorted(nan_heliostat_ids),
+        "per_heliostat":                results_per_heliostat,
     }
+
+
+def _gaussian_blur_batch(flux: torch.Tensor, sigma: float) -> torch.Tensor:
+    """Apply a separable Gaussian blur to a batch of 2-D flux images [N, H, W]."""
+    if sigma <= 0:
+        return flux
+    kernel_size = int(4 * sigma + 0.5) * 2 + 1
+    coords = torch.arange(kernel_size, device=flux.device, dtype=flux.dtype) - kernel_size // 2
+    gauss_1d = torch.exp(-0.5 * (coords / sigma) ** 2)
+    gauss_1d = gauss_1d / gauss_1d.sum()
+    kernel = (gauss_1d[:, None] * gauss_1d[None, :]).view(1, 1, kernel_size, kernel_size)
+    return F.conv2d(flux.unsqueeze(1), kernel, padding=kernel_size // 2).squeeze(1)
 
 
 @torch.no_grad()
@@ -274,27 +329,7 @@ def compute_pixel_test_loss(
 ) -> float:
     """
     Compute the mean PixelLossL1 value on a data split using the trained scenario.
-
-    Replicates WortbergPixelReconstructor's preprocessing:
-      1. Run ray tracing to get predicted flux.
-      2. Optionally apply Gaussian blur to predicted flux (set blur_sigma to match
-         the value used during Phase 2 training, e.g. 2.0 for the blurr variant).
-      3. Peak-normalise both predicted and measured flux independently per image
-         (same normalization as PixelLoss.__call__).
-      4. Compute sum of |pred - meas| over pixels per sample (PixelLossL1 = L1 + sum reduction).
-
-    Returns the mean per-sample loss as a float (same units as the training loss).
-    Returns nan if no valid samples are found.
     """
-    def _gaussian_blur_batch(flux: torch.Tensor, sigma: float) -> torch.Tensor:
-        if sigma <= 0:
-            return flux
-        kernel_size = int(4 * sigma + 0.5) * 2 + 1
-        coords = torch.arange(kernel_size, device=flux.device, dtype=flux.dtype) - kernel_size // 2
-        gauss_1d = torch.exp(-0.5 * (coords / sigma) ** 2)
-        gauss_1d = gauss_1d / gauss_1d.sum()
-        kernel = (gauss_1d[:, None] * gauss_1d[None, :]).view(1, 1, kernel_size, kernel_size)
-        return F.conv2d(flux.unsqueeze(1), kernel, padding=kernel_size // 2).squeeze(1)
 
     all_losses: list[float] = []
 
@@ -322,7 +357,9 @@ def compute_pixel_test_loss(
             device=device,
         )
         heliostat_group.align_surfaces_with_incident_ray_directions(
-            aim_points=scenario.target_areas.centers[target_area_mask],
+            aim_points=scenario.solar_tower.get_centers_of_target_areas(
+                target_area_mask, device=device
+            ),
             incident_ray_directions=incident_ray_directions,
             active_heliostats_mask=active_heliostats_mask,
             device=device,
@@ -335,7 +372,7 @@ def compute_pixel_test_loss(
             batch_size=min(heliostat_group.number_of_active_heliostats, ray_tracing_batch_size),
             bitmap_resolution=bitmap_resolution.to(device),
         )
-        predicted_flux = ray_tracer.trace_rays(
+        predicted_flux, _, _, _ = ray_tracer.trace_rays(
             incident_ray_directions=incident_ray_directions,
             active_heliostats_mask=active_heliostats_mask,
             target_area_indices=target_area_mask,
@@ -345,17 +382,17 @@ def compute_pixel_test_loss(
         sample_indices = ray_tracer.get_sampler_indices()
         measured_flux = measured_flux[sample_indices]
 
-        # Gaussian blur — matches WortbergPixelReconstructor._preprocess_eval_flux
+        # Gaussian blur
         predicted_flux = _gaussian_blur_batch(predicted_flux, blur_sigma)
 
-        # Peak-normalise — matches PixelLoss.__call__ normalization
+        # Peak-normalise
         N = predicted_flux.shape[0]
         pred_max = predicted_flux.view(N, -1).max(dim=1).values.clamp(min=1e-12)
         meas_max = measured_flux.view(N, -1).max(dim=1).values.clamp(min=1e-12)
         pred_norm = predicted_flux / pred_max.view(N, 1, 1)
         meas_norm = measured_flux / meas_max.view(N, 1, 1)
 
-        # L1 summed over pixels per sample — same reduction as PixelLossL1
+        # L1 summed over pixels per sample
         per_sample = (pred_norm - meas_norm).abs().sum(dim=(1, 2))
         finite_losses = per_sample[torch.isfinite(per_sample)]
         if len(finite_losses) > 0:

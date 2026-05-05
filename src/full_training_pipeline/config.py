@@ -18,9 +18,17 @@ class PipelineConfig:
     benchmark_csv: pathlib.Path
     calibration_properties_dir: pathlib.Path
     flux_image_dir: pathlib.Path
+    synthetic_data_base_dir: pathlib.Path
     train_split: str = "train"
     validation_split: str = "validation"
     test_split: str = "test"
+    # "real"      — PAINT calibration images
+    # "synthetic" — pre-generated data from full_field_200_samples/generate_dataset.py
+    dataset_type: str = "real"
+    # "focal_spot" — Euclidean distance between predicted and measured centroids
+    # "pixel"      — MSE on Gaussian-blurred, peak-normalised flux bitmaps
+    # "alignment"  — MSE on motor positions in joint-angle space (no ray tracing)
+    loss_type: str = "focal_spot"
     sample_limit_per_heliostat: int = 10
     max_epochs: int = 20
     learning_rate: float = 5e-3
@@ -48,6 +56,8 @@ def build_default_config(
     smoke_test: bool = False,
     max_epochs: int | None = None,
     output_dir: pathlib.Path | None = None,
+    dataset_type: str = "real",
+    loss_type: str = "focal_spot",
 ) -> PipelineConfig:
     module_dir = pathlib.Path(__file__).parent
     src_dir = module_dir.parent
@@ -61,13 +71,16 @@ def build_default_config(
         base_dir = src_dir.parent
         paint_dir = base_dir / "datasets" / "paint"
 
-    benchmark_name = "benchmark_split-balanced_train-10_validation-30"
+    benchmark_name = "benchmark_split-balanced_train-100_validation-50_deflectometry"
     scenario_path = (
         base_dir / "scenarios" / "one_heliostat_scenarios" / "scenario1.h5"
         if smoke_test
-        else base_dir / "scenarios" / "deflectometry_scenario" / "deflectometry_scenario.h5"
+        else base_dir / "scenarios" / "full_field_200_samples_scenario" / "scenario.h5"
     )
     coarse_checkpoint_path = module_dir / "coarse_learning_parameters" / "kinematic_parameters.json"
+    synthetic_data_base_dir = (
+        base_dir / "scenarios" / "full_field_200_samples_scenario" / "synthetic_data"
+    )
 
     if output_dir is None:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -91,6 +104,9 @@ def build_default_config(
         benchmark_csv=paint_dir / "splits" / f"{benchmark_name}.csv",
         calibration_properties_dir=paint_dir / benchmark_name / "calibration_properties",
         flux_image_dir=paint_dir / benchmark_name / "flux_image",
+        synthetic_data_base_dir=synthetic_data_base_dir,
+        dataset_type=dataset_type,
+        loss_type=loss_type,
         sample_limit_per_heliostat=sample_limit,
         max_epochs=epoch_count,
         number_of_rays=rays,

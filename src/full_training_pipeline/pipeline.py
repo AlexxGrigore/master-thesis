@@ -4,8 +4,9 @@ from dataclasses import dataclass
 
 import torch
 from artist.core.heliostat_ray_tracer import HeliostatRayTracer
-from artist.core.loss_functions import FocalSpotLoss
 from artist.util import index_mapping
+from artist_extensions.kinematic_reconstructors import WortbergPixelReconstructor
+from artist_extensions.loss_functions_ext import AlignmentLoss
 
 
 @dataclass(frozen=True)
@@ -121,6 +122,8 @@ class FineErrorLearningPipeline(torch.nn.Module):
         group_parameter_states: list[GroupParameterState],
         bitmap_resolution: torch.Tensor,
         ray_tracing_batch_size: int,
+        loss_fn,
+        loss_type: str,
     ) -> None:
         super().__init__()
         self.scenario = scenario
@@ -128,37 +131,26 @@ class FineErrorLearningPipeline(torch.nn.Module):
         self.group_parameter_states = group_parameter_states
         self.bitmap_resolution = bitmap_resolution
         self.ray_tracing_batch_size = ray_tracing_batch_size
-        self.loss_function = FocalSpotLoss(scenario=scenario)
+        self.loss_fn = loss_fn
+        self.loss_type = loss_type
 
     def predict_group_parameter_vector(
         self,
         *,
         group_index: int,
-        group_features: torch.Tensor,
+        group_calibration_inputs: list,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         group_state = self.group_parameter_states[group_index]
         base_vector = flatten_wortberg_parameter_vector(group_state)
-        residual_vector = self.residual_model(group_features)
+        residual_vector = self.residual_model(group_calibration_inputs)
         return base_vector + residual_vector, residual_vector
-
-    def apply_split_parameters(self, group_feature_tensors: list[torch.Tensor]) -> None:
-        for group_index, heliostat_group in enumerate(self.scenario.heliostat_field.heliostat_groups):
-            corrected_vector, _ = self.predict_group_parameter_vector(
-                group_index=group_index,
-                group_features=group_feature_tensors[group_index],
-            )
-            apply_wortberg_parameter_vector(
-                heliostat_group=heliostat_group,
-                group_state=self.group_parameter_states[group_index],
-                parameter_vector=corrected_vector,
-            )
 
     def compute_dataset_loss(
         self,
         *,
         heliostat_data_mapping,
         data_parser,
-        group_feature_tensors: list[torch.Tensor],
+        group_calibration_inputs: list[list],
         device: torch.device,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         total_loss = torch.zeros((), dtype=torch.float32, device=device)
@@ -168,7 +160,7 @@ class FineErrorLearningPipeline(torch.nn.Module):
         for group_index, heliostat_group in enumerate(self.scenario.heliostat_field.heliostat_groups):
             corrected_vector, residual_vector = self.predict_group_parameter_vector(
                 group_index=group_index,
-                group_features=group_feature_tensors[group_index],
+                group_calibration_inputs=group_calibration_inputs[group_index],
             )
             apply_wortberg_parameter_vector(
                 heliostat_group=heliostat_group,
@@ -177,10 +169,10 @@ class FineErrorLearningPipeline(torch.nn.Module):
             )
 
             (
-                _measured_flux,
+                measured_flux,
                 focal_spots_measured,
                 incident_ray_directions,
-                _,
+                motor_positions_measured,
                 active_heliostats_mask,
                 target_area_mask,
             ) = data_parser.parse_data_for_reconstruction(
@@ -210,30 +202,49 @@ class FineErrorLearningPipeline(torch.nn.Module):
                 device=device,
             )
 
-            ray_tracer = HeliostatRayTracer(
-                scenario=self.scenario,
-                heliostat_group=heliostat_group,
-                blocking_active=False,
-                batch_size=min(
-                    heliostat_group.number_of_active_heliostats,
-                    self.ray_tracing_batch_size,
-                ),
-                bitmap_resolution=self.bitmap_resolution.to(device),
-            )
-            predicted_flux = ray_tracer.trace_rays(
-                incident_ray_directions=incident_ray_directions,
-                active_heliostats_mask=active_heliostats_mask,
-                target_area_indices=target_area_mask,
-                device=device,
-            )
+            if self.loss_type == "alignment":
+                kinematic = heliostat_group.kinematics
+                loss_per_sample = self.loss_fn(
+                    predicted_motor_positions=kinematic.active_motor_positions,
+                    measured_motor_positions=motor_positions_measured,
+                    actuators=kinematic.actuators,
+                    device=device,
+                )
+            else:
+                ray_tracer = HeliostatRayTracer(
+                    scenario=self.scenario,
+                    heliostat_group=heliostat_group,
+                    blocking_active=False,
+                    batch_size=min(
+                        heliostat_group.number_of_active_heliostats,
+                        self.ray_tracing_batch_size,
+                    ),
+                    bitmap_resolution=self.bitmap_resolution.to(device),
+                )
+                predicted_flux = ray_tracer.trace_rays(
+                    incident_ray_directions=incident_ray_directions,
+                    active_heliostats_mask=active_heliostats_mask,
+                    target_area_indices=target_area_mask,
+                    device=device,
+                )
 
-            loss_per_sample = self.loss_function(
-                prediction=predicted_flux,
-                ground_truth=focal_spots_measured,
-                reduction_dimensions=(1, 2),
-                target_area_indices=target_area_mask,
-                device=device,
-            )
+                if self.loss_type == "pixel":
+                    prediction = WortbergPixelReconstructor._peak_normalize(
+                        WortbergPixelReconstructor._gaussian_blur(predicted_flux, sigma=1.0)
+                    )
+                    ground_truth = WortbergPixelReconstructor._peak_normalize(measured_flux)
+                else:  # focal_spot
+                    prediction = predicted_flux
+                    ground_truth = focal_spots_measured
+
+                loss_per_sample = self.loss_fn(
+                    prediction=prediction,
+                    ground_truth=ground_truth,
+                    reduction_dimensions=(1, 2),
+                    target_area_indices=target_area_mask,
+                    device=device,
+                )
+
             total_loss = total_loss + loss_per_sample.mean()
             total_residual_penalty = total_residual_penalty + residual_vector.pow(2).mean()
             contributing_groups += 1

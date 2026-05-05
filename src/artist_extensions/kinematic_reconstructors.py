@@ -11,6 +11,7 @@ import logging
 
 import torch
 import torch.nn.functional as F
+from tqdm import tqdm
 
 from artist.core import core_utils, learning_rate_schedulers
 from artist.core.heliostat_ray_tracer import HeliostatRayTracer
@@ -121,6 +122,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
         )
 
         self._convergence_history = []
+        self._kinematic_history = []
 
         for heliostat_group_index in self.ddp_setup[config_dictionary.groups_to_ranks_mapping][rank]:
             heliostat_group = self.scenario.heliostat_field.heliostat_groups[heliostat_group_index]
@@ -198,9 +200,18 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                 )
                 number_of_samples_per_heliostat = mb_size
 
+                max_epoch = self.optimization_configuration[config_dictionary.max_epoch]
+                pbar = tqdm(
+                    total=max_epoch,
+                    desc="Training",
+                    unit="ep",
+                    dynamic_ncols=True,
+                    leave=True,
+                )
+
                 while (
                     loss > float(self.optimization_configuration[config_dictionary.tolerance])
-                    and epoch <= self.optimization_configuration[config_dictionary.max_epoch]
+                    and epoch <= max_epoch
                 ):
                     optimizer.zero_grad()
                     kinematic = heliostat_group.kinematics
@@ -239,7 +250,9 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                             )
 
                         heliostat_group.align_surfaces_with_incident_ray_directions(
-                            aim_points=self.scenario.target_areas.centers[sub_target_mask],
+                            aim_points=self.scenario.solar_tower.get_centers_of_target_areas(
+                                sub_target_mask, device=device
+                            ),
                             incident_ray_directions=sub_rays,
                             active_heliostats_mask=sub_mask,
                             device=device,
@@ -255,7 +268,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                             random_seed=self.ddp_setup[config_dictionary.heliostat_group_rank],
                         )
 
-                        flux_distributions = ray_tracer.trace_rays(
+                        flux_distributions, _, _, _ = ray_tracer.trace_rays(
                             incident_ray_directions=sub_rays,
                             active_heliostats_mask=sub_mask,
                             target_area_indices=sub_target_mask,
@@ -397,11 +410,44 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                             entry["eval_loss"] = eval_loss
                         self._convergence_history.append(entry)
 
+                        # Kinematic parameter snapshot — per heliostat, in physical units.
+                        k_entry = {
+                            "epoch": epoch,
+                            "rotation_rad": kinematic.rotation_deviation_parameters.detach().cpu().tolist(),
+                            "actuator_angle_deviation_rad": (
+                                kinematic.actuators.optimizable_parameters[
+                                    :, index_mapping.actuator_initial_angle, :
+                                ]
+                                - initial_actuator_initial_angle
+                            ).detach().cpu().tolist(),
+                            "actuator_offset_deviation_m": (
+                                kinematic.actuators.non_optimizable_parameters[
+                                    :, index_mapping.actuator_offset, :
+                                ]
+                                - initial_actuator_offset
+                            ).detach().cpu().tolist(),
+                        }
+                        if self.train_position_deviation and hasattr(kinematic, "_base_position_deviation"):
+                            k_entry["base_position_m"] = kinematic._base_position_deviation.detach().cpu().tolist()
+                        else:
+                            k_entry["base_position_m"] = None
+                        self._kinematic_history.append(k_entry)
+
                     if early_stopper.step(loss):
                         log.info(f"Early stopping at epoch {epoch}.")
+                        pbar.close()
                         break
 
+                    lr = optimizer.param_groups[index_mapping.optimizer_param_group_0]["lr"]
+                    pbar.set_postfix(
+                        loss=f"{loss.item():.4f}",
+                        eval=f"{eval_loss:.4f}" if eval_loss is not None else "-",
+                        lr=f"{lr:.2e}",
+                    )
+                    pbar.update(1)
                     epoch += 1
+                else:
+                    pbar.close()
 
                 if best_params is not None:
                     self._restore_kinematic_params(heliostat_group.kinematics, best_params)
@@ -445,7 +491,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
             )
             log.info(f"Rank: {rank}, synchronized after kinematic reconstruction.")
 
-        return final_loss_per_heliostat
+        return final_loss_per_heliostat, self._convergence_history
 
     # ------------------------------------------------------------------
     # Private helpers — each responsible for one setup concern
@@ -556,20 +602,20 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                 patience=params.get(config_dictionary.patience, 10),
                 threshold=params.get(config_dictionary.threshold, 1e-4),
                 cooldown=params.get(config_dictionary.cooldown, 5),
-                min_lr=params.get(config_dictionary.min, 1e-8),
+                min_lr=params.get(config_dictionary.lr_min, 1e-8),
             )
 
         # Fallback: cosine annealing (original behaviour)
         return torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
             T_max=self.optimization_configuration[config_dictionary.max_epoch],
-            eta_min=params.get(config_dictionary.min, 1e-6),
+            eta_min=params.get(config_dictionary.lr_min, 1e-6),
         )
 
     def _setup_early_stopper(self):
         """Build and return the early stopping instance."""
         return learning_rate_schedulers.EarlyStopping(
-            window_size=self.optimization_configuration[config_dictionary.early_stopping_window],
+            window_size=self.optimization_configuration["early_stopping_window"],
             patience=self.optimization_configuration[config_dictionary.early_stopping_patience],
             min_improvement=self.optimization_configuration[config_dictionary.early_stopping_delta],
             relative=True,
@@ -673,7 +719,9 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
             )
 
         heliostat_group.align_surfaces_with_incident_ray_directions(
-            aim_points=self.scenario.target_areas.centers[target_mask],
+            aim_points=self.scenario.solar_tower.get_centers_of_target_areas(
+                target_mask, device=device
+            ),
             incident_ray_directions=incident_ray_directions,
             active_heliostats_mask=active_mask,
             device=device,
@@ -688,7 +736,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
             batch_size=self.optimization_configuration[config_dictionary.batch_size],
             random_seed=self.ddp_setup[config_dictionary.heliostat_group_rank],
         )
-        flux = ray_tracer.trace_rays(
+        flux, _, _, _ = ray_tracer.trace_rays(
             incident_ray_directions=incident_ray_directions,
             active_heliostats_mask=active_mask,
             target_area_indices=target_mask,
@@ -764,7 +812,9 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                 )
 
             heliostat_group.align_surfaces_with_incident_ray_directions(
-                aim_points=self.scenario.target_areas.centers[target_mask],
+                aim_points=self.scenario.solar_tower.get_centers_of_target_areas(
+                    target_mask, device=device
+                ),
                 incident_ray_directions=incident_ray_directions,
                 active_heliostats_mask=active_mask,
                 device=device,
@@ -779,7 +829,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                 batch_size=self.optimization_configuration[config_dictionary.batch_size],
                 random_seed=self.ddp_setup[config_dictionary.heliostat_group_rank],
             )
-            flux = ray_tracer.trace_rays(
+            flux, _, _, _ = ray_tracer.trace_rays(
                 incident_ray_directions=incident_ray_directions,
                 active_heliostats_mask=active_mask,
                 target_area_indices=target_mask,
@@ -1308,9 +1358,9 @@ class WortbergPixelReconstructor(WortbergKinematicReconstructor):
         predicted_flux: torch.Tensor,
         ground_truth: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Apply blur to predicted flux (normalization is handled inside PixelLoss)."""
+        """Blur and peak-normalize predicted flux; peak-normalize ground truth."""
         blurred = self._gaussian_blur(predicted_flux, self.BLUR_SIGMA)
-        return blurred, ground_truth
+        return self._peak_normalize(blurred), self._peak_normalize(ground_truth)
 
     @staticmethod
     def _gaussian_blur(flux: torch.Tensor, sigma: float) -> torch.Tensor:
@@ -1349,11 +1399,11 @@ class WortbergPixelReconstructor(WortbergKinematicReconstructor):
         number_of_samples_per_heliostat: int,
         device: torch.device,
     ) -> torch.Tensor:
-        """Blur predicted flux then compute pixel loss (normalization is inside PixelLoss)."""
+        """Blur and peak-normalize predicted flux, peak-normalize ground truth, then compute pixel loss."""
         blurred = self._gaussian_blur(flux_distributions, self.BLUR_SIGMA)
         loss_per_sample = loss_definition(
-            prediction=blurred,
-            ground_truth=ground_truth[sample_indices],
+            prediction=self._peak_normalize(blurred),
+            ground_truth=self._peak_normalize(ground_truth[sample_indices]),
             target_area_indices=target_area_indices[sample_indices],
             reduction_dimensions=reduction_dims,
             device=device,
@@ -1608,7 +1658,9 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
 
                 # Forward pass — sets kinematic.active_motor_positions as a byproduct
                 heliostat_group.align_surfaces_with_incident_ray_directions(
-                    aim_points=self.scenario.target_areas.centers[target_area_mask],
+                    aim_points=self.scenario.solar_tower.get_centers_of_target_areas(
+                        target_area_mask, device=device
+                    ),
                     incident_ray_directions=incident_ray_directions,
                     active_heliostats_mask=active_heliostats_mask,
                     device=device,
@@ -1721,7 +1773,7 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
             )
             log.info(f"Rank: {rank}, synchronized after kinematic reconstruction.")
 
-        return final_loss_per_heliostat
+        return final_loss_per_heliostat, self._convergence_history
 
     @torch.no_grad()
     def _compute_eval_loss_no_grad(self, heliostat_group, loss_definition, device) -> float | None:
@@ -1759,7 +1811,9 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
             )
 
         heliostat_group.align_surfaces_with_incident_ray_directions(
-            aim_points=self.scenario.target_areas.centers[target_mask],
+            aim_points=self.scenario.solar_tower.get_centers_of_target_areas(
+                target_mask, device=device
+            ),
             incident_ray_directions=incident_ray_directions,
             active_heliostats_mask=active_mask,
             device=device,

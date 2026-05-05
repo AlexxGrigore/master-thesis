@@ -5,33 +5,308 @@ import pathlib
 from dataclasses import dataclass
 
 import numpy as np
+import paint.util.paint_mappings as paint_mappings
 import torch
+from artist.util.utils import convert_wgs84_coordinates_to_local_enu
 
 from full_training_pipeline.features import (
-    SUMMARY_FEATURE_NAMES,
-    build_heliostat_feature_summary,
+    CalibrationNormStats,
+    HeliostatCalibrationInput,
+    sun_angles_to_unit_vector,
 )
+from full_training_pipeline.pipeline import GroupParameterState, flatten_wortberg_parameter_vector
 from utils.evaluation import build_heliostat_data_mapping
 
+
+# ---------------------------------------------------------------------------
+# Scenario helpers
+# ---------------------------------------------------------------------------
+
+def _build_heliostat_lookup(
+    scenario,
+    group_states: list[GroupParameterState],
+) -> dict[str, tuple[int, int]]:
+    """Map each heliostat name to (group_index, local_index_within_group)."""
+    lookup: dict[str, tuple[int, int]] = {}
+    for group_idx, group in enumerate(scenario.heliostat_field.heliostat_groups):
+        for local_idx, name in enumerate(group.names):
+            lookup[name] = (group_idx, local_idx)
+    return lookup
+
+
+def _get_heliostat_position(scenario, group_idx: int, local_idx: int) -> torch.Tensor:
+    """Return the absolute ENU position (3,) of a heliostat."""
+    group = scenario.heliostat_field.heliostat_groups[group_idx]
+    return group.positions[local_idx, :3].detach().cpu().float()
+
+
+def _get_kinematic_params(
+    group_states: list[GroupParameterState], group_idx: int, local_idx: int
+) -> torch.Tensor:
+    """Return the flattened 20-D Wortberg parameter vector for one heliostat."""
+    flat = flatten_wortberg_parameter_vector(group_states[group_idx])  # (N_heliostats, 20)
+    return flat[local_idx].detach().cpu()
+
+
+# ---------------------------------------------------------------------------
+# Real PAINT data builder
+# ---------------------------------------------------------------------------
+
+def build_calibration_inputs_real(
+    *,
+    mapping: list[tuple[str, list[pathlib.Path], list[pathlib.Path]]],
+    sample_limit_per_heliostat: int,
+    centroid_method: str,
+    scenario,
+    group_states: list[GroupParameterState],
+) -> dict[str, HeliostatCalibrationInput]:
+    lookup = _build_heliostat_lookup(scenario, group_states)
+    power_plant_pos = scenario.power_plant_position  # (3,) WGS84 [lat, lon, alt]
+
+    inputs: dict[str, HeliostatCalibrationInput] = {}
+    for heliostat_name, cal_paths, _flux_paths in mapping:
+        if heliostat_name not in lookup:
+            continue
+        group_idx, local_idx = lookup[heliostat_name]
+        paths = cal_paths[:sample_limit_per_heliostat]
+        if not paths:
+            continue
+
+        sun_list, motor_list, centroid_wgs84_list = [], [], []
+        for path in paths:
+            with open(path) as f:
+                meta = json.load(f)
+            sun_list.append(
+                sun_angles_to_unit_vector(
+                    float(meta[paint_mappings.SUN_ELEVATION]),
+                    float(meta[paint_mappings.SUN_AZIMUTH]),
+                )
+            )
+            mp = meta[paint_mappings.MOTOR_POS_KEY]
+            motor_list.append([
+                float(mp[paint_mappings.AXIS1_MOTOR_SAVE]),
+                float(mp[paint_mappings.AXIS2_MOTOR_SAVE]),
+            ])
+            centroid_wgs84_list.append(
+                meta[paint_mappings.FOCAL_SPOT_KEY][centroid_method]
+            )
+
+        sun_directions = torch.tensor(np.stack(sun_list, axis=0), dtype=torch.float32)
+        motor_positions = torch.tensor(motor_list, dtype=torch.float32)
+
+        centroid_wgs84 = torch.tensor(centroid_wgs84_list, dtype=torch.float64)
+        centroids = convert_wgs84_coordinates_to_local_enu(
+            centroid_wgs84, power_plant_pos
+        ).float()  # (N_meas, 3)
+
+        inputs[heliostat_name] = HeliostatCalibrationInput(
+            heliostat_name=heliostat_name,
+            kinematic_params=_get_kinematic_params(group_states, group_idx, local_idx),
+            heliostat_position=_get_heliostat_position(scenario, group_idx, local_idx),
+            sun_directions=sun_directions,
+            motor_positions=motor_positions,
+            centroids=centroids,
+            flux_images=None,
+        )
+    return inputs
+
+
+# ---------------------------------------------------------------------------
+# Synthetic data builder
+# ---------------------------------------------------------------------------
+
+def _build_synth_mapping(
+    split_dir: pathlib.Path,
+    sample_limit_per_heliostat: int,
+) -> list[tuple[str, list[pathlib.Path], list[pathlib.Path]]]:
+    mapping = []
+    for hid_dir in sorted(split_dir.iterdir()):
+        if not hid_dir.is_dir():
+            continue
+        cal_paths = sorted(hid_dir.glob("*/calibration_properties.json"))[:sample_limit_per_heliostat]
+        flux_paths = sorted(hid_dir.glob("*/flux_image.png"))[:sample_limit_per_heliostat]
+        n = min(len(cal_paths), len(flux_paths))
+        if n > 0:
+            mapping.append((hid_dir.name, cal_paths[:n], flux_paths[:n]))
+    return mapping
+
+
+def build_calibration_inputs_synth(
+    *,
+    mapping: list[tuple[str, list[pathlib.Path], list[pathlib.Path]]],
+    scenario,
+    group_states: list[GroupParameterState],
+) -> dict[str, HeliostatCalibrationInput]:
+    lookup = _build_heliostat_lookup(scenario, group_states)
+
+    inputs: dict[str, HeliostatCalibrationInput] = {}
+    for heliostat_name, cal_paths, _flux_paths in mapping:
+        if heliostat_name not in lookup:
+            continue
+        group_idx, local_idx = lookup[heliostat_name]
+
+        sun_list, motor_list, centroid_list = [], [], []
+        for path in cal_paths:
+            meta = json.loads(path.read_text())
+            ray_dir = meta["incident_ray_direction"]  # [x, y, z, 0.0] — points FROM sun
+            sun_list.append([-ray_dir[0], -ray_dir[1], -ray_dir[2]])  # flip → points TO sun
+            motor_list.append([float(meta["motor_position"][0]), float(meta["motor_position"][1])])
+            fse = meta["focal_spot_enu"]  # [E, N, U, 1.0]
+            centroid_list.append([fse[0], fse[1], fse[2]])
+
+        inputs[heliostat_name] = HeliostatCalibrationInput(
+            heliostat_name=heliostat_name,
+            kinematic_params=_get_kinematic_params(group_states, group_idx, local_idx),
+            heliostat_position=_get_heliostat_position(scenario, group_idx, local_idx),
+            sun_directions=torch.tensor(sun_list, dtype=torch.float32),
+            motor_positions=torch.tensor(motor_list, dtype=torch.float32),
+            centroids=torch.tensor(centroid_list, dtype=torch.float32),
+            flux_images=None,
+        )
+    return inputs
+
+
+# ---------------------------------------------------------------------------
+# Normalisation
+# ---------------------------------------------------------------------------
+
+def compute_norm_stats(
+    calibration_inputs: dict[str, HeliostatCalibrationInput],
+) -> CalibrationNormStats:
+    def _safe_std(t: torch.Tensor) -> torch.Tensor:
+        s = t.std(dim=0)
+        return torch.where(s < 1e-6, torch.ones_like(s), s)
+
+    all_sun = torch.cat([inp.sun_directions for inp in calibration_inputs.values()], dim=0)
+    all_motor = torch.cat([inp.motor_positions for inp in calibration_inputs.values()], dim=0)
+    all_centroid = torch.cat([inp.centroids for inp in calibration_inputs.values()], dim=0)
+    all_helpos = torch.stack([inp.heliostat_position for inp in calibration_inputs.values()], dim=0)
+    all_kp = torch.stack([inp.kinematic_params for inp in calibration_inputs.values()], dim=0)
+
+    return CalibrationNormStats(
+        sun_mean=all_sun.mean(dim=0),
+        sun_std=_safe_std(all_sun),
+        motor_mean=all_motor.mean(dim=0),
+        motor_std=_safe_std(all_motor),
+        centroid_mean=all_centroid.mean(dim=0),
+        centroid_std=_safe_std(all_centroid),
+        heliostat_pos_mean=all_helpos.mean(dim=0),
+        heliostat_pos_std=_safe_std(all_helpos),
+        kinematic_mean=all_kp.mean(dim=0),
+        kinematic_std=_safe_std(all_kp),
+    )
+
+
+def normalize_calibration_inputs(
+    calibration_inputs: dict[str, HeliostatCalibrationInput],
+    norm_stats: CalibrationNormStats,
+) -> dict[str, HeliostatCalibrationInput]:
+    ns = norm_stats
+    normalized: dict[str, HeliostatCalibrationInput] = {}
+    for name, inp in calibration_inputs.items():
+        normalized[name] = HeliostatCalibrationInput(
+            heliostat_name=inp.heliostat_name,
+            kinematic_params=(inp.kinematic_params - ns.kinematic_mean) / ns.kinematic_std,
+            heliostat_position=(inp.heliostat_position - ns.heliostat_pos_mean) / ns.heliostat_pos_std,
+            sun_directions=(inp.sun_directions - ns.sun_mean) / ns.sun_std,
+            motor_positions=(inp.motor_positions - ns.motor_mean) / ns.motor_std,
+            centroids=(inp.centroids - ns.centroid_mean) / ns.centroid_std,
+            flux_images=inp.flux_images,
+        )
+    return normalized
+
+
+# ---------------------------------------------------------------------------
+# Group-level structure (for pipeline)
+# ---------------------------------------------------------------------------
+
+def build_group_calibration_inputs(
+    scenario,
+    calibration_inputs: dict[str, HeliostatCalibrationInput],
+) -> list[list[HeliostatCalibrationInput | None]]:
+    """Return one list per heliostat group; None for heliostats with no calibration data."""
+    result: list[list[HeliostatCalibrationInput | None]] = []
+    for group in scenario.heliostat_field.heliostat_groups:
+        result.append([calibration_inputs.get(name) for name in group.names])
+    return result
+
+
+# ---------------------------------------------------------------------------
+# SplitDataBundle
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class SplitDataBundle:
     split: str
     heliostat_data_mapping: list[tuple[str, list[pathlib.Path], list[pathlib.Path]]]
-    raw_feature_summaries: dict[str, np.ndarray]
-    normalized_feature_summaries: dict[str, torch.Tensor]
-    feature_mean: torch.Tensor
-    feature_std: torch.Tensor
-    feature_names: tuple[str, ...] = SUMMARY_FEATURE_NAMES
-
-    @property
-    def feature_dim(self) -> int:
-        return len(self.feature_names)
+    calibration_inputs: dict[str, HeliostatCalibrationInput]  # normalised
+    norm_stats: CalibrationNormStats
 
 
-def _read_calibration_metadata(calibration_path: pathlib.Path) -> dict[str, object]:
-    with open(calibration_path) as handle:
-        return json.load(handle)
+# ---------------------------------------------------------------------------
+# Top-level bundle builders
+# ---------------------------------------------------------------------------
+
+def build_split_bundle(
+    *,
+    benchmark_csv: pathlib.Path,
+    calibration_properties_dir: pathlib.Path,
+    flux_image_dir: pathlib.Path,
+    split: str,
+    sample_limit_per_heliostat: int,
+    centroid_method: str,
+    scenario,
+    group_states: list[GroupParameterState],
+    norm_stats: CalibrationNormStats | None = None,
+) -> SplitDataBundle:
+    mapping = build_heliostat_data_mapping(
+        benchmark_csv=benchmark_csv,
+        calibration_properties_dir=calibration_properties_dir,
+        flux_image_dir=flux_image_dir,
+        split=split,
+    )
+    mapping = _truncate_mapping(mapping, sample_limit_per_heliostat)
+    raw_inputs = build_calibration_inputs_real(
+        mapping=mapping,
+        sample_limit_per_heliostat=sample_limit_per_heliostat,
+        centroid_method=centroid_method,
+        scenario=scenario,
+        group_states=group_states,
+    )
+    if norm_stats is None:
+        norm_stats = compute_norm_stats(raw_inputs)
+    normalized = normalize_calibration_inputs(raw_inputs, norm_stats)
+    return SplitDataBundle(
+        split=split,
+        heliostat_data_mapping=mapping,
+        calibration_inputs=normalized,
+        norm_stats=norm_stats,
+    )
+
+
+def build_split_bundle_synth(
+    *,
+    split_dir: pathlib.Path,
+    sample_limit_per_heliostat: int,
+    scenario,
+    group_states: list[GroupParameterState],
+    norm_stats: CalibrationNormStats | None = None,
+) -> SplitDataBundle:
+    mapping = _build_synth_mapping(split_dir, sample_limit_per_heliostat)
+    raw_inputs = build_calibration_inputs_synth(
+        mapping=mapping,
+        scenario=scenario,
+        group_states=group_states,
+    )
+    if norm_stats is None:
+        norm_stats = compute_norm_stats(raw_inputs)
+    normalized = normalize_calibration_inputs(raw_inputs, norm_stats)
+    return SplitDataBundle(
+        split=split_dir.name,
+        heliostat_data_mapping=mapping,
+        calibration_inputs=normalized,
+        norm_stats=norm_stats,
+    )
 
 
 def _truncate_mapping(
@@ -41,114 +316,6 @@ def _truncate_mapping(
     if sample_limit_per_heliostat <= 0:
         return mapping
     return [
-        (heliostat_name, calibration_paths[:sample_limit_per_heliostat], flux_paths[:sample_limit_per_heliostat])
-        for heliostat_name, calibration_paths, flux_paths in mapping
+        (name, cal[:sample_limit_per_heliostat], flux[:sample_limit_per_heliostat])
+        for name, cal, flux in mapping
     ]
-
-
-def build_split_mapping(
-    *,
-    benchmark_csv: pathlib.Path,
-    calibration_properties_dir: pathlib.Path,
-    flux_image_dir: pathlib.Path,
-    split: str,
-    sample_limit_per_heliostat: int,
-) -> list[tuple[str, list[pathlib.Path], list[pathlib.Path]]]:
-    mapping = build_heliostat_data_mapping(
-        benchmark_csv=benchmark_csv,
-        calibration_properties_dir=calibration_properties_dir,
-        flux_image_dir=flux_image_dir,
-        split=split,
-    )
-    return _truncate_mapping(mapping, sample_limit_per_heliostat=sample_limit_per_heliostat)
-
-
-def build_raw_feature_summaries(
-    heliostat_data_mapping: list[tuple[str, list[pathlib.Path], list[pathlib.Path]]],
-) -> dict[str, np.ndarray]:
-    summaries: dict[str, np.ndarray] = {}
-    for heliostat_name, calibration_paths, _ in heliostat_data_mapping:
-        if not calibration_paths:
-            continue
-        metadata_items = [_read_calibration_metadata(path) for path in calibration_paths]
-        summaries[heliostat_name] = build_heliostat_feature_summary(metadata_items)
-    return summaries
-
-
-def compute_feature_normalization(
-    raw_feature_summaries: dict[str, np.ndarray],
-) -> tuple[torch.Tensor, torch.Tensor]:
-    if not raw_feature_summaries:
-        raise ValueError("Cannot normalize empty feature summaries.")
-    feature_matrix = np.stack(list(raw_feature_summaries.values()), axis=0)
-    mean = torch.tensor(feature_matrix.mean(axis=0), dtype=torch.float32)
-    std = torch.tensor(feature_matrix.std(axis=0), dtype=torch.float32)
-    std = torch.where(std < 1e-6, torch.ones_like(std), std)
-    return mean, std
-
-
-def normalize_feature_summaries(
-    raw_feature_summaries: dict[str, np.ndarray],
-    feature_mean: torch.Tensor,
-    feature_std: torch.Tensor,
-) -> dict[str, torch.Tensor]:
-    normalized: dict[str, torch.Tensor] = {}
-    for heliostat_name, summary in raw_feature_summaries.items():
-        normalized[heliostat_name] = (
-            torch.tensor(summary, dtype=torch.float32) - feature_mean
-        ) / feature_std
-    return normalized
-
-
-def build_split_bundle(
-    *,
-    benchmark_csv: pathlib.Path,
-    calibration_properties_dir: pathlib.Path,
-    flux_image_dir: pathlib.Path,
-    split: str,
-    sample_limit_per_heliostat: int,
-    feature_mean: torch.Tensor | None = None,
-    feature_std: torch.Tensor | None = None,
-) -> SplitDataBundle:
-    mapping = build_split_mapping(
-        benchmark_csv=benchmark_csv,
-        calibration_properties_dir=calibration_properties_dir,
-        flux_image_dir=flux_image_dir,
-        split=split,
-        sample_limit_per_heliostat=sample_limit_per_heliostat,
-    )
-    raw_feature_summaries = build_raw_feature_summaries(mapping)
-    if feature_mean is None or feature_std is None:
-        feature_mean, feature_std = compute_feature_normalization(raw_feature_summaries)
-    normalized_feature_summaries = normalize_feature_summaries(
-        raw_feature_summaries,
-        feature_mean=feature_mean,
-        feature_std=feature_std,
-    )
-    return SplitDataBundle(
-        split=split,
-        heliostat_data_mapping=mapping,
-        raw_feature_summaries=raw_feature_summaries,
-        normalized_feature_summaries=normalized_feature_summaries,
-        feature_mean=feature_mean,
-        feature_std=feature_std,
-    )
-
-
-def build_group_feature_tensors(
-    scenario,
-    feature_summaries: dict[str, torch.Tensor],
-    feature_dim: int,
-    device: torch.device,
-) -> list[torch.Tensor]:
-    group_feature_tensors: list[torch.Tensor] = []
-    zero_feature = torch.zeros(feature_dim, dtype=torch.float32, device=device)
-
-    for heliostat_group in scenario.heliostat_field.heliostat_groups:
-        rows = []
-        for heliostat_name in heliostat_group.names:
-            feature_row = feature_summaries.get(heliostat_name)
-            rows.append(feature_row.to(device) if feature_row is not None else zero_feature)
-        group_feature_tensors.append(torch.stack(rows, dim=0))
-
-    return group_feature_tensors
