@@ -2,7 +2,7 @@
 #SBATCH --job-name=ff200_synthetic
 #SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/ff200_synthetic_out_%j.log
 #SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/ff200_synthetic_err_%j.log
-#SBATCH --time=8:00:00
+#SBATCH --time=1:00:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:a40:1

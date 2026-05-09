@@ -4,6 +4,7 @@ import json
 import logging
 import pathlib
 import sys
+import time
 
 from tqdm import tqdm
 from dataclasses import dataclass
@@ -328,6 +329,10 @@ def run(config: PipelineConfig) -> None:
         raise ValueError("max_epochs must be at least 1.")
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
+    overall_t0 = time.time()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
     plots_dir = config.output_dir / "plots"
     json_dir = config.output_dir / "json"
     models_dir = config.output_dir / "models"
@@ -459,6 +464,7 @@ def run(config: PipelineConfig) -> None:
         tqdm.write("[4/6] Training...")
         early_stopping_patience = max(5, config.max_epochs // 10)
         epochs_without_improvement = 0
+        training_t0 = time.time()
         pbar = tqdm(range(config.max_epochs), desc="Training", unit="epoch")
         for epoch in pbar:
             residual_model.train()
@@ -557,6 +563,8 @@ def run(config: PipelineConfig) -> None:
                     pbar.close()
                     break
 
+        training_time_s = time.time() - training_t0
+
         if (
             best_epoch_record is None
             or best_validation_metrics is None
@@ -636,6 +644,7 @@ def run(config: PipelineConfig) -> None:
         )
 
         tqdm.write("[5/6] Evaluating best model on test set...")
+        test_eval_t0 = time.time()
         best_test_scenario = _load_scenario(config, device)
         best_test_group_states = capture_all_group_parameter_states(best_test_scenario, device=device)
         best_test_metrics = evaluate_model_tracking_accuracy(
@@ -649,11 +658,31 @@ def run(config: PipelineConfig) -> None:
             bitmap_resolution=bitmap_resolution,
             ray_tracing_batch_size=config.ray_tracing_batch_size,
         )
+        test_eval_time_s = time.time() - test_eval_t0
 
         _write_json(json_dir / "validation_corrected_metrics.json", best_validation_metrics)
         _write_json(json_dir / "validation_corrected_metrics_last_epoch.json", last_validation_metrics)
         _write_json(json_dir / "test_corrected_metrics.json", best_test_metrics)
         _write_json(json_dir / "test_corrected_metrics_last_epoch.json", last_test_metrics)
+
+        overall_time_s = time.time() - overall_t0
+        _write_json(
+            json_dir / "timing.json",
+            {
+                "overall_s": round(overall_time_s, 1),
+                "overall_min": round(overall_time_s / 60, 2),
+                "training_loop_s": round(training_time_s, 1),
+                "training_loop_min": round(training_time_s / 60, 2),
+                "test_evaluation_s": round(test_eval_time_s, 1),
+                "test_evaluation_min": round(test_eval_time_s / 60, 2),
+                "peak_gpu_memory_allocated_gb": round(
+                    torch.cuda.max_memory_allocated() / 1024 ** 3, 3
+                ) if torch.cuda.is_available() else None,
+                "peak_gpu_memory_reserved_gb": round(
+                    torch.cuda.max_memory_reserved() / 1024 ** 3, 3
+                ) if torch.cuda.is_available() else None,
+            },
+        )
         tqdm.write("[6/6] Saving results and plots...")
         _write_json(
             config.output_dir / "training_summary.json",

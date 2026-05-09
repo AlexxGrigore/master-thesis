@@ -81,6 +81,10 @@ def run(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    overall_t0 = time.time()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
     with h5py.File(scenario_path, "r") as f:
         scenario = Scenario.load_scenario_from_hdf5(
             scenario_file=f,
@@ -98,12 +102,14 @@ def run(
     # Stage 1: pre-perturbation eval
     # ------------------------------------------------------------------
     log.info("Stage 1 — pre-perturbation eval (clean scenario, clean test data)…")
+    pre_eval_t0 = time.time()
     pre_eval = evaluate_flux_accuracy(
         scenario=scenario,
         heliostat_data_mapping=test_mapping,
         data_parser=test_parser,
         device=device,
     )
+    pre_eval_time_s = time.time() - pre_eval_t0
     log.info(
         f"  pre-perturb : mean={pre_eval['mean_mrad']:.3f} mrad  "
         f"median={pre_eval['median_mrad']:.3f} mrad  "
@@ -182,12 +188,14 @@ def run(
     # Stage 3 eval
     # ------------------------------------------------------------------
     log.info("Stage 3 — post-training eval (trained scenario, clean test data)…")
+    post_train_eval_t0 = time.time()
     post_train_eval = evaluate_flux_accuracy(
         scenario=scenario,
         heliostat_data_mapping=test_mapping,
         data_parser=test_parser,
         device=device,
     )
+    post_train_eval_time_s = time.time() - post_train_eval_t0
     log.info(
         f"  post-train  : mean={post_train_eval['mean_mrad']:.3f} mrad  "
         f"median={post_train_eval['median_mrad']:.3f} mrad  "
@@ -216,6 +224,24 @@ def run(
     recovery = None
     if perturbations is not None and heliostat_ids is not None:
         recovery = _param_recovery(scenario, perturbations, heliostat_ids, device)
+
+    overall_time_s = time.time() - overall_t0
+    timing = {
+        "overall_s": round(overall_time_s, 1),
+        "overall_min": round(overall_time_s / 60, 2),
+        "pre_perturbation_eval_s": round(pre_eval_time_s, 1),
+        "training_s": round(train_time, 1),
+        "training_min": round(train_time / 60, 2),
+        "post_training_eval_s": round(post_train_eval_time_s, 1),
+        "peak_gpu_memory_allocated_gb": round(
+            torch.cuda.max_memory_allocated() / 1024 ** 3, 3
+        ) if torch.cuda.is_available() else None,
+        "peak_gpu_memory_reserved_gb": round(
+            torch.cuda.max_memory_reserved() / 1024 ** 3, 3
+        ) if torch.cuda.is_available() else None,
+    }
+    with open(output_dir / "timing.json", "w") as f:
+        json.dump(timing, f, indent=2)
 
     results = {
         "pre_perturbation": {
