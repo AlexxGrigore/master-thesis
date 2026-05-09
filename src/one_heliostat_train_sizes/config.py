@@ -1,6 +1,8 @@
 """
-Configuration for the full-field 200-samples synthetic perturbation experiment.
-Edit this file to change hyperparameters, paths, and perturbation ranges.
+Configuration for the one-heliostat train-size sensitivity experiment.
+
+Edit this file to change the heliostat, training sample sweep, hyperparameters,
+and dataset type.
 """
 import pathlib
 
@@ -22,10 +24,25 @@ else:
     BASE_DIR  = pathlib.Path(__file__).resolve().parents[2]
     PAINT_DIR = BASE_DIR / "datasets" / "paint"
 
-SCENARIO_PATH              = BASE_DIR / "scenarios" / "full_field_200_samples_scenario" / "scenario.h5"
+SCENARIO_PATH              = BASE_DIR / "scenarios" / "one_heliostat_scenario" / "scenario.h5"
 BENCHMARK_CSV              = PAINT_DIR / "splits" / f"{BENCHMARK_NAME}.csv"
 CALIBRATION_PROPERTIES_DIR = PAINT_DIR / BENCHMARK_NAME / "calibration_properties"
 FLUX_IMAGE_DIR             = PAINT_DIR / BENCHMARK_NAME / "flux_image"
+
+# Synthetic data reused from the full-field experiment (already generated for all 63 heliostats).
+# No separate generate_dataset.py step is needed for this experiment.
+SYNTH_DATA_DIR = BASE_DIR / "scenarios" / "full_field_200_samples_scenario" / "synthetic_data"
+
+# ---------------------------------------------------------------------------
+# Heliostat selection
+#
+# Set to a specific heliostat ID (e.g. "AA23") to fix the experiment to that
+# heliostat.  None means auto-select: the first heliostat found in the
+# benchmark CSV that also has a local scenario will be used.  Must match the
+# heliostat used when running create_scenario.py.
+# ---------------------------------------------------------------------------
+
+HELIOSTAT_ID: str | None = None
 
 # ---------------------------------------------------------------------------
 # Data splits
@@ -33,24 +50,23 @@ FLUX_IMAGE_DIR             = PAINT_DIR / BENCHMARK_NAME / "flux_image"
 
 CENTROID_METHOD = paint_mappings.UTIS_KEY
 
-TRAIN_SAMPLES = 100
-VAL_SAMPLES   = 50
-TEST_SAMPLES  = 50
+# Training sample counts to sweep — the experiment runs one full train+eval
+# cycle per entry.  Val and test sizes are fixed across all runs.
+TRAIN_SIZES = [1, 5, 10, 20, 25, 50, 75, 100]
 
-# Rays for synthetic data generation (high → clean, near-noiseless centroids).
-# Must match what was used in generate_dataset.py (100).
+VAL_SAMPLES  = 50
+TEST_SAMPLES = 50
+
+# Rays for synthetic data generation (must match what was used to generate the
+# existing full_field_200_samples synthetic data — do not change).
 SYNTH_GEN_RAYS = 100
-# Rays during training (lower for speed; 10 works fine on CPU)
+# Rays during training (lower for speed).
 TRAIN_RAYS = 10
 # Surface points per facet (N×N); 4 facets/heliostat → 4×N² pts total.
-# 25×25 = 625 pts/facet, matches the scenario generation setting.
 SURFACE_POINTS_PER_FACET = 25
 
 # ---------------------------------------------------------------------------
 # Perturbation
-#
-# Random per heliostat, seeded for reproducibility.
-# Ranges match WortbergKinematicReconstructor deviation bounds (Wortberg 2025 Table 5.3).
 # ---------------------------------------------------------------------------
 
 PERTURBATION_SEED = 42
@@ -67,17 +83,17 @@ PERTURBATION_RANGES = {
 # ---------------------------------------------------------------------------
 # Dataset
 #
-# "synthetic" — pre-generated ray-traced data (run generate_dataset.py first)
+# "synthetic" — reuses pre-generated data from full_field_200_samples_scenario/synthetic_data/
 # "real"      — PAINT calibration images; kinematic perturbations are skipped
 # ---------------------------------------------------------------------------
 
-DATASET_TYPE = "real"
+DATASET_TYPE = "synthetic"
 
 # ---------------------------------------------------------------------------
 # Loss
 #
-# "focal_spot" — Euclidean distance between predicted and measured centroids (mrad-aligned)
-# "pixel"      — MSE on Gaussian-blurred, peak-normalized flux bitmaps
+# "focal_spot" — Euclidean distance between predicted and measured centroids (mrad)
+# "pixel"      — MSE on Gaussian-blurred, peak-normalised flux bitmaps
 # "alignment"  — MSE on motor positions converted to joint angles (no ray tracing)
 # ---------------------------------------------------------------------------
 
@@ -90,7 +106,7 @@ LOSS_TYPE = "focal_spot"
 OPTIMIZATION_CONFIG = {
     config_dictionary.initial_learning_rate: 1e-4,
     config_dictionary.tolerance:             1e-6,
-    config_dictionary.max_epoch:             300,
+    config_dictionary.max_epoch:             100,
     config_dictionary.batch_size:            8,
     config_dictionary.log_step:              5,
     config_dictionary.early_stopping_window:   10,

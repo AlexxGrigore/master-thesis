@@ -16,13 +16,32 @@ def plot_loss_curves(
     epochs = [int(record["epoch"]) for record in history]
     train_loss_m = [record["train_loss_m"] for record in history]
     validation_loss_m = [record["validation_mean_focal_spot_error_m"] for record in history]
+    learning_rates = [record.get("learning_rate") for record in history]
+    has_lr = all(lr is not None for lr in learning_rates)
 
     best_index = int(np.argmin(validation_loss_m))
     best_epoch = epochs[best_index]
     best_validation_loss = validation_loss_m[best_index]
 
-    fig, ax = plt.subplots(figsize=(10, 5.5))
+    # Epochs where ReduceLROnPlateau fired.
+    lr_drop_epochs = []
+    if has_lr:
+        for i in range(1, len(learning_rates)):
+            if learning_rates[i] < learning_rates[i - 1]:
+                lr_drop_epochs.append(epochs[i])
+
+    n_rows = 2 if has_lr else 1
+    height_ratios = [3, 1] if has_lr else [1]
+    fig, axes = plt.subplots(
+        n_rows, 1,
+        figsize=(10, 7 if has_lr else 5.5),
+        gridspec_kw={"height_ratios": height_ratios},
+        sharex=True,
+    )
     fig.patch.set_facecolor("white")
+    ax = axes[0] if has_lr else axes
+
+    # --- Loss subplot ---
     ax.plot(epochs, train_loss_m, color="#1f77b4", linewidth=2.0, label="Train loss")
     ax.plot(epochs, validation_loss_m, color="#ff7f0e", linewidth=2.0, label="Validation loss")
     ax.axhline(
@@ -41,11 +60,32 @@ def plot_loss_curves(
         fontsize=9,
         bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "alpha": 0.9},
     )
-    ax.set_xlabel("Epoch")
+    for i, ep in enumerate(lr_drop_epochs):
+        ax.axvline(ep, color="#9467bd", linewidth=1.2, linestyle="--",
+                   label="LR reduced" if i == 0 else None)
     ax.set_ylabel("Loss (m)")
     ax.set_title("Training, Validation, and Test Loss")
     ax.grid(True, alpha=0.25)
     ax.legend(framealpha=0.9)
+
+    # --- LR subplot ---
+    if has_lr:
+        ax_lr = axes[1]
+        ax_lr.plot(epochs, learning_rates, color="#9467bd", linewidth=1.8)
+        for ep in lr_drop_epochs:
+            ax_lr.axvline(ep, color="#9467bd", linewidth=1.2, linestyle="--")
+            new_lr = learning_rates[epochs.index(ep)]
+            ax_lr.text(ep + 0.5, new_lr * 1.15, f"{new_lr:.1e}",
+                       fontsize=7, color="#9467bd", va="bottom")
+        ax_lr.set_yscale("log")
+        ax_lr.set_xlabel("Epoch")
+        ax_lr.set_ylabel("Learning rate")
+        ax_lr.set_title("Learning Rate Schedule")
+        ax_lr.grid(True, alpha=0.25)
+
+    if not has_lr:
+        ax.set_xlabel("Epoch")
+
     fig.tight_layout()
     fig.savefig(output_path, dpi=160, bbox_inches="tight")
     plt.close(fig)
@@ -158,7 +198,6 @@ def plot_linear_weights_heatmap(
     *,
     linear_weight: torch.Tensor,
     linear_bias: torch.Tensor,
-    n_measurements: int,
     parameter_names: tuple[str, ...],
     output_path: pathlib.Path,
 ) -> None:
@@ -168,15 +207,22 @@ def plot_linear_weights_heatmap(
     if vmax == 0.0:
         vmax = 1.0
 
-    # Build sparse x-axis ticks: heliostat_pos (3), kinematic (20), then one tick per measurement block.
+    # X-axis ticks: one per feature group in the aggregated 42-D input.
+    # Layout: helpos(3) | kinematic(20) | mean_cen(3) std_cen(3) range_cen(3)
+    #         mean_sun(3) slope(3) mean_motor(2) std_motor(2)
     _N_HEL = 3
     _N_KIN = 20
-    _N_PER = 8
-    section_ticks = [0, _N_HEL, _N_HEL + _N_KIN]
-    section_labels = ["helpos_0", "kin_0", "meas_0"]
-    for i in range(n_measurements):
-        section_ticks.append(_N_HEL + _N_KIN + i * _N_PER)
-        section_labels.append(f"m{i}")
+    section_starts = [0, _N_HEL, _N_HEL + _N_KIN,
+                      _N_HEL + _N_KIN + 3,  # std_cen
+                      _N_HEL + _N_KIN + 6,  # range_cen
+                      _N_HEL + _N_KIN + 9,  # mean_sun
+                      _N_HEL + _N_KIN + 12, # slope
+                      _N_HEL + _N_KIN + 15, # mean_motor
+                      _N_HEL + _N_KIN + 17, # std_motor
+                      ]
+    section_labels = ["helpos", "kin", "mean_cen", "std_cen",
+                      "range_cen", "mean_sun", "slope", "mean_motor", "std_motor"]
+    section_ticks = section_starts
 
     fig, (ax_heatmap, ax_bias) = plt.subplots(
         1,

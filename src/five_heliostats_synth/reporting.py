@@ -81,8 +81,9 @@ def plot_convergence(
             ax.axhline(val_m, color=color, linewidth=1.2, linestyle=":",
                        alpha=0.85, label=f"{label}  ({val_m:.5f} m{mrad_str})")
 
+    ax.set_yscale("log")
     ax.set_xlabel("Epoch", fontsize=11)
-    ax.set_ylabel("FocalSpotLoss (m)", fontsize=11)
+    ax.set_ylabel("FocalSpotLoss (m) — log scale", fontsize=11)
     ax.set_title("5-Heliostat Synth→Synth — Convergence", fontsize=13, fontweight="bold")
     ax.legend(fontsize=8, framealpha=0.85)
     ax.grid(alpha=0.3, linestyle="--", linewidth=0.7)

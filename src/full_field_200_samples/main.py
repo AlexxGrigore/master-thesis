@@ -92,9 +92,25 @@ def main() -> None:
         description="Full-field 200-samples synthetic perturbation experiment."
     )
     parser.add_argument("--output-dir", type=pathlib.Path, default=None)
+    parser.add_argument("--dataset-type", choices=["synthetic", "real"], default=None,
+                        help="Override cfg.DATASET_TYPE for this run.")
+    parser.add_argument("--daic", action="store_true",
+                        help="Use DAIC cluster paths (overrides IS_ON_DAIC in config.py).")
     parser.add_argument("--smoke-test", action="store_true",
                         help="Run 5 epochs with 1 train ray for a quick end-to-end check.")
     args = parser.parse_args()
+
+    if args.dataset_type is not None:
+        cfg.DATASET_TYPE = args.dataset_type
+
+    if args.daic:
+        cfg.IS_ON_DAIC = True
+        cfg.BASE_DIR  = pathlib.Path("/home/nfs/agrigore/projects/githubProjects/master-thesis")
+        cfg.PAINT_DIR = pathlib.Path("/tudelft.net/staff-umbrella/StudentsCVlab/agrigore/datasets/paint")
+        cfg.SCENARIO_PATH              = cfg.BASE_DIR / "scenarios" / "full_field_200_samples_scenario" / "scenario.h5"
+        cfg.BENCHMARK_CSV              = cfg.PAINT_DIR / "splits" / f"{cfg.BENCHMARK_NAME}.csv"
+        cfg.CALIBRATION_PROPERTIES_DIR = cfg.PAINT_DIR / cfg.BENCHMARK_NAME / "calibration_properties"
+        cfg.FLUX_IMAGE_DIR             = cfg.PAINT_DIR / cfg.BENCHMARK_NAME / "flux_image"
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     if args.output_dir:

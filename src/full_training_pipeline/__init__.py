@@ -1,4 +1,4 @@
-from .config import PipelineConfig, build_default_config
+from .config import PipelineConfig, build_config
 from .model import (
     SHARED_WORTBERG_PARAMETER_NAMES,
     SHARED_WORTBERG_RESIDUAL_BOUNDS,
@@ -10,5 +10,5 @@ __all__ = [
     "SHARED_WORTBERG_PARAMETER_NAMES",
     "SHARED_WORTBERG_RESIDUAL_BOUNDS",
     "SharedLinearResidualModel",
-    "build_default_config",
+    "build_config",
 ]

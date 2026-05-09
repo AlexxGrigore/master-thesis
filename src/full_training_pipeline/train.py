@@ -4,6 +4,8 @@ import json
 import logging
 import pathlib
 import sys
+
+from tqdm import tqdm
 from dataclasses import dataclass
 
 _pkg = pathlib.Path(__file__).parent
@@ -20,7 +22,7 @@ from artist.util.environment_setup import get_device
 
 from artist_extensions.loss_functions_ext import AlignmentLoss
 from five_heliostats_synth.data import SyntheticDatasetParser
-from full_training_pipeline.config import PipelineConfig, build_default_config
+from full_training_pipeline.config import PipelineConfig, build_config
 from full_training_pipeline.data import (
     SplitDataBundle,
     build_group_calibration_inputs,
@@ -141,7 +143,6 @@ def _save_model_checkpoint(
     output_path: pathlib.Path,
     model_state_dict: dict[str, torch.Tensor],
     norm_stats_dict: dict[str, list[float]],
-    n_measurements: int,
     selected_epoch: int,
     selected_validation_mean_mrad: float,
     selection_tag: str,
@@ -150,7 +151,6 @@ def _save_model_checkpoint(
         {
             "model_state_dict": model_state_dict,
             "norm_stats": norm_stats_dict,
-            "n_measurements": n_measurements,
             "selected_epoch": selected_epoch,
             "selected_validation_mean_focal_spot_error_mrad": selected_validation_mean_mrad,
             "selection_tag": selection_tag,
@@ -164,7 +164,6 @@ def _save_model_checkpoint_json(
     output_path: pathlib.Path,
     model_state_dict: dict[str, torch.Tensor],
     norm_stats_dict: dict[str, list[float]],
-    n_measurements: int,
     selected_epoch: int,
     selected_validation_mean_mrad: float,
     selection_tag: str,
@@ -175,7 +174,6 @@ def _save_model_checkpoint_json(
             "selection_tag": selection_tag,
             "selected_epoch": selected_epoch,
             "selected_validation_mean_focal_spot_error_mrad": selected_validation_mean_mrad,
-            "n_measurements": n_measurements,
             "parameter_names": list(SHARED_WORTBERG_PARAMETER_NAMES),
             "norm_stats": norm_stats_dict,
             "residual_bounds": model_state_dict["residual_bounds"].tolist(),
@@ -238,9 +236,8 @@ def _write_pipeline_markdown(
     *,
     output_path: pathlib.Path,
     config: PipelineConfig,
-    n_measurements: int,
 ) -> None:
-    input_dim = 3 + 20 + n_measurements * 8
+    from full_training_pipeline.model import INPUT_DIM
     parameter_lines = "\n".join(f"- `{name}`" for name in SHARED_WORTBERG_PARAMETER_NAMES)
     markdown = f"""# Full Training Pipeline
 
@@ -259,26 +256,30 @@ residual model that predicts a 20-dimensional Wortberg-style correction vector f
 
 ## Feature Construction
 
-Each heliostat is represented by a flat vector built from its calibration measurements.
+Each heliostat is represented by 19 aggregate statistics computed over all its calibration
+measurements, plus its position and coarse kinematic parameters.
 
-Input layout (total {input_dim}D):
+Input layout (total {INPUT_DIM}D):
 - `heliostat_position` (3D): absolute ENU position from scenario
 - `kinematic_params` (20D): coarse checkpoint parameters
-- Per measurement × {n_measurements} (8D each):
-  - `sun_x, sun_y, sun_z`: sun direction unit vector (pointing TO sun)
-  - `motor_1, motor_2`: motor axis positions
-  - `centroid_e, centroid_n, centroid_u`: measured flux centroid in ENU
+- `mean_centroid` (3D): mean ENU flux centroid across all measurements
+- `std_centroid` (3D): standard deviation of centroid positions
+- `range_centroid` (3D): max - min centroid per axis
+- `mean_sun` (3D): mean sun direction unit vector
+- `cen_sun_slope` (3D): OLS slope of centroid on sun elevation
+- `mean_motor` (2D): mean motor encoder readings
+- `std_motor` (2D): spread of motor readings
 
-Measurements are sorted by sun elevation (ascending) before flattening.
 All features are z-score normalised using training-set statistics.
 
 ## Linear Model
 
-- Input dimension: {input_dim}
+- Input dimension: {INPUT_DIM}
 - Output dimension: 20
 - Shared across all heliostats: yes
 - Output activation: `tanh`
 - Output scaling: physical residual bounds per parameter
+- Learnable parameters: {INPUT_DIM * 20 + 20} (vs ~16K with raw measurement flattening)
 
 The output parameters are:
 
@@ -292,6 +293,10 @@ The output parameters are:
 - Learning rate: {config.learning_rate}
 - Weight decay: {config.weight_decay}
 - Residual L2 weight: {config.residual_l2_weight}
+- Gradient clip max norm: {config.grad_clip_max_norm}
+- LR scheduler patience: {config.lr_scheduler_patience}
+- LR scheduler factor: {config.lr_scheduler_factor}
+- LR scheduler min LR: {config.lr_scheduler_min_lr}
 - Number of rays: {config.number_of_rays}
 - Sample limit per heliostat: {config.sample_limit_per_heliostat}
 - Smoke test: {config.smoke_test}
@@ -336,6 +341,28 @@ def run(config: PipelineConfig) -> None:
     )
     logging.getLogger().addHandler(file_handler)
 
+    # Silence console completely — everything goes to training.log.
+    # set_logger_config() installs a StreamHandler on the "artist" logger (not root).
+    # With propagate=True, messages also hit Python's lastResort handler → double print.
+    # Fix: disable propagation and mute the artist StreamHandler to CRITICAL.
+    _artist_logger = logging.getLogger("artist")
+    _artist_logger_propagate_orig = _artist_logger.propagate
+    _artist_logger.propagate = False
+    _artist_logger.addHandler(file_handler)
+    _artist_console_handlers = [
+        h for h in _artist_logger.handlers
+        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
+    ]
+    for h in _artist_console_handlers:
+        h.setLevel(logging.CRITICAL)
+    # Root logger: also suppress any StreamHandlers added externally.
+    _console_handlers = [
+        h for h in logging.getLogger().handlers
+        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
+    ]
+    for h in _console_handlers:
+        h.setLevel(logging.CRITICAL)
+
     try:
         log.info("Starting full training pipeline.")
         log.info("Dataset type: %s | Loss type: %s", config.dataset_type, config.loss_type)
@@ -345,9 +372,11 @@ def run(config: PipelineConfig) -> None:
         log.info("Using device: %s", device)
 
         # Load scenario first — bundles need heliostat positions and kinematic params.
+        tqdm.write("[1/6] Loading scenario...")
         scenario = _load_scenario(config, device)
         group_parameter_states = capture_all_group_parameter_states(scenario, device=device)
 
+        tqdm.write("[2/6] Building train/validation/test bundles...")
         train_bundle = _build_bundle(config, "train", scenario, group_parameter_states)
         validation_bundle = _build_bundle(
             config, "validation", scenario, group_parameter_states,
@@ -362,7 +391,6 @@ def run(config: PipelineConfig) -> None:
         _write_pipeline_markdown(
             output_path=config.output_dir / "pipeline_details.md",
             config=config,
-            n_measurements=config.sample_limit_per_heliostat,
         )
 
         train_group_cal = build_group_calibration_inputs(scenario, train_bundle.calibration_inputs)
@@ -372,9 +400,7 @@ def run(config: PipelineConfig) -> None:
         parsers = _build_parsers(config)
         loss_fn = _build_loss_fn(config, scenario)
 
-        residual_model = SharedLinearResidualModel(
-            n_measurements=config.sample_limit_per_heliostat
-        ).to(device)
+        residual_model = SharedLinearResidualModel().to(device)
         pipeline = FineErrorLearningPipeline(
             scenario=scenario,
             residual_model=residual_model,
@@ -389,8 +415,16 @@ def run(config: PipelineConfig) -> None:
             lr=config.learning_rate,
             weight_decay=config.weight_decay,
         )
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=config.lr_scheduler_factor,
+            patience=config.lr_scheduler_patience,
+            min_lr=config.lr_scheduler_min_lr,
+        )
         history: list[dict[str, float]] = []
 
+        tqdm.write("[3/6] Evaluating baseline (val + test)...")
         baseline_validation_scenario = _load_scenario(config, device)
         baseline_validation_metrics = evaluate_flux_accuracy(
             scenario=baseline_validation_scenario,
@@ -411,6 +445,10 @@ def run(config: PipelineConfig) -> None:
         )
         _write_json(json_dir / "validation_baseline_metrics.json", baseline_validation_metrics)
         _write_json(json_dir / "test_baseline_metrics.json", baseline_test_metrics)
+        tqdm.write(
+            f"    baseline val: {baseline_validation_metrics['mean_focal_spot_error_mrad']:.2f} mrad  |  "
+            f"test: {baseline_test_metrics['mean_focal_spot_error_mrad']:.2f} mrad"
+        )
 
         best_epoch_record: dict[str, float] | None = None
         best_validation_metrics: dict[str, object] | None = None
@@ -418,7 +456,11 @@ def run(config: PipelineConfig) -> None:
         last_epoch_record: dict[str, float] | None = None
         last_validation_metrics: dict[str, object] | None = None
 
-        for epoch in range(config.max_epochs):
+        tqdm.write("[4/6] Training...")
+        early_stopping_patience = max(5, config.max_epochs // 10)
+        epochs_without_improvement = 0
+        pbar = tqdm(range(config.max_epochs), desc="Training", unit="epoch")
+        for epoch in pbar:
             residual_model.train()
             optimizer.zero_grad()
 
@@ -430,6 +472,7 @@ def run(config: PipelineConfig) -> None:
             )
             objective = train_loss + config.residual_l2_weight * residual_penalty
             objective.backward()
+            torch.nn.utils.clip_grad_norm_(residual_model.parameters(), config.grad_clip_max_norm)
             optimizer.step()
 
             residual_model.eval()
@@ -447,11 +490,22 @@ def run(config: PipelineConfig) -> None:
                 ray_tracing_batch_size=config.ray_tracing_batch_size,
             )
 
+            current_lr = optimizer.param_groups[0]["lr"]
+            prev_lr = current_lr
+            scheduler.step(validation_metrics["mean_focal_spot_error_mrad"])
+            new_lr = optimizer.param_groups[0]["lr"]
+            if new_lr < prev_lr:
+                log.info(
+                    "ReduceLROnPlateau: LR reduced %.2e → %.2e at epoch %d.",
+                    prev_lr, new_lr, epoch + 1,
+                )
+
             epoch_record = {
                 "epoch": float(epoch),
                 "train_loss_m": float(train_loss.item()),
                 "residual_l2_penalty": float(residual_penalty.item()),
                 "objective": float(objective.item()),
+                "learning_rate": current_lr,
                 "validation_mean_focal_spot_error_m": float(
                     validation_metrics["mean_focal_spot_error_m"]
                 ),
@@ -465,13 +519,18 @@ def run(config: PipelineConfig) -> None:
             history.append(epoch_record)
             last_epoch_record = epoch_record
             last_validation_metrics = validation_metrics
+            pbar.set_postfix({
+                "loss": f"{epoch_record['train_loss_m']:.4f}",
+                "val_mrad": f"{epoch_record['validation_mean_focal_spot_error_mrad']:.2f}",
+            })
             log.info(
-                "Epoch %d/%d - train_loss=%.6f m, objective=%.6f, val_mean=%.6f mrad",
+                "Epoch %d/%d - train_loss=%.6f m, objective=%.6f, val_mean=%.6f mrad, lr=%.2e",
                 epoch + 1,
                 config.max_epochs,
                 epoch_record["train_loss_m"],
                 epoch_record["objective"],
                 epoch_record["validation_mean_focal_spot_error_mrad"],
+                epoch_record["learning_rate"],
             )
 
             if (
@@ -482,11 +541,21 @@ def run(config: PipelineConfig) -> None:
                 best_epoch_record = dict(epoch_record)
                 best_validation_metrics = validation_metrics
                 best_model_state_dict = _clone_model_state_dict(residual_model)
+                epochs_without_improvement = 0
                 log.info(
                     "Selected new best checkpoint at epoch %d with val_mean=%.6f mrad.",
                     epoch + 1,
                     epoch_record["validation_mean_focal_spot_error_mrad"],
                 )
+            else:
+                epochs_without_improvement += 1
+                if epochs_without_improvement >= early_stopping_patience:
+                    tqdm.write(
+                        f"    early stopping at epoch {epoch + 1} "
+                        f"(no improvement for {epochs_without_improvement} epochs)"
+                    )
+                    pbar.close()
+                    break
 
         if (
             best_epoch_record is None
@@ -524,7 +593,6 @@ def run(config: PipelineConfig) -> None:
                 output_path=models_dir / f"linear_residual_model{suffix}.pt",
                 model_state_dict=state_dict,
                 norm_stats_dict=norm_stats_dict,
-                n_measurements=config.sample_limit_per_heliostat,
                 selected_epoch=int(epoch_record_for_tag["epoch"]),
                 selected_validation_mean_mrad=float(
                     epoch_record_for_tag["validation_mean_focal_spot_error_mrad"]
@@ -535,7 +603,6 @@ def run(config: PipelineConfig) -> None:
                 output_path=models_dir / f"linear_residual_model{suffix}.json",
                 model_state_dict=state_dict,
                 norm_stats_dict=norm_stats_dict,
-                n_measurements=config.sample_limit_per_heliostat,
                 selected_epoch=int(epoch_record_for_tag["epoch"]),
                 selected_validation_mean_mrad=float(
                     epoch_record_for_tag["validation_mean_focal_spot_error_mrad"]
@@ -568,6 +635,7 @@ def run(config: PipelineConfig) -> None:
             group_calibration_inputs=validation_group_cal,
         )
 
+        tqdm.write("[5/6] Evaluating best model on test set...")
         best_test_scenario = _load_scenario(config, device)
         best_test_group_states = capture_all_group_parameter_states(best_test_scenario, device=device)
         best_test_metrics = evaluate_model_tracking_accuracy(
@@ -586,6 +654,7 @@ def run(config: PipelineConfig) -> None:
         _write_json(json_dir / "validation_corrected_metrics_last_epoch.json", last_validation_metrics)
         _write_json(json_dir / "test_corrected_metrics.json", best_test_metrics)
         _write_json(json_dir / "test_corrected_metrics_last_epoch.json", last_test_metrics)
+        tqdm.write("[6/6] Saving results and plots...")
         _write_json(
             config.output_dir / "training_summary.json",
             _build_training_summary(
@@ -603,6 +672,21 @@ def run(config: PipelineConfig) -> None:
         predicted_residuals = _predict_residual_tensor(
             residual_model=residual_model,
             group_calibration_inputs=test_group_cal,
+        )
+        all_heliostat_names = [
+            name
+            for group in scenario.heliostat_field.heliostat_groups
+            for name in group.names
+        ]
+        _write_json(
+            json_dir / "predicted_residuals.json",
+            {
+                "parameter_names": list(SHARED_WORTBERG_PARAMETER_NAMES),
+                "residuals": {
+                    name: predicted_residuals[i].tolist()
+                    for i, name in enumerate(all_heliostat_names)
+                },
+            },
         )
         plot_loss_curves(
             history=history,
@@ -626,7 +710,6 @@ def run(config: PipelineConfig) -> None:
         plot_linear_weights_heatmap(
             linear_weight=best_model_state_dict["linear.weight"],
             linear_bias=best_model_state_dict["linear.bias"],
-            n_measurements=config.sample_limit_per_heliostat,
             parameter_names=SHARED_WORTBERG_PARAMETER_NAMES,
             output_path=plots_dir / "linear_weights_heatmap.png",
         )
@@ -645,6 +728,25 @@ def run(config: PipelineConfig) -> None:
             best_validation_scenario,
             models_dir / "corrected_kinematic_parameters_best.json",
         )
+
+        sep = "=" * 60
+        tqdm.write(f"\n{sep}")
+        tqdm.write("TRAINING COMPLETE")
+        tqdm.write(sep)
+        tqdm.write(f"  Baseline  val:  {float(baseline_validation_metrics['mean_focal_spot_error_mrad']):.2f} mrad")
+        tqdm.write(f"  Best      val:  {float(best_validation_metrics['mean_focal_spot_error_mrad']):.2f} mrad  (epoch {int(best_epoch_record['epoch']) + 1})")
+        tqdm.write(f"  Last      val:  {float(last_validation_metrics['mean_focal_spot_error_mrad']):.2f} mrad")
+        tqdm.write(f"  Baseline  test: {float(baseline_test_metrics['mean_focal_spot_error_mrad']):.2f} mrad")
+        tqdm.write(f"  Best      test: {float(best_test_metrics['mean_focal_spot_error_mrad']):.2f} mrad")
+        tqdm.write(f"  Last      test: {float(last_test_metrics['mean_focal_spot_error_mrad']):.2f} mrad")
+        tqdm.write(f"  Output:   {config.output_dir}")
+        tqdm.write(sep)
     finally:
+        for h in _console_handlers:
+            h.setLevel(logging.DEBUG)
+        for h in _artist_console_handlers:
+            h.setLevel(logging.DEBUG)
+        _artist_logger.removeHandler(file_handler)
+        _artist_logger.propagate = _artist_logger_propagate_orig
         logging.getLogger().removeHandler(file_handler)
         file_handler.close()

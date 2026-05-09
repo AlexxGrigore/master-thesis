@@ -196,7 +196,9 @@ class FineErrorLearningPipeline(torch.nn.Module):
                 device=device,
             )
             heliostat_group.align_surfaces_with_incident_ray_directions(
-                aim_points=self.scenario.target_areas.centers[target_area_mask],
+                aim_points=self.scenario.solar_tower.get_centers_of_target_areas(
+                    target_area_mask, device=device
+                ),
                 incident_ray_directions=incident_ray_directions,
                 active_heliostats_mask=active_heliostats_mask,
                 device=device,
@@ -221,7 +223,7 @@ class FineErrorLearningPipeline(torch.nn.Module):
                     ),
                     bitmap_resolution=self.bitmap_resolution.to(device),
                 )
-                predicted_flux = ray_tracer.trace_rays(
+                predicted_flux, _, _, _ = ray_tracer.trace_rays(
                     incident_ray_directions=incident_ray_directions,
                     active_heliostats_mask=active_heliostats_mask,
                     target_area_indices=target_area_mask,

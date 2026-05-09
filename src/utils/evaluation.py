@@ -182,6 +182,10 @@ def evaluate_flux_accuracy(
         # Align ground-truth focal spots with sampler order.
         sample_indices = ray_tracer.get_sampler_indices()
         focal_spots = focal_spots[sample_indices]
+        # The sampler uses floor(total_instances / n_heliostats) per heliostat,
+        # dropping the remainder.  Index predicted_flux to the covered subset so
+        # all downstream tensors have consistent length.
+        predicted_flux = predicted_flux[sample_indices]
 
         bitmap_coords = get_center_of_mass(bitmaps=predicted_flux, device=device)
         predicted_focal_spots = bitmap_coordinates_to_target_coordinates(
@@ -220,9 +224,12 @@ def evaluate_flux_accuracy(
             for idx, dist in zip(active_indices, distances)
         }
 
-        # Number of samples per heliostat, read from the mask (each active entry holds
-        # the replication count N_samples, so mask[active_indices] gives [N, N, ..., N]).
-        samples_per_heliostat_tensor = active_heliostats_mask[active_indices].long()
+        # Use the sampler's uniform per-heliostat count (floor division) rather than
+        # the raw mask values, because the sampler already dropped any remainder samples.
+        n_samples_per_h = len(sample_indices) // len(active_indices)
+        samples_per_heliostat_tensor = torch.full(
+            (len(active_indices),), n_samples_per_h, dtype=torch.long, device=device
+        )
 
         # Build a per-sample distance tensor in natural (incident_rays) order.
         distances_natural = distances.repeat_interleave(samples_per_heliostat_tensor)

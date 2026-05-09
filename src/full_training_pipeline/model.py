@@ -34,64 +34,75 @@ SHARED_WORTBERG_RESIDUAL_BOUNDS = torch.tensor(
 
 _N_KINEMATIC = 20
 _N_HELIOSTAT_POS = 3
-_N_PER_MEASUREMENT = 8  # sun(3) + motor(2) + centroid(3)
+
+# Aggregated measurement features (fixed size regardless of number of measurements):
+#   mean_centroid   (3)  — mean ENU centroid across all measurements
+#   std_centroid    (3)  — spread of centroid positions
+#   range_centroid  (3)  — max - min centroid per axis
+#   mean_sun        (3)  — mean sun direction
+#   cen_sun_slope   (3)  — OLS slope of centroid on sun elevation (how centroid moves with sun)
+#   mean_motor      (2)  — mean motor encoder readings
+#   std_motor       (2)  — spread of motor readings
+_N_AGG = 19
+
+INPUT_DIM = _N_HELIOSTAT_POS + _N_KINEMATIC + _N_AGG  # 42
 
 
 class SharedLinearResidualModel(torch.nn.Module):
     """
     Linear residual model shared across all heliostats.
 
-    Input: HeliostatCalibrationInput (or a list thereof for batch prediction).
-    The model sorts measurements by sun elevation (ascending) internally so the
-    linear weights have a canonical, permutation-stable interpretation.
+    Replaces per-measurement flattening (which caused severe overfitting with
+    ~16K weights vs ~63 training heliostats) with 19 fixed aggregate statistics
+    computed from all available measurements, giving a 42-D input and 880
+    learnable parameters total.
 
     Input layout (after _select_and_flatten):
-        heliostat_position  (3,)
-        kinematic_params    (20,)
-        [sun_x, sun_y, sun_z, motor_1, motor_2, cen_e, cen_n, cen_u] × n_measurements
-
-    Total: 3 + 20 + n_measurements × 8
+        heliostat_position  (3,)   — absolute ENU position
+        kinematic_params    (20,)  — coarse checkpoint parameters
+        aggregated_meas     (19,)  — summary statistics over all measurements
     """
 
-    def __init__(self, n_measurements: int) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.n_measurements = n_measurements
-        input_dim = _N_HELIOSTAT_POS + _N_KINEMATIC + n_measurements * _N_PER_MEASUREMENT
-        self.linear = torch.nn.Linear(input_dim, len(SHARED_WORTBERG_PARAMETER_NAMES))
+        self.linear = torch.nn.Linear(INPUT_DIM, len(SHARED_WORTBERG_PARAMETER_NAMES))
         self.register_buffer("residual_bounds", SHARED_WORTBERG_RESIDUAL_BOUNDS.clone())
         torch.nn.init.zeros_(self.linear.weight)
         torch.nn.init.zeros_(self.linear.bias)
 
     # ------------------------------------------------------------------
-    # Internal feature extractor (where sorting lives)
+    # Internal feature extractor
     # ------------------------------------------------------------------
+
+    def _aggregate_measurements(self, inp: HeliostatCalibrationInput) -> torch.Tensor:
+        """Compute 19 fixed-size summary statistics from variable-length measurements."""
+        device = self.residual_bounds.device
+        sun = inp.sun_directions.to(device)      # (N, 3)
+        motor = inp.motor_positions.to(device)   # (N, 2)
+        centroid = inp.centroids.to(device)      # (N, 3)
+
+        mean_cen = centroid.mean(dim=0)                                          # (3,)
+        std_cen = centroid.std(dim=0).nan_to_num(0.0)                            # (3,)
+        range_cen = centroid.max(dim=0).values - centroid.min(dim=0).values      # (3,)
+        mean_sun = sun.mean(dim=0)                                               # (3,)
+        mean_motor = motor.mean(dim=0)                                           # (2,)
+        std_motor = motor.std(dim=0).nan_to_num(0.0)                             # (2,)
+
+        # OLS slope of centroid (3D) on sun elevation: captures how pointing
+        # error changes with sun angle, which is the kinematic signature.
+        sun_elev = sun[:, 2]                                                     # (N,)
+        sun_elev_c = sun_elev - sun_elev.mean()
+        denom = (sun_elev_c ** 2).sum().clamp(min=1e-8)
+        slope = (centroid * sun_elev_c.unsqueeze(1)).sum(dim=0) / denom         # (3,)
+
+        return torch.cat([mean_cen, std_cen, range_cen, mean_sun, slope, mean_motor, std_motor])
 
     def _select_and_flatten(self, inp: HeliostatCalibrationInput) -> torch.Tensor:
         device = self.residual_bounds.device
-
-        sun = inp.sun_directions.to(device)    # (N_meas, 3)
-        motor = inp.motor_positions.to(device)  # (N_meas, 2)
-        centroid = inp.centroids.to(device)     # (N_meas, 3)
-
-        # Sort by sun elevation ascending: sun[:, 2] = sin(elevation).
-        sort_idx = torch.argsort(sun[:, 2])
-        sun = sun[sort_idx]
-        motor = motor[sort_idx]
-        centroid = centroid[sort_idx]
-
-        per_meas = torch.cat([sun, motor, centroid], dim=1)  # (N_meas, 8)
-
-        # Pad or truncate to exactly n_measurements.
-        n = per_meas.shape[0]
-        if n < self.n_measurements:
-            pad = torch.zeros(self.n_measurements - n, _N_PER_MEASUREMENT, device=device)
-            per_meas = torch.cat([per_meas, pad], dim=0)
-        else:
-            per_meas = per_meas[: self.n_measurements]
-
-        helpos = inp.heliostat_position.to(device)   # (3,)
-        kp = inp.kinematic_params.to(device)         # (20,)
-        return torch.cat([helpos, kp, per_meas.flatten()])  # (input_dim,)
+        helpos = inp.heliostat_position.to(device)    # (3,)
+        kp = inp.kinematic_params.to(device)          # (20,)
+        agg = self._aggregate_measurements(inp)       # (19,)
+        return torch.cat([helpos, kp, agg])           # (42,)
 
     # ------------------------------------------------------------------
     # Forward
@@ -101,14 +112,10 @@ class SharedLinearResidualModel(torch.nn.Module):
         self, inputs: list[HeliostatCalibrationInput | None]
     ) -> torch.Tensor:
         device = self.residual_bounds.device
-        zero = torch.zeros(
-            _N_HELIOSTAT_POS + _N_KINEMATIC + self.n_measurements * _N_PER_MEASUREMENT,
-            dtype=torch.float32,
-            device=device,
-        )
+        zero = torch.zeros(INPUT_DIM, dtype=torch.float32, device=device)
         rows = [
             self._select_and_flatten(inp) if inp is not None else zero
             for inp in inputs
         ]
-        features = torch.stack(rows, dim=0)  # (N_heliostats, input_dim)
+        features = torch.stack(rows, dim=0)  # (N_heliostats, 42)
         return torch.tanh(self.linear(features)) * self.residual_bounds
