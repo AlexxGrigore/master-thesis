@@ -113,6 +113,7 @@ class PipelineConfig:
     surface_points_per_facet: tuple[int, int] = (25, 25)
     bitmap_resolution: tuple[int, int] = (256, 256)
     centroid_method: str = paint_mappings.UTIS_KEY
+    model_type: str = "linear"
     is_on_daic: bool = False
     smoke_test: bool = False
 
@@ -129,10 +130,12 @@ def build_config(
     smoke_test: bool = False,
     dataset_type: str | None = None,
     is_on_daic: bool | None = None,
+    model_type: str | None = None,
 ) -> PipelineConfig:
     module_dir = pathlib.Path(__file__).parent
     resolved_daic = is_on_daic if is_on_daic is not None else IS_ON_DAIC
     resolved_dataset_type = dataset_type if dataset_type is not None else DATASET_TYPE
+    resolved_model_type = model_type if model_type is not None else "linear"
 
     if resolved_daic:
         base_dir = pathlib.Path("/home/nfs/agrigore/projects/githubProjects/master-thesis")
@@ -156,10 +159,11 @@ def build_config(
         output_dir = OUTPUT_DIR
     else:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_name = f"full_training_pipeline_{resolved_model_type}_{timestamp}"
         output_dir = (
-            base_dir / "outputs" / f"full_training_pipeline_{timestamp}"
+            base_dir / "outputs" / run_name
             if resolved_daic
-            else base_dir / "outputs" / "local_runs" / f"full_training_pipeline_{timestamp}"
+            else base_dir / "outputs" / "local_runs" / run_name
         )
 
     return PipelineConfig(
@@ -189,6 +193,7 @@ def build_config(
         surface_points_per_facet=SURFACE_POINTS_PER_FACET,
         bitmap_resolution=BITMAP_RESOLUTION,
         centroid_method=CENTROID_METHOD,
+        model_type=resolved_model_type,
         is_on_daic=IS_ON_DAIC,
         smoke_test=smoke_test,
     )

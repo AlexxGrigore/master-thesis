@@ -119,3 +119,54 @@ class SharedLinearResidualModel(torch.nn.Module):
         ]
         features = torch.stack(rows, dim=0)  # (N_heliostats, 42)
         return torch.tanh(self.linear(features)) * self.residual_bounds
+
+
+class SharedPolyResidualModel(SharedLinearResidualModel):
+    """
+    Polynomial residual model: expands the 42-D base features with power terms
+    [x, x², ..., x^degree] (no cross-terms) before the linear output layer.
+
+    Parameter counts vs SharedLinearResidualModel (860 params):
+        degree=2 → input 84-D  → 1,700 params  (27:1 ratio for 63 heliostats)
+        degree=3 → input 126-D → 2,540 params  (40:1 ratio for 63 heliostats)
+    """
+
+    def __init__(self, degree: int = 2) -> None:
+        super().__init__()
+        if degree < 2:
+            raise ValueError("Use SharedLinearResidualModel for degree=1.")
+        self.degree = degree
+        expanded_dim = INPUT_DIM * degree
+        self.linear = torch.nn.Linear(expanded_dim, len(SHARED_WORTBERG_PARAMETER_NAMES))
+        torch.nn.init.zeros_(self.linear.weight)
+        torch.nn.init.zeros_(self.linear.bias)
+
+    def forward(
+        self, inputs: list[HeliostatCalibrationInput | None]
+    ) -> torch.Tensor:
+        device = self.residual_bounds.device
+        zero = torch.zeros(INPUT_DIM, dtype=torch.float32, device=device)
+        rows = [
+            self._select_and_flatten(inp) if inp is not None else zero
+            for inp in inputs
+        ]
+        features = torch.stack(rows, dim=0)  # (N_heliostats, 42)
+        poly = torch.cat(
+            [features ** k for k in range(1, self.degree + 1)], dim=-1
+        )  # (N_heliostats, 42 * degree)
+        return torch.tanh(self.linear(poly)) * self.residual_bounds
+
+
+def build_residual_model(model_type: str) -> torch.nn.Module:
+    """Factory — returns the correct model for a given model_type string."""
+    if model_type == "linear":
+        return SharedLinearResidualModel()
+    if model_type == "poly2":
+        return SharedPolyResidualModel(degree=2)
+    if model_type == "poly3":
+        return SharedPolyResidualModel(degree=3)
+    if model_type == "poly4":
+        return SharedPolyResidualModel(degree=4)
+    raise ValueError(
+        f"Unknown model_type {model_type!r}. Choose from: linear, poly2, poly3, poly4"
+    )

@@ -60,6 +60,7 @@ def check_imports() -> None:
         ("full_training_pipeline.model", "full_training_pipeline.model"),
         ("full_training_pipeline.train", "full_training_pipeline.train"),
         ("artist_extensions.kinematic_reconstructors", "artist_extensions.kinematic_reconstructors"),
+        ("artist_extensions.cached_paint_parser",      "artist_extensions.cached_paint_parser"),
     ]
     all_ok = True
     for label, module in imports:

@@ -18,6 +18,7 @@ import torch
 from artist.core.loss_functions import FocalSpotLoss, PixelLoss
 from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
 from artist.scenario.scenario import Scenario
+from artist_extensions.cached_paint_parser import CachedPaintCalibrationDataParser
 from artist.util import set_logger_config
 from artist.util.environment_setup import get_device
 
@@ -32,7 +33,7 @@ from full_training_pipeline.data import (
 )
 from full_training_pipeline.evaluate import apply_model_to_scenario, evaluate_model_tracking_accuracy
 from full_training_pipeline.features import HeliostatCalibrationInput
-from full_training_pipeline.model import SHARED_WORTBERG_PARAMETER_NAMES, SharedLinearResidualModel
+from full_training_pipeline.model import SHARED_WORTBERG_PARAMETER_NAMES, build_residual_model
 from full_training_pipeline.pipeline import FineErrorLearningPipeline, capture_all_group_parameter_states
 from full_training_pipeline.plotting import (
     plot_baseline_vs_corrected_metrics,
@@ -41,6 +42,8 @@ from full_training_pipeline.plotting import (
     plot_loss_curves,
     plot_per_heliostat_improvement_scatter,
     plot_predicted_residual_boxplot,
+    plot_response_curves,
+    plot_feature_importance,
 )
 from utils.checkpointing import load_kinematic_parameters, save_kinematic_parameters
 from utils.evaluation import evaluate_flux_accuracy
@@ -85,11 +88,13 @@ def _build_parsers(config: PipelineConfig) -> DataParsers:
             validation=SyntheticDatasetParser(config.synthetic_data_base_dir / "val"),
             test=SyntheticDatasetParser(config.synthetic_data_base_dir / "test"),
         )
-    parser = PaintCalibrationDataParser(
-        sample_limit=config.sample_limit_per_heliostat,
-        centroid_extraction_method=config.centroid_method,
-    )
-    return DataParsers(train=parser, validation=parser, test=parser)
+    # Separate instances so each split has its own independent cache.
+    def _make_parser():
+        return CachedPaintCalibrationDataParser(
+            sample_limit=config.sample_limit_per_heliostat,
+            centroid_extraction_method=config.centroid_method,
+        )
+    return DataParsers(train=_make_parser(), validation=_make_parser(), test=_make_parser())
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +410,7 @@ def run(config: PipelineConfig) -> None:
         parsers = _build_parsers(config)
         loss_fn = _build_loss_fn(config, scenario)
 
-        residual_model = SharedLinearResidualModel().to(device)
+        residual_model = build_residual_model(config.model_type).to(device)
         pipeline = FineErrorLearningPipeline(
             scenario=scenario,
             residual_model=residual_model,
@@ -736,12 +741,13 @@ def run(config: PipelineConfig) -> None:
             corrected_errors_mrad=best_test_metrics["all_errors_mrad"],
             output_path=plots_dir / "error_histogram.png",
         )
-        plot_linear_weights_heatmap(
-            linear_weight=best_model_state_dict["linear.weight"],
-            linear_bias=best_model_state_dict["linear.bias"],
-            parameter_names=SHARED_WORTBERG_PARAMETER_NAMES,
-            output_path=plots_dir / "linear_weights_heatmap.png",
-        )
+        if config.model_type == "linear":
+            plot_linear_weights_heatmap(
+                linear_weight=best_model_state_dict["linear.weight"],
+                linear_bias=best_model_state_dict["linear.bias"],
+                parameter_names=SHARED_WORTBERG_PARAMETER_NAMES,
+                output_path=plots_dir / "linear_weights_heatmap.png",
+            )
         plot_predicted_residual_boxplot(
             predicted_residuals=predicted_residuals,
             parameter_names=SHARED_WORTBERG_PARAMETER_NAMES,
@@ -751,6 +757,20 @@ def run(config: PipelineConfig) -> None:
             baseline_per_heliostat=baseline_test_metrics["per_heliostat"],
             corrected_per_heliostat=best_test_metrics["per_heliostat"],
             output_path=plots_dir / "per_heliostat_improvement.png",
+        )
+
+        plot_response_curves(
+            model=residual_model,
+            calibration_inputs=train_bundle.calibration_inputs,
+            parameter_names=SHARED_WORTBERG_PARAMETER_NAMES,
+            output_path=plots_dir / "response_curves.png",
+        )
+
+        plot_feature_importance(
+            model=residual_model,
+            calibration_inputs=train_bundle.calibration_inputs,
+            parameter_names=SHARED_WORTBERG_PARAMETER_NAMES,
+            output_path=plots_dir / "feature_importance.png",
         )
 
         save_kinematic_parameters(

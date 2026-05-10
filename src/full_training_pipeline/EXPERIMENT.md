@@ -5,19 +5,19 @@
 Learn a **field-level residual correction** on top of coarse kinematic parameters that were
 already optimised by `WortbergKinematicReconstructor` on the full 63-heliostat field.
 
-The hypothesis is that a single shared linear model can capture systematic prediction errors
-that remain after coarse kinematic calibration — e.g., sensor biases or installer-level
-offsets that are shared across all heliostats.
+The hypothesis is that a shared model can capture systematic prediction errors that remain
+after coarse kinematic calibration — e.g., systematic biases or non-linearities that are
+shared across all heliostats.
 
 ---
 
 ## Architecture
 
 ```
-heliostat feature vector (11D)
+heliostat feature vector (42D)
          │
-  SharedLinearResidualModel
-    Linear(11 → 20)  →  tanh  ×  bounds
+  SharedLinearResidualModel   ← or SharedPolyResidualModel(degree=2/3/4)
+    Linear(42×d → 20)  →  tanh  ×  bounds
          │
   residual correction (20D)
          │
@@ -30,11 +30,22 @@ coarse kinematic params (20D, from checkpoint)
   loss (focal_spot | pixel | alignment)
 ```
 
-### `SharedLinearResidualModel`
+### Model Variants
 
-A single `nn.Linear(input_dim=11, out_features=20)` layer, **shared across all heliostats**.
-It is initialised to zero (identity correction: no change to coarse params).
-Outputs are squashed by `tanh` and scaled by per-parameter bounds:
+Selected via `--model-type` CLI flag (default: `linear`).
+
+| Model type | Architecture             | Input dim | Parameters | Ratio (63 hel) |
+|------------|--------------------------|-----------|------------|----------------|
+| `linear`   | Linear(42 → 20)          | 42        | 860        | 14:1           |
+| `poly2`    | Linear(84 → 20), [x, x²] | 84        | 1,700      | 27:1           |
+| `poly3`    | Linear(126 → 20), [x, x², x³] | 126  | 2,540      | 40:1           |
+| `poly4`    | Linear(168 → 20), [x..x⁴] | 168     | 3,380      | 54:1           |
+
+Polynomial models expand the 42D feature vector with power terms (no cross-terms) before
+the linear output layer. All models use zero-weight initialisation and `tanh × bounds`
+output activation to keep corrections within physical limits.
+
+### Output bounds (tanh scaling)
 
 | Parameter group             | Count | Bound  | Unit |
 |-----------------------------|-------|--------|------|
@@ -50,37 +61,40 @@ These match the Wortberg (2025) Table 5.3 optimisable parameter set.
 
 ## Feature Engineering
 
-Each heliostat is represented by an **11-dimensional summary vector** computed from its
-training samples:
+Each heliostat is represented by a **42-dimensional summary vector**:
 
-| Index | Feature              | Description                              |
-|-------|----------------------|------------------------------------------|
-| 0–2   | `mean_sun_{x,y,z}`   | Mean incident ray direction (unit vector)|
-| 3–4   | `mean_motor_{1,2}`   | Mean axis-1 and axis-2 motor positions   |
-| 5–7   | `std_sun_{x,y,z}`    | Std of incident ray direction            |
-| 8–9   | `std_motor_{1,2}`    | Std of motor positions                   |
-| 10    | `sample_count`       | Number of training samples for this heliostat |
+| Dims  | Feature group        | Description                                           |
+|-------|----------------------|-------------------------------------------------------|
+| 0–2   | `heliostat_position` | Absolute ENU position from scenario (3D)              |
+| 3–22  | `kinematic_params`   | Flattened 20-D Wortberg coarse checkpoint params      |
+| 23–25 | `mean_centroid`      | Mean ENU flux centroid across all measurements (3D)   |
+| 26–28 | `std_centroid`       | Std of centroid positions (3D)                        |
+| 29–31 | `range_centroid`     | Max − min centroid per axis (3D)                      |
+| 32–34 | `mean_sun`           | Mean sun direction unit vector (3D)                   |
+| 35–37 | `cen_sun_slope`      | OLS slope of centroid on sun elevation (3D)           |
+| 38–39 | `mean_motor`         | Mean motor encoder readings (2D)                      |
+| 40–41 | `std_motor`          | Std of motor readings (2D)                            |
 
-**Real PAINT data**: sun direction converted from `sun_elevation`/`sun_azimuth` degrees to a
-unit vector. Motor positions read from `motor_position.axis_1_motor_position` / `axis_2`.
+The OLS slope (`cen_sun_slope`) captures how the measured focal-spot position changes with
+sun elevation — the key kinematic signature distinguishing heliostats with different errors.
 
-**Synthetic data**: `incident_ray_direction` already a 3D list; `motor_position` a 2-element list.
-
-Features are computed once per split and z-score normalised using training-set statistics
-(mean/std computed on training features; applied to validation and test).
+All features are z-score normalised using training-set statistics (mean/std computed from
+the training split; applied identically to validation and test).
 
 ---
 
 ## Coarse Checkpoint
 
-File: `coarse_learning_parameters/kinematic_parameters.json`
+Two separate checkpoints, selected automatically by `--dataset-type`:
 
-This JSON was produced by running `WortbergKinematicReconstructor` on the full 63-heliostat
-field scenario (`full_field_200_samples_scenario/scenario.h5`) using the synthetic dataset.
-It stores per-heliostat kinematic parameter tensors for all groups in the scenario.
+| Dataset type | File                                                      |
+|--------------|-----------------------------------------------------------|
+| `synthetic`  | `coarse_learning_parameters/kinematic_parameters_synthetic.json` |
+| `real`       | `coarse_learning_parameters/kinematic_parameters_real.json`      |
 
-The pipeline loads these parameters into the scenario at startup before any training begins.
-The residual model then predicts a correction on top of this frozen base state.
+Each file was produced by running `WortbergKinematicReconstructor` on the full 63-heliostat
+field scenario. The pipeline loads these into the scenario at startup; the residual model
+predicts a correction on top of this frozen base.
 
 ---
 
@@ -96,8 +110,12 @@ Benchmark: `benchmark_split-balanced_train-100_validation-50_deflectometry`
 | validation | up to 50            |
 | test       | up to 50            |
 
-Source: PAINT benchmark directory. Parser: `PaintCalibrationDataParser`.
-The same parser instance is reused across all splits (reads split from CSV filter).
+Parser: `CachedPaintCalibrationDataParser` — wraps `PaintCalibrationDataParser` with an
+in-memory cache (CPU RAM). On the first epoch all flux PNGs and calibration JSONs are read
+from disk (NFS on DAIC); every subsequent epoch retrieves the cached tensors, eliminating
+repeated network filesystem reads and reducing per-epoch time to match synthetic.
+
+Three separate parser instances (train / val / test) to avoid cross-split cache collisions.
 
 ### Synthetic (pre-generated)
 
@@ -117,7 +135,7 @@ Parser: `SyntheticDatasetParser` (three separate instances, one per split).
 
 ## Loss Functions
 
-Configured via `LOSS_TYPE` in `config.py` or `--loss-type` CLI argument.
+Configured via `LOSS_TYPE` in `config.py` (default: `focal_spot`).
 
 | Key           | Class             | Description                                                  | Ray tracing |
 |---------------|-------------------|--------------------------------------------------------------|-------------|
@@ -125,99 +143,127 @@ Configured via `LOSS_TYPE` in `config.py` or `--loss-type` CLI argument.
 | `pixel`       | `PixelLoss`       | MSE on Gaussian-blurred (σ=1), peak-normalised flux bitmaps  | Yes         |
 | `alignment`   | `AlignmentLoss`   | MSE on motor positions converted to joint-angle space        | No          |
 
-`AlignmentLoss` is fastest (no ray tracing), useful for debugging or fast pretraining.
-
 ---
 
 ## Training Loop
 
-1. Load scenario from HDF5; load coarse checkpoint into scenario.
+1. Load scenario from HDF5; load coarse checkpoint.
 2. Capture `GroupParameterState` for each heliostat group (frozen base vectors).
-3. Build `SharedLinearResidualModel(input_dim=11)`.
-4. Build features from train split; z-score normalise.
-5. For each epoch:
+3. Build train/val/test feature bundles; z-score normalise using training statistics.
+4. Instantiate model via `build_residual_model(model_type)` (zero-weight init).
+5. Optimise with AdamW + `ReduceLROnPlateau` on `val_mean_mrad`.
+6. For each epoch:
    a. For each heliostat group: predict residual via model → add to base → apply to scenario.
-   b. Parse data for the group, run ray tracer (or kinematic solver for alignment loss).
-   c. Accumulate loss across groups; add L2 regularisation on residual magnitudes.
-   d. Backprop; AdamW step.
-   e. Evaluate on validation split; ReduceLROnPlateau scheduler.
-6. Save best-validation and last-epoch checkpoints.
+   b. Parse data, run ray tracer (or kinematic solver for alignment loss).
+   c. Accumulate task loss + L2 regularisation on residual magnitudes.
+   d. Backprop; gradient clip (`max_norm=1.0`); AdamW step.
+   e. Evaluate on validation split; step scheduler.
+7. Early stopping (patience = max(5, max_epochs // 10)).
+8. Evaluate best and last-epoch checkpoints on test set.
 
-**Regularisation**: `loss = task_loss + residual_l2_weight × ||residual||²`
-Default `residual_l2_weight = 1e-4`.
+**Regularisation**: `loss = task_loss + residual_l2_weight × ||residual||²` (default 1e-4)
 
 ---
 
 ## Optimisation Configuration
 
-| Parameter               | Default value                       |
-|-------------------------|-------------------------------------|
-| Optimiser               | AdamW                               |
-| Learning rate           | 5e-3                                |
-| Weight decay            | 1e-5                                |
-| Max epochs              | 20                                  |
-| Sample limit / heliostat| 10                                  |
-| Number of rays          | 20                                  |
-| Ray-tracing batch size  | 32                                  |
-| Surface pts / facet     | 25×25                               |
-| Bitmap resolution       | 256×256                             |
-| Residual L2 weight      | 1e-4                                |
+| Parameter                   | Default value |
+|-----------------------------|---------------|
+| Optimiser                   | AdamW         |
+| Learning rate               | 1e-3          |
+| Weight decay                | 1e-5          |
+| Max epochs                  | 200           |
+| Gradient clip max norm      | 1.0           |
+| LR scheduler patience       | 10            |
+| LR scheduler factor         | 0.5           |
+| LR scheduler min LR         | 1e-6          |
+| Sample limit / heliostat    | 100           |
+| Number of rays              | 10            |
+| Ray-tracing batch size      | 32            |
+| Surface pts / facet         | 25×25         |
+| Bitmap resolution           | 256×256       |
+| Residual L2 weight          | 1e-4          |
 
 ---
 
 ## How to Run
 
 ```bash
-# Real PAINT data, focal spot loss (default)
-python main.py
+# Synthetic data, linear model (default)
+python main.py --dataset-type synthetic
 
-# Synthetic data, pixel loss
-python main.py --dataset-type synthetic --loss-type pixel
+# Real PAINT data, linear model
+python main.py --dataset-type real --daic
 
-# Alignment loss (fast, no ray tracing)
-python main.py --loss-type alignment
+# Polynomial models
+python main.py --dataset-type synthetic --model-type poly2
+python main.py --dataset-type synthetic --model-type poly3
+python main.py --dataset-type synthetic --model-type poly4
 
-# Smoke test (2 epochs, 2 samples, 5 rays)
+# Smoke test (3 epochs)
 python main.py --smoke-test
 
-# On DAIC cluster
-python main.py --on-daic
-
-# Override epochs
-python main.py --epochs 50
-
-# Custom output directory
-python main.py --output-dir /path/to/output
+# Sanity check before submitting to DAIC
+python check_env.py --dataset-type synthetic --daic
 ```
+
+### SLURM jobs (sbatch_files/)
+
+| Script                                 | Dataset   | Model  | Time   |
+|----------------------------------------|-----------|--------|--------|
+| `run_full_pipeline_synthetic.sh`       | synthetic | linear | 1:30   |
+| `run_full_pipeline_real.sh`            | real      | linear | 1:30   |
+| `run_full_pipeline_synthetic_poly2.sh` | synthetic | poly2  | 1:30   |
+| `run_full_pipeline_synthetic_poly3.sh` | synthetic | poly3  | 1:30   |
+| `run_full_pipeline_synthetic_poly4.sh` | synthetic | poly4  | 1:30   |
+| `run_full_pipeline_real_poly2.sh`      | real      | poly2  | 1:30   |
+| `run_full_pipeline_real_poly3.sh`      | real      | poly3  | 1:30   |
+| `run_full_pipeline_real_poly4.sh`      | real      | poly4  | 1:30   |
 
 ---
 
 ## Output Structure
 
 ```
-full_training_pipeline_{timestamp}/
-  config.json                         — full PipelineConfig serialised
-  run.log                             — execution log
+full_training_pipeline_{model_type}_{timestamp}/
+  training.log
+  pipeline_details.md          — human-readable run summary
 
-  best_validation_model.pt            — model state dict at best validation loss
-  last_epoch_model.pt                 — model state dict after final epoch
-  best_validation_kinematic_parameters.json   — scenario params at best validation epoch
-  last_epoch_kinematic_parameters.json        — scenario params at last epoch
+  json/
+    config.json                — full PipelineConfig serialised
+    norm_stats.json            — z-score normalisation statistics
+    history.json               — per-epoch train/val metrics
+    timing.json                — wall-clock times + peak GPU memory
+    predicted_residuals.json   — per-heliostat predicted correction vectors
+    validation_baseline_metrics.json
+    validation_corrected_metrics.json
+    test_baseline_metrics.json
+    test_corrected_metrics.json
 
-  train_loss_curve.png                — train and validation loss vs epoch
-  error_histogram.png                 — per-heliostat mrad error distribution
-  per_heliostat_improvement_scatter.png — baseline vs corrected mrad per heliostat
-  baseline_vs_corrected_metrics.png   — bar chart: mean mrad before/after correction
-  linear_weights_heatmap.png          — heatmap of Linear layer weights (20 × 11)
-  predicted_residual_boxplot.png      — distribution of predicted residuals per parameter
+  models/
+    linear_residual_model.pt            — best-validation checkpoint (PyTorch)
+    linear_residual_model.json          — same, human-readable JSON
+    linear_residual_model_last_epoch.pt
+    linear_residual_model_last_epoch.json
+    corrected_kinematic_parameters_best.json
+
+  plots/
+    loss_curve.png                      — train/val loss + LR schedule
+    baseline_vs_corrected_metrics.png   — mean/median mrad before and after
+    error_histogram.png                 — per-heliostat error distribution
+    per_heliostat_improvement_scatter.png
+    predicted_residual_boxplot.png      — distribution of predicted corrections
+    response_curves.png                 — partial dependence: correction vs input feature
+    feature_importance.png              — weight column norms + gradient×input sensitivity
+    linear_weights_heatmap.png          — linear model only
 ```
 
 ---
 
 ## Relationship to Other Experiments
 
-| Experiment                  | Role                                                       |
-|-----------------------------|------------------------------------------------------------|
-| `full_field_200_samples/`   | Produces the coarse kinematic checkpoint and synthetic data|
+| Experiment                  | Role                                                         |
+|-----------------------------|--------------------------------------------------------------|
+| `full_field_200_samples/`   | Produces the coarse kinematic checkpoint and synthetic data  |
 | `full_training_pipeline/`   | Learns a shared residual correction on top of that checkpoint|
-| `five_heliostats_synth/`    | Smaller closed-loop ablation (5 heliostats, 6 train sizes) |
+| `five_heliostats_synth/`    | Smaller closed-loop ablation (5 heliostats, 6 train sizes)   |

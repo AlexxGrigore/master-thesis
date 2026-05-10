@@ -6,6 +6,64 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+# ---------------------------------------------------------------------------
+# Feature layout constants (must match model.py INPUT_DIM = 42)
+# ---------------------------------------------------------------------------
+
+_FEATURE_NAMES: list[str] = (
+    ["helpos_E", "helpos_N", "helpos_U"]
+    + [f"kin_{i}" for i in range(20)]
+    + ["mean_cen_E", "mean_cen_N", "mean_cen_U"]
+    + ["std_cen_E",  "std_cen_N",  "std_cen_U"]
+    + ["rng_cen_E",  "rng_cen_N",  "rng_cen_U"]
+    + ["mean_sun_x", "mean_sun_y", "mean_sun_z"]
+    + ["slope_E",    "slope_N",    "slope_U"]
+    + ["mean_mtr_0", "mean_mtr_1"]
+    + ["std_mtr_0",  "std_mtr_1"]
+)
+
+# (group_label, start_dim, end_dim, color)
+_FEATURE_GROUPS: list[tuple[str, int, int, str]] = [
+    ("helpos",    0,  3,  "#1f77b4"),
+    ("kinematic", 3,  23, "#ff7f0e"),
+    ("mean_cen",  23, 26, "#2ca02c"),
+    ("std_cen",   26, 29, "#d62728"),
+    ("rng_cen",   29, 32, "#9467bd"),
+    ("mean_sun",  32, 35, "#8c564b"),
+    ("sun_slope", 35, 38, "#e377c2"),
+    ("mean_mtr",  38, 40, "#7f7f7f"),
+    ("std_mtr",   40, 42, "#bcbd22"),
+]
+
+# Input feature dimensions to sweep in response curve plots.
+_RESPONSE_FEATURE_DIMS: list[tuple[int, str]] = [
+    (0,  "Heliostat E [norm]"),
+    (1,  "Heliostat N [norm]"),
+    (23, "Mean centroid E [norm]"),
+    (24, "Mean centroid N [norm]"),
+    (35, "Sun slope E [norm]"),
+    (36, "Sun slope N [norm]"),
+]
+
+# One representative output per Wortberg parameter group.
+_RESPONSE_OUTPUT_DIMS: list[int] = [0, 9, 13, 15, 17]
+
+
+# ---------------------------------------------------------------------------
+# Shared model forward helper
+# ---------------------------------------------------------------------------
+
+def _model_forward_from_features(
+    model: torch.nn.Module,
+    features: torch.Tensor,
+) -> torch.Tensor:
+    """Forward pass directly from raw 42-D base features (handles linear and poly)."""
+    device = next(model.parameters()).device
+    f = features.to(device)
+    if hasattr(model, "degree"):
+        f = torch.cat([f ** k for k in range(1, model.degree + 1)], dim=-1)
+    return torch.tanh(model.linear(f)) * model.residual_bounds
+
 
 def plot_loss_curves(
     *,
@@ -268,6 +326,220 @@ def plot_predicted_residual_boxplot(
     ax.set_ylabel("Predicted residual value")
     ax.set_title("Predicted Residual Distribution by Parameter")
     ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+
+
+@torch.no_grad()
+def plot_response_curves(
+    *,
+    model: torch.nn.Module,
+    calibration_inputs: dict,
+    parameter_names: tuple[str, ...],
+    output_path: pathlib.Path,
+    n_grid: int = 120,
+) -> None:
+    """
+    Partial dependence plot: for each selected input feature, sweep its value
+    across the observed training range (all other features held at mean) and
+    plot the predicted Wortberg corrections for selected output parameters.
+
+    For a linear model the curves are straight lines by construction.
+    Polynomial models (poly2/poly3/poly4) can show curvature — if the curves
+    stay flat or straight, the higher-degree terms learned nothing useful.
+    """
+    model.eval()
+    device = next(model.parameters()).device
+
+    # Build 42-D feature matrix for all training heliostats.
+    feature_rows = [
+        model._select_and_flatten(inp).detach().cpu()
+        for inp in calibration_inputs.values()
+    ]
+    if not feature_rows:
+        return
+    feature_matrix = torch.stack(feature_rows, dim=0)  # (N_hel, 42)
+    baseline = feature_matrix.mean(dim=0)              # (42,)
+
+    def _forward(features: torch.Tensor) -> torch.Tensor:
+        """Run the model's linear head directly from raw 42-D feature vectors."""
+        f = features.to(device)
+        if hasattr(model, "degree"):
+            f = torch.cat([f ** k for k in range(1, model.degree + 1)], dim=-1)
+        raw = torch.tanh(model.linear(f)) * model.residual_bounds
+        return raw.cpu()
+
+    selected_out = _RESPONSE_OUTPUT_DIMS
+    out_labels = [parameter_names[i] for i in selected_out]
+    n_feat = len(_RESPONSE_FEATURE_DIMS)
+    n_out = len(selected_out)
+
+    fig, axes = plt.subplots(
+        n_feat, n_out,
+        figsize=(3.2 * n_out, 2.8 * n_feat),
+        squeeze=False,
+    )
+    fig.patch.set_facecolor("white")
+
+    for row, (feat_dim, feat_label) in enumerate(_RESPONSE_FEATURE_DIMS):
+        feat_vals = feature_matrix[:, feat_dim]
+        feat_min, feat_max = float(feat_vals.min()), float(feat_vals.max())
+        grid = torch.linspace(feat_min, feat_max, n_grid)
+
+        # Build batch: baseline repeated, with one feature swept.
+        batch = baseline.unsqueeze(0).expand(n_grid, -1).clone()
+        batch[:, feat_dim] = grid
+
+        preds = _forward(batch)  # (n_grid, 20)
+
+        for col, (out_dim, out_label) in enumerate(zip(selected_out, out_labels)):
+            ax = axes[row, col]
+            y = preds[:, out_dim].numpy()
+            bound = float(model.residual_bounds[out_dim].cpu())
+
+            ax.plot(grid.numpy(), y, color="#1f77b4", linewidth=1.8)
+            ax.axhline(0.0, color="black", linewidth=0.7, linestyle="--", alpha=0.4)
+            ax.axhline(+bound, color="#d62728", linewidth=0.7, linestyle=":", alpha=0.5)
+            ax.axhline(-bound, color="#d62728", linewidth=0.7, linestyle=":", alpha=0.5)
+
+            # Rug plot: show where actual training heliostats lie on the x-axis.
+            ax.scatter(
+                feat_vals.numpy(),
+                np.full(len(feat_vals), y.min() - 0.05 * (y.max() - y.min() + 1e-9)),
+                marker="|", color="gray", s=25, alpha=0.6, zorder=0,
+            )
+
+            if row == 0:
+                ax.set_title(out_label, fontsize=8)
+            if col == 0:
+                ax.set_ylabel(feat_label, fontsize=7)
+            ax.tick_params(labelsize=6)
+            ax.grid(True, alpha=0.2)
+
+    fig.suptitle("Response Curves (partial dependence per input feature)", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_feature_importance(
+    *,
+    model: torch.nn.Module,
+    calibration_inputs: dict,
+    parameter_names: tuple[str, ...],
+    output_path: pathlib.Path,
+) -> None:
+    """
+    Two-panel feature importance plot.
+
+    Top panel — weight column norms:
+        For each input feature dim j, the L2 norm of its column in the weight
+        matrix (summed over output dims).  For poly models, one stacked bar per
+        degree block shows how much each degree contributes.
+
+    Bottom panel — gradient × input:
+        Model-agnostic sensitivity: run a forward pass with gradients, backprop
+        through mean absolute output, then scale grad by feature magnitude.
+        Result: (42,) vector averaged over all training heliostats.
+
+    Both panels share the same x-axis (42 feature dims) coloured by group.
+    """
+    model.eval()
+
+    # ------------------------------------------------------------------
+    # Build feature matrix  (N_hel, 42)
+    # ------------------------------------------------------------------
+    feature_rows = [
+        model._select_and_flatten(inp).detach().cpu()
+        for inp in calibration_inputs.values()
+    ]
+    if not feature_rows:
+        return
+    feature_matrix = torch.stack(feature_rows, dim=0)  # (N_hel, 42)
+    n_feat = feature_matrix.shape[1]  # 42
+    x_coords = np.arange(n_feat)
+
+    # Group colours for bar coloring
+    bar_colors = np.empty(n_feat, dtype=object)
+    for _, start, end, color in _FEATURE_GROUPS:
+        bar_colors[start:end] = color
+
+    # ------------------------------------------------------------------
+    # Panel 1 — weight column norms
+    # ------------------------------------------------------------------
+    W = model.linear.weight.detach().cpu()  # (20, expanded_dim)
+
+    if hasattr(model, "degree"):
+        degree = model.degree
+        # W is (20, 42*degree); split into degree blocks of size 42
+        blocks = [W[:, k * n_feat:(k + 1) * n_feat] for k in range(degree)]
+        block_norms = [b.norm(dim=0).numpy() for b in blocks]  # list of (42,) arrays
+        degree_colors = ["#4c78a8", "#f58518", "#e45756", "#72b7b2"][:degree]
+    else:
+        block_norms = [W.norm(dim=0).numpy()]
+        degree_colors = ["#4c78a8"]
+
+    # ------------------------------------------------------------------
+    # Panel 2 — gradient × input
+    # ------------------------------------------------------------------
+    device = next(model.parameters()).device
+    x_grad = feature_matrix.clone().requires_grad_(True)
+    preds = _model_forward_from_features(model, x_grad)   # uses model on device
+    preds.abs().mean().backward()
+    with torch.no_grad():
+        grad_x_input = (x_grad.grad.abs() * x_grad.detach().abs()).mean(dim=0).cpu().numpy()
+
+    # ------------------------------------------------------------------
+    # Plot
+    # ------------------------------------------------------------------
+    fig, (ax_w, ax_g) = plt.subplots(2, 1, figsize=(16, 8), sharex=True)
+    fig.patch.set_facecolor("white")
+
+    # Panel 1: stacked bar (one stack per degree)
+    bottom = np.zeros(n_feat)
+    for k, (norms, dcolor) in enumerate(zip(block_norms, degree_colors)):
+        ax_w.bar(x_coords, norms, bottom=bottom, color=dcolor,
+                 label=f"degree {k + 1}", alpha=0.85, width=0.8)
+        bottom += norms
+
+    # Group background shading
+    for label, start, end, color in _FEATURE_GROUPS:
+        ax_w.axvspan(start - 0.5, end - 0.5, alpha=0.07, color=color)
+    # Vertical separators between groups
+    for _, start, _, _ in _FEATURE_GROUPS[1:]:
+        ax_w.axvline(start - 0.5, color="gray", linewidth=0.6, linestyle="--", alpha=0.5)
+
+    ax_w.set_ylabel("Weight column L2 norm")
+    ax_w.set_title("Feature Importance — Weight Column Norms")
+    ax_w.legend(fontsize=8, framealpha=0.9)
+    ax_w.grid(axis="y", alpha=0.2)
+
+    # Panel 2: coloured bars by group
+    ax_g.bar(x_coords, grad_x_input, color=list(bar_colors), alpha=0.85, width=0.8)
+    for label, start, end, color in _FEATURE_GROUPS:
+        ax_g.axvspan(start - 0.5, end - 0.5, alpha=0.07, color=color)
+    for _, start, _, _ in _FEATURE_GROUPS[1:]:
+        ax_g.axvline(start - 0.5, color="gray", linewidth=0.6, linestyle="--", alpha=0.5)
+
+    ax_g.set_ylabel("|grad| × |input| (mean over heliostats)")
+    ax_g.set_title("Feature Importance — Gradient × Input Sensitivity")
+    ax_g.grid(axis="y", alpha=0.2)
+
+    # Shared x-axis: group-centre ticks
+    group_centers = [(start + end) / 2 - 0.5 for _, start, end, _ in _FEATURE_GROUPS]
+    group_labels  = [label for label, _, _, _ in _FEATURE_GROUPS]
+    ax_g.set_xticks(group_centers)
+    ax_g.set_xticklabels(group_labels, rotation=30, ha="right", fontsize=8)
+    ax_g.set_xlim(-0.5, n_feat - 0.5)
+
+    # Legend for group colours (proxy patches)
+    import matplotlib.patches as mpatches
+    patches = [mpatches.Patch(color=c, alpha=0.6, label=lbl)
+               for lbl, _, _, c in _FEATURE_GROUPS]
+    ax_g.legend(handles=patches, fontsize=7, ncol=3, framealpha=0.9,
+                loc="upper right", title="Feature group")
+
     fig.tight_layout()
     fig.savefig(output_path, dpi=160, bbox_inches="tight")
     plt.close(fig)
