@@ -161,9 +161,6 @@ def plot_baseline_vs_corrected_metrics(
     test_last_metrics: dict[str, object],
     output_path: pathlib.Path,
 ) -> None:
-    del validation_last_metrics
-    del test_last_metrics
-
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.8))
     fig.patch.set_facecolor("white")
 

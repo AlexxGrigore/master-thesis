@@ -2,7 +2,7 @@
 #SBATCH --job-name=ftp_synth_poly3
 #SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/ftp_synth_poly3_out_%j.log
 #SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/ftp_synth_poly3_err_%j.log
-#SBATCH --time=1:30:00
+#SBATCH --time=1:00:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:a40:1
