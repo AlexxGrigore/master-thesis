@@ -17,7 +17,7 @@ _FEATURE_NAMES: list[str] = (
     + ["std_cen_E",  "std_cen_N",  "std_cen_U"]
     + ["rng_cen_E",  "rng_cen_N",  "rng_cen_U"]
     + ["mean_sun_x", "mean_sun_y", "mean_sun_z"]
-    + ["slope_E",    "slope_N",    "slope_U"]
+    + ["std_sun_x",  "std_sun_y",  "std_sun_z"]
     + ["mean_mtr_0", "mean_mtr_1"]
     + ["std_mtr_0",  "std_mtr_1"]
 )
@@ -30,7 +30,7 @@ _FEATURE_GROUPS: list[tuple[str, int, int, str]] = [
     ("std_cen",   26, 29, "#d62728"),
     ("rng_cen",   29, 32, "#9467bd"),
     ("mean_sun",  32, 35, "#8c564b"),
-    ("sun_slope", 35, 38, "#e377c2"),
+    ("std_sun",   35, 38, "#e377c2"),
     ("mean_mtr",  38, 40, "#7f7f7f"),
     ("std_mtr",   40, 42, "#bcbd22"),
 ]
@@ -41,8 +41,8 @@ _RESPONSE_FEATURE_DIMS: list[tuple[int, str]] = [
     (1,  "Heliostat N [norm]"),
     (23, "Mean centroid E [norm]"),
     (24, "Mean centroid N [norm]"),
-    (35, "Sun slope E [norm]"),
-    (36, "Sun slope N [norm]"),
+    (35, "Std sun x [norm]"),
+    (36, "Std sun y [norm]"),
 ]
 
 # One representative output per Wortberg parameter group.
@@ -57,10 +57,12 @@ def _model_forward_from_features(
     model: torch.nn.Module,
     features: torch.Tensor,
 ) -> torch.Tensor:
-    """Forward pass directly from raw 42-D base features (handles linear and poly)."""
+    """Forward pass directly from raw 42-D base features (handles linear, poly, and snn)."""
     device = next(model.parameters()).device
     f = features.to(device)
-    if hasattr(model, "degree"):
+    if hasattr(model, "net"):  # SNN
+        return torch.tanh(model.net(f)) * model.residual_bounds
+    if hasattr(model, "degree"):  # poly
         f = torch.cat([f ** k for k in range(1, model.degree + 1)], dim=-1)
     return torch.tanh(model.linear(f)) * model.residual_bounds
 
@@ -159,11 +161,10 @@ def plot_baseline_vs_corrected_metrics(
     test_last_metrics: dict[str, object],
     output_path: pathlib.Path,
 ) -> None:
-    categories = ["Baseline", "Best", "Last"]
-    x = np.arange(len(categories))
-    width = 0.34
+    del validation_last_metrics
+    del test_last_metrics
 
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5), sharey=True)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.8))
     fig.patch.set_facecolor("white")
 
     panels = [
@@ -183,40 +184,44 @@ def plot_baseline_vs_corrected_metrics(
         ),
     ]
 
-    for ax, title, baseline_metrics, best_metrics, last_metrics in panels:
-        mean_values = [
-            float(baseline_metrics["mean_focal_spot_error_mrad"]),
-            float(best_metrics["mean_focal_spot_error_mrad"]),
-            float(last_metrics["mean_focal_spot_error_mrad"]),
+    for ax, title, baseline_metrics, best_metrics, _ in panels:
+        table_rows = [
+            [
+                "Mean error (mrad)",
+                f"{float(baseline_metrics['mean_focal_spot_error_mrad']):.3f}",
+                f"{float(best_metrics['mean_focal_spot_error_mrad']):.3f}",
+            ],
+            [
+                "Median error (mrad)",
+                f"{float(baseline_metrics['median_focal_spot_error_mrad']):.3f}",
+                f"{float(best_metrics['median_focal_spot_error_mrad']):.3f}",
+            ],
         ]
-        median_values = [
-            float(baseline_metrics["median_focal_spot_error_mrad"]),
-            float(best_metrics["median_focal_spot_error_mrad"]),
-            float(last_metrics["median_focal_spot_error_mrad"]),
-        ]
 
-        mean_bars = ax.bar(x - width / 2, mean_values, width=width, color="#1f77b4", alpha=0.9, label="Mean")
-        median_bars = ax.bar(x + width / 2, median_values, width=width, color="#ff7f0e", alpha=0.8, label="Median")
+        ax.axis("off")
+        table = ax.table(
+            cellText=table_rows,
+            colLabels=["Metric", "Baseline", "Best checkpoint"],
+            cellLoc="center",
+            colLoc="center",
+            loc="center",
+            colWidths=[0.48, 0.23, 0.29],
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(10)
+        table.scale(1.0, 1.8)
 
-        for bars in (mean_bars, median_bars):
-            for bar in bars:
-                ax.text(
-                    bar.get_x() + bar.get_width() / 2,
-                    bar.get_height(),
-                    f"{bar.get_height():.2f}",
-                    ha="center",
-                    va="bottom",
-                    fontsize=8,
-                )
+        for (row, col), cell in table.get_celld().items():
+            cell.set_edgecolor("#d0d7de")
+            if row == 0:
+                cell.set_facecolor("#e8eef7")
+                cell.set_text_props(weight="bold")
+            elif col == 0:
+                cell.set_facecolor("#f7f7f7")
 
-        ax.set_xticks(x)
-        ax.set_xticklabels(categories)
         ax.set_title(title)
-        ax.grid(axis="y", alpha=0.25)
-        ax.set_xlabel("Checkpoint")
 
-    axes[0].set_ylabel("Tracking error (mrad)")
-    axes[0].legend(framealpha=0.9)
+    fig.suptitle("Baseline vs Best Checkpoint Metrics", fontsize=14)
     fig.tight_layout()
     fig.savefig(output_path, dpi=160, bbox_inches="tight")
     plt.close(fig)
@@ -274,12 +279,12 @@ def plot_linear_weights_heatmap(
                       _N_HEL + _N_KIN + 3,  # std_cen
                       _N_HEL + _N_KIN + 6,  # range_cen
                       _N_HEL + _N_KIN + 9,  # mean_sun
-                      _N_HEL + _N_KIN + 12, # slope
+                      _N_HEL + _N_KIN + 12, # std_sun
                       _N_HEL + _N_KIN + 15, # mean_motor
                       _N_HEL + _N_KIN + 17, # std_motor
                       ]
     section_labels = ["helpos", "kin", "mean_cen", "std_cen",
-                      "range_cen", "mean_sun", "slope", "mean_motor", "std_motor"]
+                      "range_cen", "mean_sun", "std_sun", "mean_motor", "std_motor"]
     section_ticks = section_starts
 
     fig, (ax_heatmap, ax_bias) = plt.subplots(
@@ -362,14 +367,6 @@ def plot_response_curves(
     feature_matrix = torch.stack(feature_rows, dim=0)  # (N_hel, 42)
     baseline = feature_matrix.mean(dim=0)              # (42,)
 
-    def _forward(features: torch.Tensor) -> torch.Tensor:
-        """Run the model's linear head directly from raw 42-D feature vectors."""
-        f = features.to(device)
-        if hasattr(model, "degree"):
-            f = torch.cat([f ** k for k in range(1, model.degree + 1)], dim=-1)
-        raw = torch.tanh(model.linear(f)) * model.residual_bounds
-        return raw.cpu()
-
     selected_out = _RESPONSE_OUTPUT_DIMS
     out_labels = [parameter_names[i] for i in selected_out]
     n_feat = len(_RESPONSE_FEATURE_DIMS)
@@ -391,7 +388,7 @@ def plot_response_curves(
         batch = baseline.unsqueeze(0).expand(n_grid, -1).clone()
         batch[:, feat_dim] = grid
 
-        preds = _forward(batch)  # (n_grid, 20)
+        preds = _model_forward_from_features(model, batch).cpu()  # (n_grid, 20)
 
         for col, (out_dim, out_label) in enumerate(zip(selected_out, out_labels)):
             ax = axes[row, col]
@@ -466,19 +463,22 @@ def plot_feature_importance(
         bar_colors[start:end] = color
 
     # ------------------------------------------------------------------
-    # Panel 1 — weight column norms
+    # Panel 1 — weight column norms (linear/poly only; skipped for SNN)
     # ------------------------------------------------------------------
-    W = model.linear.weight.detach().cpu()  # (20, expanded_dim)
-
-    if hasattr(model, "degree"):
-        degree = model.degree
-        # W is (20, 42*degree); split into degree blocks of size 42
-        blocks = [W[:, k * n_feat:(k + 1) * n_feat] for k in range(degree)]
-        block_norms = [b.norm(dim=0).numpy() for b in blocks]  # list of (42,) arrays
-        degree_colors = ["#4c78a8", "#f58518", "#e45756", "#72b7b2"][:degree]
+    has_linear_head = hasattr(model, "linear")
+    if has_linear_head:
+        W = model.linear.weight.detach().cpu()  # (20, expanded_dim)
+        if hasattr(model, "degree"):
+            degree = model.degree
+            blocks = [W[:, k * n_feat:(k + 1) * n_feat] for k in range(degree)]
+            block_norms = [b.norm(dim=0).numpy() for b in blocks]
+            degree_colors = ["#4c78a8", "#f58518", "#e45756", "#72b7b2"][:degree]
+        else:
+            block_norms = [W.norm(dim=0).numpy()]
+            degree_colors = ["#4c78a8"]
     else:
-        block_norms = [W.norm(dim=0).numpy()]
-        degree_colors = ["#4c78a8"]
+        block_norms = None
+        degree_colors = []
 
     # ------------------------------------------------------------------
     # Panel 2 — gradient × input
@@ -496,23 +496,25 @@ def plot_feature_importance(
     fig, (ax_w, ax_g) = plt.subplots(2, 1, figsize=(16, 8), sharex=True)
     fig.patch.set_facecolor("white")
 
-    # Panel 1: stacked bar (one stack per degree)
-    bottom = np.zeros(n_feat)
-    for k, (norms, dcolor) in enumerate(zip(block_norms, degree_colors)):
-        ax_w.bar(x_coords, norms, bottom=bottom, color=dcolor,
-                 label=f"degree {k + 1}", alpha=0.85, width=0.8)
-        bottom += norms
+    # Panel 1: stacked bar (one stack per degree) — or a note for SNN
+    if has_linear_head:
+        bottom = np.zeros(n_feat)
+        for k, (norms, dcolor) in enumerate(zip(block_norms, degree_colors)):
+            ax_w.bar(x_coords, norms, bottom=bottom, color=dcolor,
+                     label=f"degree {k + 1}", alpha=0.85, width=0.8)
+            bottom += norms
+        ax_w.legend(fontsize=8, framealpha=0.9)
+    else:
+        ax_w.text(0.5, 0.5, "Weight column norms not available for SNN\n(no single linear input layer)",
+                  ha="center", va="center", transform=ax_w.transAxes, fontsize=10, color="gray")
 
-    # Group background shading
     for label, start, end, color in _FEATURE_GROUPS:
         ax_w.axvspan(start - 0.5, end - 0.5, alpha=0.07, color=color)
-    # Vertical separators between groups
     for _, start, _, _ in _FEATURE_GROUPS[1:]:
         ax_w.axvline(start - 0.5, color="gray", linewidth=0.6, linestyle="--", alpha=0.5)
 
     ax_w.set_ylabel("Weight column L2 norm")
     ax_w.set_title("Feature Importance — Weight Column Norms")
-    ax_w.legend(fontsize=8, framealpha=0.9)
     ax_w.grid(axis="y", alpha=0.2)
 
     # Panel 2: coloured bars by group

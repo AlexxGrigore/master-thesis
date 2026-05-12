@@ -40,7 +40,7 @@ _N_HELIOSTAT_POS = 3
 #   std_centroid    (3)  — spread of centroid positions
 #   range_centroid  (3)  — max - min centroid per axis
 #   mean_sun        (3)  — mean sun direction
-#   cen_sun_slope   (3)  — OLS slope of centroid on sun elevation (how centroid moves with sun)
+#   std_sun         (3)  — spread of sun directions (measurement coverage quality)
 #   mean_motor      (2)  — mean motor encoder readings
 #   std_motor       (2)  — spread of motor readings
 _N_AGG = 19
@@ -85,17 +85,11 @@ class SharedLinearResidualModel(torch.nn.Module):
         std_cen = centroid.std(dim=0).nan_to_num(0.0)                            # (3,)
         range_cen = centroid.max(dim=0).values - centroid.min(dim=0).values      # (3,)
         mean_sun = sun.mean(dim=0)                                               # (3,)
+        std_sun = sun.std(dim=0).nan_to_num(0.0)                                 # (3,)
         mean_motor = motor.mean(dim=0)                                           # (2,)
         std_motor = motor.std(dim=0).nan_to_num(0.0)                             # (2,)
 
-        # OLS slope of centroid (3D) on sun elevation: captures how pointing
-        # error changes with sun angle, which is the kinematic signature.
-        sun_elev = sun[:, 2]                                                     # (N,)
-        sun_elev_c = sun_elev - sun_elev.mean()
-        denom = (sun_elev_c ** 2).sum().clamp(min=1e-8)
-        slope = (centroid * sun_elev_c.unsqueeze(1)).sum(dim=0) / denom         # (3,)
-
-        return torch.cat([mean_cen, std_cen, range_cen, mean_sun, slope, mean_motor, std_motor])
+        return torch.cat([mean_cen, std_cen, range_cen, mean_sun, std_sun, mean_motor, std_motor])
 
     def _select_and_flatten(self, inp: HeliostatCalibrationInput) -> torch.Tensor:
         device = self.residual_bounds.device
@@ -167,6 +161,9 @@ def build_residual_model(model_type: str) -> torch.nn.Module:
         return SharedPolyResidualModel(degree=3)
     if model_type == "poly4":
         return SharedPolyResidualModel(degree=4)
+    if model_type == "snn":
+        from full_training_pipeline.model_snn import SharedSNNResidualModel
+        return SharedSNNResidualModel()
     raise ValueError(
-        f"Unknown model_type {model_type!r}. Choose from: linear, poly2, poly3, poly4"
+        f"Unknown model_type {model_type!r}. Choose from: linear, poly2, poly3, poly4, snn"
     )

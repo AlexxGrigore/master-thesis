@@ -34,16 +34,69 @@ coarse kinematic params (20D, from checkpoint)
 
 Selected via `--model-type` CLI flag (default: `linear`).
 
-| Model type | Architecture             | Input dim | Parameters | Ratio (63 hel) |
-|------------|--------------------------|-----------|------------|----------------|
-| `linear`   | Linear(42 → 20)          | 42        | 860        | 14:1           |
-| `poly2`    | Linear(84 → 20), [x, x²] | 84        | 1,700      | 27:1           |
-| `poly3`    | Linear(126 → 20), [x, x², x³] | 126  | 2,540      | 40:1           |
-| `poly4`    | Linear(168 → 20), [x..x⁴] | 168     | 3,380      | 54:1           |
+| Model type | Architecture                                    | Input dim | Parameters | Ratio (63 hel) |
+|------------|-------------------------------------------------|-----------|------------|----------------|
+| `linear`   | Linear(42 → 20)                                 | 42        | 860        | 14:1           |
+| `poly2`    | Linear(84 → 20), [x, x²]                       | 84        | 1,700      | 27:1           |
+| `poly3`    | Linear(126 → 20), [x, x², x³]                  | 126       | 2,540      | 40:1           |
+| `poly4`    | Linear(168 → 20), [x..x⁴]                      | 168       | 3,380      | 54:1           |
+| `snn`      | [Linear(→16) → SELU] × 4 → Linear(16 → 20)    | 42        | 1,812      | 29:1           |
 
 Polynomial models expand the 42D feature vector with power terms (no cross-terms) before
-the linear output layer. All models use zero-weight initialisation and `tanh × bounds`
-output activation to keep corrections within physical limits.
+the linear output layer. All models use zero-weight initialisation on the output layer and
+`tanh × bounds` output activation to keep corrections within physical limits.
+
+The `snn` model is a Self-Normalizing MLP (4 hidden layers of 16 neurons, SELU activations).
+SELU automatically normalises activations toward zero mean and unit variance as they propagate
+through layers, allowing stable training without batch normalisation. Hidden layers use Lecun
+normal initialisation (recommended for SELU); the output layer is zero-initialised so
+corrections start at zero identical to all other models.
+
+### Key architectural properties
+
+**Residual/additive structure.** The model predicts a *correction* added on top of the
+already-optimised coarse checkpoint — it does not predict kinematic parameters from scratch.
+The coarse parameters are completely frozen throughout training; no gradients flow into them.
+This means the optimisation starts from a good initialisation and only needs to capture the
+remaining systematic error.
+
+**Zero-weight initialisation.** Both the linear layer weights and bias start at zero. At
+epoch 0 every heliostat therefore receives a zero correction, so training begins exactly at
+the coarse checkpoint. Random initialisation would apply arbitrary corrections from the start,
+potentially destabilising early training.
+
+**Heliostat identity is implicit.** The model has no heliostat ID or embedding — it only
+sees the 42D feature vector. Two heliostats with identical features would receive identical
+corrections. This is intentional: the model learns a generalising function over feature space,
+not per-heliostat memorisation.
+
+**Features are precomputed once.** The 42D feature vector for each heliostat is built before
+training starts and is fixed throughout. It summarises measurement history (mean centroid, centroid spread,
+mean sun direction, motor stats, etc.). Only the model weights change during training.
+
+### How the models are fitted
+
+For each heliostat the model predicts a 20D residual correction on top of the frozen coarse
+kinematic parameters. The corrected parameters are applied to the scenario, ray tracing runs,
+and the predicted focal spot is compared to the measured centroid (focal-spot loss). Gradients
+flow back through the ray tracer, through `tanh × bounds`, through the linear layer, and into
+the weight matrix. The feature vectors themselves are fixed — only the weights are updated.
+
+**Linear model**: the weight matrix is 20×42 (one row per output parameter, one column per
+input feature). The correction for each output is a weighted sum of all 42 input features.
+The relationship is strictly linear — if a feature value doubles, its contribution to every
+output exactly doubles.
+
+**Polynomial models**: the 42D feature vector is first expanded to `[x, x², ..., x^d]` (no
+cross-terms), giving a 42·d dimensional input. A single linear layer then maps this to 20
+outputs. This allows each output to vary quadratically/cubically with individual features, but
+interactions between different features are not captured.
+
+The model is **shared across all 63 heliostats** — one weight matrix for the entire field.
+Each heliostat receives a different correction only because its feature vector is different.
+
+**Regularisation**: `loss = task_loss + λ · ||residual||²` (default λ = 1e-4) penalises
+large corrections and acts as an additional guard against overfitting.
 
 ### Output bounds (tanh scaling)
 
@@ -71,15 +124,26 @@ Each heliostat is represented by a **42-dimensional summary vector**:
 | 26–28 | `std_centroid`       | Std of centroid positions (3D)                        |
 | 29–31 | `range_centroid`     | Max − min centroid per axis (3D)                      |
 | 32–34 | `mean_sun`           | Mean sun direction unit vector (3D)                   |
-| 35–37 | `cen_sun_slope`      | OLS slope of centroid on sun elevation (3D)           |
+| 35–37 | `std_sun`            | Std of sun directions — measurement coverage quality (3D) |
 | 38–39 | `mean_motor`         | Mean motor encoder readings (2D)                      |
 | 40–41 | `std_motor`          | Std of motor readings (2D)                            |
 
-The OLS slope (`cen_sun_slope`) captures how the measured focal-spot position changes with
-sun elevation — the key kinematic signature distinguishing heliostats with different errors.
+### Feature normalisation
 
-All features are z-score normalised using training-set statistics (mean/std computed from
-the training split; applied identically to validation and test).
+All 42 features are **z-score normalised** before entering the model: for each dimension,
+subtract the training-set mean and divide by the training-set standard deviation, so every
+feature ends up with approximately mean=0, std=1 across training heliostats.
+
+This is necessary because the raw features span very different scales — heliostat positions
+are in the tens-to-hundreds of metres, kinematic parameters are order 1e-3 to 1e-1, and
+motor encoder readings are dimensionless counts. Without normalisation the weight matrix
+would need wildly different column magnitudes just to compensate for scale differences,
+making optimisation harder and the weights uninterpretable.
+
+The training-set mean and std are saved to `json/norm_stats.json`. Validation and test
+heliostats are normalised with those same training statistics — they never see the training
+distribution directly. The model output is **not** normalised; the `tanh × bounds` activation
+enforces hard physical limits on the correction magnitudes instead.
 
 ---
 
@@ -219,6 +283,8 @@ python check_env.py --dataset-type synthetic --daic
 | `run_full_pipeline_real_poly2.sh`      | real      | poly2  | 1:30   |
 | `run_full_pipeline_real_poly3.sh`      | real      | poly3  | 1:30   |
 | `run_full_pipeline_real_poly4.sh`      | real      | poly4  | 1:30   |
+| `run_full_pipeline_synthetic_snn.sh`   | synthetic | snn    | 1:30   |
+| `run_full_pipeline_real_snn.sh`        | real      | snn    | 1:30   |
 
 ---
 
