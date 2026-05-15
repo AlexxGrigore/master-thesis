@@ -49,6 +49,8 @@ from five_heliostats_synth.data import (
 from five_heliostats_synth.reporting import (
     plot_convergence,
     plot_param_recovery,
+    plot_stage_convergence,
+    plot_per_heliostat_accuracy_table,
     write_summary,
 )
 
@@ -67,6 +69,7 @@ def _split_dir(split: str) -> pathlib.Path:
 
 
 def _run_reporting(results: dict, perturbations_json: dict | None, heliostat_ids: list, output_dir: pathlib.Path) -> None:
+    # Combined convergence (all epochs, with reference lines).
     history_file = output_dir / "convergence_history.json"
     if history_file.exists():
         with open(history_file) as f:
@@ -80,6 +83,38 @@ def _run_reporting(results: dict, perturbations_json: dict | None, heliostat_ids
             post_perturbation_mrad=results.get("post_perturbation", {}).get("mean_mrad"),
             post_training_mrad=results.get("post_training",     {}).get("mean_mrad"),
         )
+
+    # Per-stage convergence plots.
+    stage1_file = output_dir / "convergence_history_stage1.json"
+    if stage1_file.exists():
+        with open(stage1_file) as f:
+            stage1_history = json.load(f)
+        plot_stage_convergence(
+            stage1_history, output_dir,
+            stage_name="Stage 1 — AlignmentLoss (motor-position MSE, no ray tracing)",
+            loss_label="AlignmentLoss (rad²)",
+            filename="convergence_stage1.png",
+        )
+
+    stage2_file = output_dir / "convergence_history_stage2.json"
+    if stage2_file.exists():
+        with open(stage2_file) as f:
+            stage2_history = json.load(f)
+        loss_label_map = {
+            "focal_spot": "FocalSpotLoss (m)",
+            "pixel":      "PixelLoss (MSE)",
+            "alignment":  "AlignmentLoss (rad²)",
+        }
+        loss_label = loss_label_map.get(results.get("loss_type", "focal_spot"), "Stage-2 Loss")
+        plot_stage_convergence(
+            stage2_history, output_dir,
+            stage_name=f"Stage 2 — {loss_label}",
+            loss_label=loss_label,
+            filename="convergence_stage2.png",
+        )
+
+    # Per-heliostat accuracy table.
+    plot_per_heliostat_accuracy_table(results, heliostat_ids, output_dir)
 
     if results.get("param_recovery"):
         plot_param_recovery(results["param_recovery"], output_dir)
@@ -129,6 +164,8 @@ def main() -> None:
         "scenario_path":            str(cfg.SCENARIO_PATH),
         "dataset_type":             cfg.DATASET_TYPE,
         "loss_type":                cfg.LOSS_TYPE,
+        "stage1_epochs":            cfg.STAGE1_EPOCHS,
+        "stage2_epochs":            cfg.STAGE2_EPOCHS,
         "train_samples":            cfg.TRAIN_SAMPLES,
         "val_samples":              cfg.VAL_SAMPLES,
         "test_samples":             cfg.TEST_SAMPLES,
@@ -241,13 +278,13 @@ def main() -> None:
         # ------------------------------------------------------------------ run
         optimization_config = cfg.OPTIMIZATION_CONFIG
         train_rays = cfg.TRAIN_RAYS
+        stage1_epochs = cfg.STAGE1_EPOCHS
+        stage2_epochs = cfg.STAGE2_EPOCHS
         if args.smoke_test:
-            import copy
-            from artist.util import config_dictionary as cd
-            optimization_config = copy.deepcopy(optimization_config)
-            optimization_config[cd.max_epoch] = 5
+            stage1_epochs = 2
+            stage2_epochs = 3
             train_rays = 1
-            log.info("SMOKE TEST: 5 epochs, 1 train ray.")
+            log.info("SMOKE TEST: stage1=2 epochs, stage2=3 epochs, 1 train ray.")
 
         results = run(
             scenario_path=cfg.SCENARIO_PATH,
@@ -267,6 +304,8 @@ def main() -> None:
             train_rays=train_rays,
             perturbations=perturbations,
             heliostat_ids=heliostat_ids,
+            stage1_epochs=stage1_epochs,
+            stage2_epochs=stage2_epochs,
         )
 
         gc.collect()

@@ -5,6 +5,7 @@ import pathlib
 from dataclasses import dataclass
 
 import numpy as np
+from PIL import Image
 import paint.util.paint_mappings as paint_mappings
 import torch
 from artist.util.utils import convert_wgs84_coordinates_to_local_enu
@@ -48,6 +49,15 @@ def _get_kinematic_params(
     return flat[local_idx].detach().cpu()
 
 
+def _load_flux_images(flux_paths: list[pathlib.Path]) -> torch.Tensor:
+    """Load grayscale PNG flux images; returns (N, H, W) float32 tensor with values in [0, 1]."""
+    imgs = []
+    for path in flux_paths:
+        img = Image.open(path).convert("L")
+        imgs.append(torch.from_numpy(np.array(img, dtype=np.float32)) / 255.0)
+    return torch.stack(imgs, dim=0)
+
+
 # ---------------------------------------------------------------------------
 # Real PAINT data builder
 # ---------------------------------------------------------------------------
@@ -59,12 +69,13 @@ def build_calibration_inputs_real(
     centroid_method: str,
     scenario,
     group_states: list[GroupParameterState],
+    load_flux_images: bool = False,
 ) -> dict[str, HeliostatCalibrationInput]:
     lookup = _build_heliostat_lookup(scenario, group_states)
     power_plant_pos = scenario.power_plant_position  # (3,) WGS84 [lat, lon, alt]
 
     inputs: dict[str, HeliostatCalibrationInput] = {}
-    for heliostat_name, cal_paths, _flux_paths in mapping:
+    for heliostat_name, cal_paths, flux_paths in mapping:
         if heliostat_name not in lookup:
             continue
         group_idx, local_idx = lookup[heliostat_name]
@@ -99,6 +110,7 @@ def build_calibration_inputs_real(
             centroid_wgs84, power_plant_pos
         ).float()  # (N_meas, 3)
 
+        flux_images = _load_flux_images(flux_paths) if load_flux_images and flux_paths else None
         inputs[heliostat_name] = HeliostatCalibrationInput(
             heliostat_name=heliostat_name,
             kinematic_params=_get_kinematic_params(group_states, group_idx, local_idx),
@@ -106,7 +118,7 @@ def build_calibration_inputs_real(
             sun_directions=sun_directions,
             motor_positions=motor_positions,
             centroids=centroids,
-            flux_images=None,
+            flux_images=flux_images,
         )
     return inputs
 
@@ -136,11 +148,12 @@ def build_calibration_inputs_synth(
     mapping: list[tuple[str, list[pathlib.Path], list[pathlib.Path]]],
     scenario,
     group_states: list[GroupParameterState],
+    load_flux_images: bool = False,
 ) -> dict[str, HeliostatCalibrationInput]:
     lookup = _build_heliostat_lookup(scenario, group_states)
 
     inputs: dict[str, HeliostatCalibrationInput] = {}
-    for heliostat_name, cal_paths, _flux_paths in mapping:
+    for heliostat_name, cal_paths, flux_paths in mapping:
         if heliostat_name not in lookup:
             continue
         group_idx, local_idx = lookup[heliostat_name]
@@ -154,6 +167,7 @@ def build_calibration_inputs_synth(
             fse = meta["focal_spot_enu"]  # [E, N, U, 1.0]
             centroid_list.append([fse[0], fse[1], fse[2]])
 
+        flux_images = _load_flux_images(flux_paths) if load_flux_images and flux_paths else None
         inputs[heliostat_name] = HeliostatCalibrationInput(
             heliostat_name=heliostat_name,
             kinematic_params=_get_kinematic_params(group_states, group_idx, local_idx),
@@ -161,7 +175,7 @@ def build_calibration_inputs_synth(
             sun_directions=torch.tensor(sun_list, dtype=torch.float32),
             motor_positions=torch.tensor(motor_list, dtype=torch.float32),
             centroids=torch.tensor(centroid_list, dtype=torch.float32),
-            flux_images=None,
+            flux_images=flux_images,
         )
     return inputs
 
@@ -258,6 +272,7 @@ def build_split_bundle(
     scenario,
     group_states: list[GroupParameterState],
     norm_stats: CalibrationNormStats | None = None,
+    load_flux_images: bool = False,
 ) -> SplitDataBundle:
     mapping = build_heliostat_data_mapping(
         benchmark_csv=benchmark_csv,
@@ -272,6 +287,7 @@ def build_split_bundle(
         centroid_method=centroid_method,
         scenario=scenario,
         group_states=group_states,
+        load_flux_images=load_flux_images,
     )
     if norm_stats is None:
         norm_stats = compute_norm_stats(raw_inputs)
@@ -291,12 +307,14 @@ def build_split_bundle_synth(
     scenario,
     group_states: list[GroupParameterState],
     norm_stats: CalibrationNormStats | None = None,
+    load_flux_images: bool = False,
 ) -> SplitDataBundle:
     mapping = _build_synth_mapping(split_dir, sample_limit_per_heliostat)
     raw_inputs = build_calibration_inputs_synth(
         mapping=mapping,
         scenario=scenario,
         group_states=group_states,
+        load_flux_images=load_flux_images,
     )
     if norm_stats is None:
         norm_stats = compute_norm_stats(raw_inputs)

@@ -28,7 +28,7 @@ def main() -> None:
     parser.add_argument("--smoke-test", action="store_true", help="Run 3 epochs as a quick sanity check.")
     parser.add_argument("--dataset-type", choices=["real", "synthetic"], default=None,
                         help="Override the DATASET_TYPE setting in config.py.")
-    parser.add_argument("--model-type", choices=["linear", "poly2", "poly3", "poly4", "snn"], default=None,
+    parser.add_argument("--model-type", choices=["linear", "poly2", "poly3", "poly4", "transformer"], default=None,
                         help="Residual model architecture (default: linear).")
     parser.add_argument("--daic", action="store_true",
                         help="Use DAIC cluster paths (overrides IS_ON_DAIC in config.py).")

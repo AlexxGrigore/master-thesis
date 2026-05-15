@@ -6,8 +6,11 @@ Three evaluation checkpoints:
   2. post_perturbation — perturbed scenario vs same clean synthetic test data (high mrad)
   3. post_training     — trained (recovered) scenario vs same clean synthetic test data (low mrad)
 
-Loss: PixelLoss (MSE) — blur σ=1 applied by WortbergPixelReconstructor before loss call.
+Training is always two-stage:
+  Stage 1 (alignment loss, no ray tracing) — pulls all heliostats onto the target.
+  Stage 2 (configured loss_type)           — fine-tunes to optical accuracy.
 """
+import copy
 import gc
 import json
 import logging
@@ -68,15 +71,19 @@ def run(
     test_parser,
     optimization_config: dict,
     output_dir,
-    loss_type: str = "pixel",
+    loss_type: str = "focal_spot",
     dataset_type: str = "synthetic",
     n_surface_pts: int = 25,
     train_rays: int = 10,
     perturbations: dict | None = None,
     heliostat_ids: list | None = None,
+    stage1_epochs: int = 50,
+    stage2_epochs: int = 250,
 ) -> dict:
     """
-    Train WortbergKinematicReconstructor on clean synthetic data for 63 heliostats.
+    Train on clean synthetic data for 63 heliostats using a two-stage approach:
+      Stage 1 — AlignmentLoss (no ray tracing) for stage1_epochs.
+      Stage 2 — loss_type for stage2_epochs.
     Returns metrics dict with all 3 evaluation results.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -140,7 +147,9 @@ def run(
     )
 
     # ------------------------------------------------------------------
-    # Stage 3: train
+    # Stage 3: two-stage training
+    #   Stage 1 — AlignmentLoss (no ray tracing, fast)
+    #   Stage 2 — configured loss_type
     # ------------------------------------------------------------------
     data = {
         config_dictionary.data_parser:           train_parser,
@@ -151,33 +160,87 @@ def run(
         "heliostat_data_mapping": val_mapping,
     }
 
-    reconstructor, loss_fn = _build_reconstructor(
+    stage1_config = copy.deepcopy(optimization_config)
+    stage1_config[config_dictionary.max_epoch] = stage1_epochs
+
+    stage2_config = copy.deepcopy(optimization_config)
+    stage2_config[config_dictionary.max_epoch] = stage2_epochs
+
+    t0 = time.time()
+
+    # --- Stage 1: AlignmentLoss ---
+    log.info(f"Stage 3a — alignment pre-training ({stage1_epochs} epochs, no ray tracing)…")
+    stage1_reconstructor, stage1_loss_fn = _build_reconstructor(
+        loss_type="alignment",
+        scenario=scenario,
+        ddp_setup=ddp_setup,
+        data=data,
+        eval_data=eval_data,
+        optimization_config=stage1_config,
+        train_position_deviation=True,
+        sample_mini_batch_size=10,
+    )
+    stage1_reconstructor.reconstruct_kinematics(loss_definition=stage1_loss_fn, device=device)
+    stage1_history = stage1_reconstructor._convergence_history
+    log.info(f"Stage 1 done in {(time.time() - t0) / 60:.1f} min")
+
+    # Eval at end of stage 1 — scenario kinematics are at the best-val-loss state.
+    log.info("Post-stage1 eval (alignment-trained scenario, clean test data)…")
+    post_stage1_eval = evaluate_flux_accuracy(
+        scenario=scenario,
+        heliostat_data_mapping=test_mapping,
+        data_parser=test_parser,
+        device=device,
+    )
+    log.info(
+        f"  post-stage1 : mean={post_stage1_eval['mean_mrad']:.3f} mrad  "
+        f"median={post_stage1_eval['median_mrad']:.3f} mrad  "
+        f"pixel_loss={post_stage1_eval['mean_pixel_loss']:.4f}  n={post_stage1_eval['num_samples']}"
+    )
+
+    del stage1_reconstructor
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    # --- Stage 2: configured loss ---
+    log.info(f"Stage 3b — {loss_type} fine-tuning ({stage2_epochs} epochs)…")
+    t1 = time.time()
+    stage2_reconstructor, stage2_loss_fn = _build_reconstructor(
         loss_type=loss_type,
         scenario=scenario,
         ddp_setup=ddp_setup,
         data=data,
         eval_data=eval_data,
-        optimization_config=optimization_config,
+        optimization_config=stage2_config,
         train_position_deviation=True,
         sample_mini_batch_size=10,
     )
-
-    t0 = time.time()
-    reconstructor.reconstruct_kinematics(loss_definition=loss_fn, device=device)
+    stage2_reconstructor.reconstruct_kinematics(loss_definition=stage2_loss_fn, device=device)
+    stage2_history = stage2_reconstructor._convergence_history
     train_time = time.time() - t0
-    log.info(f"Training done in {train_time / 60:.1f} min")
+    log.info(f"Stage 2 done in {(time.time() - t1) / 60:.1f} min  (total {train_time / 60:.1f} min)")
 
+    # Offset stage 2 epoch numbers so the combined history is monotonic.
+    epoch_offset = stage1_history[-1]["epoch"] + 1 if stage1_history else 0
+    for entry in stage2_history:
+        entry["epoch"] += epoch_offset
+
+    convergence_history = stage1_history + stage2_history
     with open(output_dir / "convergence_history.json", "w") as f:
-        json.dump(reconstructor._convergence_history, f, indent=2)
+        json.dump(convergence_history, f, indent=2)
+    with open(output_dir / "convergence_history_stage1.json", "w") as f:
+        json.dump(stage1_history, f, indent=2)
+    with open(output_dir / "convergence_history_stage2.json", "w") as f:
+        json.dump(stage2_history, f, indent=2)
 
     if heliostat_ids is not None:
         kinematic_history = _build_kinematic_history(
-            reconstructor._kinematic_history, heliostat_ids
+            stage2_reconstructor._kinematic_history, heliostat_ids
         )
         with open(output_dir / "kinematic_history.json", "w") as f:
             json.dump(kinematic_history, f, indent=2)
 
-    del reconstructor
+    del stage2_reconstructor
     gc.collect()
     torch.cuda.empty_cache()
 
@@ -255,6 +318,17 @@ def run(
             "nan_heliostat_ids": pre_eval["nan_heliostat_ids"],
             "per_heliostat":     pre_eval["per_heliostat"],
         },
+        "post_stage1": {
+            "mean_mrad":         post_stage1_eval["mean_mrad"],
+            "median_mrad":       post_stage1_eval["median_mrad"],
+            "mean_m":            post_stage1_eval["mean_m"],
+            "mean_pixel_loss":   post_stage1_eval["mean_pixel_loss"],
+            "median_pixel_loss": post_stage1_eval["median_pixel_loss"],
+            "num_samples":       post_stage1_eval["num_samples"],
+            "num_nan_samples":   post_stage1_eval["num_nan_samples"],
+            "nan_heliostat_ids": post_stage1_eval["nan_heliostat_ids"],
+            "per_heliostat":     post_stage1_eval["per_heliostat"],
+        },
         "post_perturbation": {
             "mean_mrad":         post_perturb_eval["mean_mrad"],
             "median_mrad":       post_perturb_eval["median_mrad"],
@@ -280,6 +354,7 @@ def run(
             "per_heliostat":     post_train_eval["per_heliostat"],
         },
         "train_time_min": round(train_time / 60, 2),
+        "loss_type":      loss_type,
         "param_recovery": recovery,
     }
     with open(output_dir / "results.json", "w") as f:

@@ -116,6 +116,7 @@ def _build_bundle(
             scenario=scenario,
             group_states=group_states,
             norm_stats=norm_stats,
+            load_flux_images=config.load_flux_images,
         )
     return build_split_bundle(
         benchmark_csv=config.benchmark_csv,
@@ -127,6 +128,7 @@ def _build_bundle(
         scenario=scenario,
         group_states=group_states,
         norm_stats=norm_stats,
+        load_flux_images=config.load_flux_images,
     )
 
 
@@ -612,16 +614,17 @@ def run(config: PipelineConfig) -> None:
                 ),
                 selection_tag=tag,
             )
-            _save_model_checkpoint_json(
-                output_path=models_dir / f"linear_residual_model{suffix}.json",
-                model_state_dict=state_dict,
-                norm_stats_dict=norm_stats_dict,
-                selected_epoch=int(epoch_record_for_tag["epoch"]),
-                selected_validation_mean_mrad=float(
-                    epoch_record_for_tag["validation_mean_focal_spot_error_mrad"]
-                ),
-                selection_tag=tag,
-            )
+            if config.model_type == "linear":
+                _save_model_checkpoint_json(
+                    output_path=models_dir / f"linear_residual_model{suffix}.json",
+                    model_state_dict=state_dict,
+                    norm_stats_dict=norm_stats_dict,
+                    selected_epoch=int(epoch_record_for_tag["epoch"]),
+                    selected_validation_mean_mrad=float(
+                        epoch_record_for_tag["validation_mean_focal_spot_error_mrad"]
+                    ),
+                    selection_tag=tag,
+                )
 
         residual_model.load_state_dict(best_model_state_dict)
         residual_model.eval()
@@ -759,19 +762,20 @@ def run(config: PipelineConfig) -> None:
             output_path=plots_dir / "per_heliostat_improvement.png",
         )
 
-        plot_response_curves(
-            model=residual_model,
-            calibration_inputs=train_bundle.calibration_inputs,
-            parameter_names=SHARED_WORTBERG_PARAMETER_NAMES,
-            output_path=plots_dir / "response_curves.png",
-        )
+        if config.model_type != "transformer":
+            plot_response_curves(
+                model=residual_model,
+                calibration_inputs=train_bundle.calibration_inputs,
+                parameter_names=SHARED_WORTBERG_PARAMETER_NAMES,
+                output_path=plots_dir / "response_curves.png",
+            )
 
-        plot_feature_importance(
-            model=residual_model,
-            calibration_inputs=train_bundle.calibration_inputs,
-            parameter_names=SHARED_WORTBERG_PARAMETER_NAMES,
-            output_path=plots_dir / "feature_importance.png",
-        )
+            plot_feature_importance(
+                model=residual_model,
+                calibration_inputs=train_bundle.calibration_inputs,
+                parameter_names=SHARED_WORTBERG_PARAMETER_NAMES,
+                output_path=plots_dir / "feature_importance.png",
+            )
 
         save_kinematic_parameters(
             best_validation_scenario,

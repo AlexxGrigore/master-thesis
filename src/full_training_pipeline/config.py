@@ -114,6 +114,7 @@ class PipelineConfig:
     bitmap_resolution: tuple[int, int] = (256, 256)
     centroid_method: str = paint_mappings.UTIS_KEY
     model_type: str = "linear"
+    load_flux_images: bool = False
     is_on_daic: bool = False
     smoke_test: bool = False
 
@@ -194,6 +195,7 @@ def build_config(
         bitmap_resolution=BITMAP_RESOLUTION,
         centroid_method=CENTROID_METHOD,
         model_type=resolved_model_type,
+        load_flux_images=(resolved_model_type == "transformer"),
         is_on_daic=IS_ON_DAIC,
         smoke_test=smoke_test,
     )

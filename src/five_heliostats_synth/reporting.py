@@ -33,6 +33,152 @@ import numpy as np
 
 
 # ---------------------------------------------------------------------------
+# Per-stage convergence plots (full_field_200_samples experiment)
+# ---------------------------------------------------------------------------
+
+def plot_stage_convergence(
+    history: list,
+    output_dir: pathlib.Path,
+    stage_name: str,
+    loss_label: str,
+    filename: str,
+) -> None:
+    """
+    Plot train/val loss for a single training stage.
+
+    Parameters
+    ----------
+    history    : list of epoch dicts from convergence_history_stage{1,2}.json
+    output_dir : destination directory
+    stage_name : human-readable name shown in the title (e.g. "Stage 1 — AlignmentLoss")
+    loss_label : y-axis label (e.g. "AlignmentLoss (rad²)" or "FocalSpotLoss (m)")
+    filename   : output filename without directory (e.g. "convergence_stage1.png")
+    """
+    if not history:
+        return
+
+    epochs       = [e["epoch"] for e in history]
+    train_losses = [e["loss"]  for e in history]
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+    fig.patch.set_facecolor("white")
+    ax.plot(epochs, train_losses, color="steelblue", linewidth=1.5, label="Train loss")
+    if any("eval_loss" in e for e in history):
+        eval_losses = [e.get("eval_loss", float("nan")) for e in history]
+        ax.plot(epochs, eval_losses, color="darkorange", linewidth=1.5,
+                linestyle="--", label="Val loss")
+
+    ax.set_yscale("log")
+    ax.set_xlabel("Epoch", fontsize=11)
+    ax.set_ylabel(f"{loss_label} — log scale", fontsize=11)
+    ax.set_title(stage_name, fontsize=12, fontweight="bold")
+    ax.legend(fontsize=9, framealpha=0.85)
+    ax.grid(alpha=0.3, linestyle="--", linewidth=0.7)
+    fig.tight_layout()
+    fig.savefig(output_dir / filename, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Per-heliostat accuracy table (full_field_200_samples experiment)
+# ---------------------------------------------------------------------------
+
+def plot_per_heliostat_accuracy_table(
+    results: dict,
+    heliostat_ids: list,
+    output_dir: pathlib.Path,
+) -> None:
+    """
+    Save a compact table image with per-heliostat accuracy at stage 1 and stage 2 end.
+
+    Columns: heliostat | post-stage1 (mrad) | post-stage2 (mrad) | delta (mrad)
+    Rows are sorted by heliostat ID.
+    Also writes ``per_heliostat_accuracy.json`` for downstream use.
+    """
+    stage1_ph = results.get("post_stage1",  {}).get("per_heliostat", {})
+    stage2_ph = results.get("post_training", {}).get("per_heliostat", {})
+
+    hids = sorted(set(list(stage1_ph.keys()) + list(stage2_ph.keys())))
+    if not hids and heliostat_ids:
+        hids = sorted(heliostat_ids)
+
+    rows = []
+    for hid in hids:
+        s1 = stage1_ph.get(hid, {}).get("focal_spot_error_mrad")
+        s2 = stage2_ph.get(hid, {}).get("focal_spot_error_mrad")
+        delta = (s2 - s1) if (s1 is not None and s2 is not None) else None
+        rows.append({
+            "heliostat":          hid,
+            "post_stage1_mrad":   round(s1, 4)     if s1    is not None else None,
+            "post_stage2_mrad":   round(s2, 4)     if s2    is not None else None,
+            "delta_mrad":         round(delta, 4)  if delta is not None else None,
+        })
+
+    with open(output_dir / "per_heliostat_accuracy.json", "w") as f:
+        json.dump(rows, f, indent=2)
+
+    if not rows:
+        return
+
+    col_headers = ["Heliostat", "Stage 1 (mrad)", "Stage 2 (mrad)", "Δ (mrad)"]
+    cell_data = [
+        [
+            r["heliostat"],
+            f"{r['post_stage1_mrad']:.3f}" if r["post_stage1_mrad"] is not None else "—",
+            f"{r['post_stage2_mrad']:.3f}" if r["post_stage2_mrad"] is not None else "—",
+            f"{r['delta_mrad']:+.3f}"      if r["delta_mrad"]       is not None else "—",
+        ]
+        for r in rows
+    ]
+
+    n_rows = len(cell_data)
+    row_h_in    = 0.30
+    header_h_in = 0.50
+    fig_h = max(3.0, header_h_in + n_rows * row_h_in + 0.5)
+    fig, ax = plt.subplots(figsize=(8, fig_h))
+    fig.patch.set_facecolor("white")
+    ax.axis("off")
+
+    header_h_frac = header_h_in / fig_h
+    row_h_frac    = row_h_in    / fig_h
+
+    tbl = ax.table(
+        cellText=cell_data,
+        colLabels=col_headers,
+        cellLoc="center",
+        loc="center",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(8)
+
+    for r in range(1, n_rows + 1):
+        for c in range(len(col_headers)):
+            tbl[r, c].set_height(row_h_frac)
+    for c in range(len(col_headers)):
+        tbl[0, c].set_height(header_h_frac)
+        tbl[0, c].set_facecolor("#3a3a3a")
+        tbl[0, c].set_text_props(color="white", fontweight="bold")
+
+    for r in range(1, n_rows + 1):
+        delta_str = cell_data[r - 1][3]
+        try:
+            delta_val = float(delta_str.replace("+", ""))
+        except ValueError:
+            delta_val = 0.0
+        bg = "#d4edda" if delta_val < 0 else ("#fce8e8" if delta_val > 0 else "#f5f5f5")
+        for c in range(len(col_headers)):
+            tbl[r, c].set_facecolor(bg if c == 3 else ("#f5f5f5" if r % 2 == 0 else "white"))
+
+    ax.set_title(
+        "Per-heliostat accuracy: end of stage 1 vs. stage 2",
+        fontsize=10, fontweight="bold", pad=6,
+    )
+    fig.tight_layout()
+    fig.savefig(output_dir / "per_heliostat_accuracy.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
 # Convergence plot
 # ---------------------------------------------------------------------------
 
@@ -268,17 +414,23 @@ def write_summary(results: dict, perturbations_json: dict, output_dir: pathlib.P
 
     pre  = results.get("pre_perturbation", {})
     post = results.get("post_perturbation", {})
+    st1  = results.get("post_stage1", {})
     trn  = results.get("post_training", {})
 
-    print(f"\n{'=' * 60}")
-    print(f"  Pre-perturbation  (clean→clean)    : {pre.get('mean_mrad', float('nan')):.3f} mrad (mean)   median={pre.get('median_mrad', float('nan')):.3f}  n={pre.get('num_samples', '?')}")
-    print(f"  Post-perturbation (perturbed→clean): {post.get('mean_mrad', float('nan')):.3f} mrad (mean)   median={post.get('median_mrad', float('nan')):.3f}  n={post.get('num_samples', '?')}")
-    print(f"  Post-training     (trained→clean)  : {trn.get('mean_mrad', float('nan')):.3f} mrad (mean)   median={trn.get('median_mrad', float('nan')):.3f}  n={trn.get('num_samples', '?')}")
+    W = 70
+    print(f"\n{'=' * W}")
+    print(f"  {'Checkpoint':<36} {'Mean (mrad)':>11}  {'Median (mrad)':>13}  n")
+    print(f"  {'-' * 36} {'-' * 11}  {'-' * 13}  -")
+    print(f"  {'Pre-perturbation  (clean→clean)':<36} {pre.get('mean_mrad', float('nan')):>11.3f}  {pre.get('median_mrad', float('nan')):>13.3f}  {pre.get('num_samples', '?')}")
+    print(f"  {'Post-perturbation (perturbed→clean)':<36} {post.get('mean_mrad', float('nan')):>11.3f}  {post.get('median_mrad', float('nan')):>13.3f}  {post.get('num_samples', '?')}")
+    if st1:
+        print(f"  {'Post-stage1 (alignment, best-val)':<36} {st1.get('mean_mrad', float('nan')):>11.3f}  {st1.get('median_mrad', float('nan')):>13.3f}  {st1.get('num_samples', '?')}")
+    print(f"  {'Post-stage2 / post-training':<36} {trn.get('mean_mrad', float('nan')):>11.3f}  {trn.get('median_mrad', float('nan')):>13.3f}  {trn.get('num_samples', '?')}")
     print(f"  Min / Max (post-training)          : {trn.get('min_mrad', float('nan')):.3f} / {trn.get('max_mrad', float('nan')):.3f} mrad")
     print(f"  Training time                      : {results.get('train_time_min', 0):.1f} min")
     if trn.get('num_nan_samples'):
         print(f"  NaN samples (post-training)        : {trn['num_nan_samples']}  ids={trn.get('nan_heliostat_ids', [])}")
-    print(f"{'=' * 60}\n")
+    print(f"{'=' * W}\n")
 
 
 # ---------------------------------------------------------------------------

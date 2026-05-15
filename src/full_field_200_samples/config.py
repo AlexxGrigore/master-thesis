@@ -76,12 +76,18 @@ DATASET_TYPE = "real"
 # ---------------------------------------------------------------------------
 # Loss
 #
+# Stage 1 always uses AlignmentLoss (motor-position MSE, no ray tracing) for
+# STAGE1_EPOCHS to pull all heliostats onto the target before ray-traced training.
+# Stage 2 uses the loss selected by LOSS_TYPE for STAGE2_EPOCHS.
+#
 # "focal_spot" — Euclidean distance between predicted and measured centroids (mrad-aligned)
 # "pixel"      — MSE on Gaussian-blurred, peak-normalized flux bitmaps
 # "alignment"  — MSE on motor positions converted to joint angles (no ray tracing)
 # ---------------------------------------------------------------------------
 
-LOSS_TYPE = "focal_spot"
+LOSS_TYPE     = "focal_spot"
+STAGE1_EPOCHS = 50
+STAGE2_EPOCHS = 250
 
 # ---------------------------------------------------------------------------
 # Optimisation
@@ -90,7 +96,6 @@ LOSS_TYPE = "focal_spot"
 OPTIMIZATION_CONFIG = {
     config_dictionary.initial_learning_rate: 1e-4,
     config_dictionary.tolerance:             1e-6,
-    config_dictionary.max_epoch:             300,
     config_dictionary.batch_size:            8,
     config_dictionary.log_step:              5,
     config_dictionary.early_stopping_window:   10,

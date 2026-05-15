@@ -85,10 +85,22 @@ def build_tables(latest_dir: Path) -> None:
     run_dirs = [
         path
         for path in latest_dir.iterdir()
-        if path.is_dir() and path.name != "old" and path.name.startswith("full_training_pipeline_")
+        if path.is_dir()
+        and path.name != "old"
+        and path.name.startswith("full_training_pipeline_")
+        and (path / "training_summary.json").exists()
     ]
     records = [_refresh_run_table(run_dir) for run_dir in sorted(run_dirs)]
     records.sort(key=_sort_key)
+
+    # Deduplicate for baseline table: keep best val_best per (dataset, model).
+    seen: dict[tuple[str, str], dict[str, object]] = {}
+    for rec in records:
+        key = (str(rec["dataset_type"]), str(rec["model_type"]))
+        if key not in seen or float(rec["validation_best"]) < float(seen[key]["validation_best"]):
+            seen[key] = rec
+    baseline_records = list(seen.values())
+    baseline_records.sort(key=_sort_key)
 
     comparison_headers = [
         "Dataset",
@@ -139,6 +151,7 @@ def build_tables(latest_dir: Path) -> None:
         comparison_rows.append(comparison_row)
         comparison_md_rows.append(comparison_row)
 
+    for record in baseline_records:
         baseline_row = [
             str(record["dataset_type"]),
             str(record["model_type"]),

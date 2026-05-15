@@ -161,9 +161,9 @@ def build_residual_model(model_type: str) -> torch.nn.Module:
         return SharedPolyResidualModel(degree=3)
     if model_type == "poly4":
         return SharedPolyResidualModel(degree=4)
-    if model_type == "snn":
-        from full_training_pipeline.model_snn import SharedSNNResidualModel
-        return SharedSNNResidualModel()
+    if model_type == "transformer":
+        from full_training_pipeline.model_transformer import SharedTransformerResidualModel
+        return SharedTransformerResidualModel()
     raise ValueError(
-        f"Unknown model_type {model_type!r}. Choose from: linear, poly2, poly3, poly4, snn"
+        f"Unknown model_type {model_type!r}. Choose from: linear, poly2, poly3, poly4, transformer"
     )
