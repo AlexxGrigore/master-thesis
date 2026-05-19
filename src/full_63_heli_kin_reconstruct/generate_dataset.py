@@ -46,7 +46,7 @@ _src  = _here.parent
 sys.path.insert(0, str(_src))
 
 import paint.util.paint_mappings as paint_mappings
-from five_heliostats_synth.data import (
+from utils.synth_data import (
     _equalize_mapping,
     apply_perturbations,
     perturbations_to_json,

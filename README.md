@@ -98,6 +98,13 @@ scenario to optimise a single heliostat.
 - `DATASET_TYPE` — `"synthetic"` or `"real"`
 - `LOSS_TYPE` — `"focal_spot"`, `"pixel"`, or `"alignment"`
 
+**Pre-flight check (run on DAIC before submitting):**
+```bash
+cd src
+python one_heliostat_train_sizes/check_daic.py
+```
+Verifies: Apptainer SIF, per-heliostat scenario files, synthetic data splits and sample counts for all 5 heliostats.
+
 **Run a single heliostat locally:**
 ```bash
 cd src
@@ -205,6 +212,15 @@ python full_63_heli_kin_reconstruct/generate_dataset.py
 python full_63_heli_kin_reconstruct/generate_dataset.py --force   # overwrite existing
 python full_63_heli_kin_reconstruct/generate_dataset.py --daic    # DAIC paths
 ```
+
+**Pre-flight check (run on DAIC before submitting):**
+```bash
+cd src
+python full_63_heli_kin_reconstruct/check_daic.py                    # checks both datasets
+python full_63_heli_kin_reconstruct/check_daic.py --dataset-type synthetic
+python full_63_heli_kin_reconstruct/check_daic.py --dataset-type real
+```
+Verifies: Apptainer SIF, scenario file, synthetic data completeness (63 heliostats across train/val/test), PAINT benchmark CSV and image dirs.
 
 **Run locally:**
 ```bash

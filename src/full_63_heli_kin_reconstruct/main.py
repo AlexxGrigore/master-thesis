@@ -39,13 +39,8 @@ sys.path.insert(0, str(_src))
 import config as cfg
 from train import run
 from utils.evaluation import build_heliostat_data_mapping
-from five_heliostats_synth.data import (
-    SyntheticDatasetParser,
-    _equalize_mapping,
-    perturbations_to_json,
-)
-from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
-from five_heliostats_synth.reporting import (
+from utils.synth_data import SyntheticDatasetParser, _equalize_mapping, perturbations_to_json
+from utils.synth_reporting import (
     plot_convergence,
     plot_param_recovery,
     plot_stage_convergence,
@@ -53,6 +48,7 @@ from five_heliostats_synth.reporting import (
     plot_per_heliostat_accuracy_histogram,
     write_summary,
 )
+from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
 from reporting import (
     plot_field_accuracy_map,
     render_summary_table,
@@ -189,8 +185,10 @@ def main() -> None:
     elif cfg.IS_ON_DAIC:
         run_dir = cfg.BASE_DIR / "outputs" / f"full_63_{dataset_type}_{cfg.LOSS_TYPE}_{timestamp}"
     else:
-        suffix  = "smoke" if args.smoke_test else f"full_63_{dataset_type}_{cfg.LOSS_TYPE}_{timestamp}"
-        run_dir = cfg.BASE_DIR / "outputs" / "local_runs" / suffix
+        if args.smoke_test:
+            run_dir = cfg.BASE_DIR / "outputs" / "local_runs" / "smoke_tests" / f"full_63_{timestamp}"
+        else:
+            run_dir = cfg.BASE_DIR / "outputs" / "local_runs" / f"full_63_{dataset_type}_{cfg.LOSS_TYPE}_{timestamp}"
 
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -220,6 +218,9 @@ def main() -> None:
 
     set_logger_config()
     logging.getLogger().setLevel(logging.INFO)
+    for _h in logging.getLogger().handlers:
+        if isinstance(_h, logging.StreamHandler) and _h.stream is sys.stderr:
+            _h.stream = sys.stdout
     log = logging.getLogger(__name__)
 
     fh = logging.FileHandler(run_dir / "run.log")

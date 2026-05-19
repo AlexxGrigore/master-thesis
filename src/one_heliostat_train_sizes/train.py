@@ -18,6 +18,15 @@ import json
 import logging
 import time
 
+try:
+    import psutil as _psutil
+    def _ram_gb() -> float:
+        return _psutil.Process().memory_info().rss / 1024 ** 3
+except ImportError:
+    _psutil = None
+    def _ram_gb() -> float | None:
+        return None
+
 import h5py
 import torch
 from artist.core.heliostat_ray_tracer import HeliostatRayTracer
@@ -90,6 +99,11 @@ def run(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    overall_t0 = time.time()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+    _ram_start = _ram_gb()
+
     with h5py.File(scenario_path, "r") as f:
         scenario = Scenario.load_scenario_from_hdf5(
             scenario_file=f,
@@ -127,6 +141,7 @@ def run(
     stage2_config[config_dictionary.max_epoch] = stage2_epochs
 
     t0 = time.time()
+    _pre_eval_time_s = t0 - overall_t0
 
     log.info(f"Stage 1 — AlignmentLoss pre-training ({stage1_epochs} epochs) …")
     stage1_reconstructor, stage1_loss_fn = _build_reconstructor(
@@ -141,7 +156,9 @@ def run(
     )
     stage1_reconstructor.reconstruct_kinematics(loss_definition=stage1_loss_fn, device=device)
     stage1_history = stage1_reconstructor._convergence_history
-    log.info(f"Stage 1 done in {(time.time() - t0) / 60:.1f} min")
+    stage1_time_s = time.time() - t0
+    _ram_after_stage1 = _ram_gb()
+    log.info(f"Stage 1 done in {stage1_time_s / 60:.1f} min")
 
     del stage1_reconstructor
     gc.collect()
@@ -161,8 +178,10 @@ def run(
     )
     stage2_reconstructor.reconstruct_kinematics(loss_definition=stage2_loss_fn, device=device)
     stage2_history = stage2_reconstructor._convergence_history
+    stage2_time_s = time.time() - t1
     train_time = time.time() - t0
-    log.info(f"Stage 2 done in {(time.time() - t1) / 60:.1f} min  (total {train_time / 60:.1f} min)")
+    _ram_after_stage2 = _ram_gb()
+    log.info(f"Stage 2 done in {stage2_time_s / 60:.1f} min  (total {train_time / 60:.1f} min)")
 
     # Merge histories with a continuous epoch counter
     epoch_offset = stage1_history[-1]["epoch"] + 1 if stage1_history else 0
@@ -213,6 +232,30 @@ def run(
     if perturbations_json is not None and heliostat_ids is not None:
         recovery = _param_recovery(scenario, perturbations_json, heliostat_ids, device)
 
+    overall_time_s = time.time() - overall_t0
+    _ram_end = _ram_gb()
+    _ram_samples = [r for r in [_ram_start, _ram_after_stage1, _ram_after_stage2, _ram_end] if r is not None]
+    timing = {
+        "overall_s":                    round(overall_time_s, 1),
+        "overall_min":                  round(overall_time_s / 60, 2),
+        "pre_training_eval_s":          round(_pre_eval_time_s, 1),
+        "stage1_training_s":            round(stage1_time_s, 1),
+        "stage1_training_min":          round(stage1_time_s / 60, 2),
+        "stage2_training_s":            round(stage2_time_s, 1),
+        "stage2_training_min":          round(stage2_time_s / 60, 2),
+        "total_training_s":             round(train_time, 1),
+        "total_training_min":           round(train_time / 60, 2),
+        "peak_gpu_memory_allocated_gb": round(
+            torch.cuda.max_memory_allocated() / 1024 ** 3, 3
+        ) if torch.cuda.is_available() else None,
+        "peak_gpu_memory_reserved_gb":  round(
+            torch.cuda.max_memory_reserved() / 1024 ** 3, 3
+        ) if torch.cuda.is_available() else None,
+        "peak_ram_gb":                  round(max(_ram_samples), 3) if _ram_samples else None,
+    }
+    with open(output_dir / "timing.json", "w") as f:
+        json.dump(timing, f, indent=2)
+
     def _pack(ev: dict) -> dict:
         return {
             "mean_mrad":         ev["mean_mrad"],
@@ -244,6 +287,20 @@ def run(
 
     _write_metrics_table(results, output_dir / "metrics_table.txt")
     _save_kinematic_parameters(scenario, output_dir / "kinematic_parameters.json")
+
+    W = 70
+    pre_v  = results["pre_training"]["val"]
+    pre_t  = results["pre_training"]["test"]
+    post_v = results["post_training"]["val"]
+    post_t = results["post_training"]["test"]
+    print(f"\n{'=' * W}")
+    print(f"  {'Checkpoint':<22} {'Val (mrad)':>10}  {'Test (mrad)':>11}  n")
+    print(f"  {'-' * 22} {'-' * 10}  {'-' * 11}  -")
+    print(f"  {'Pre-training':<22} {pre_v['mean_mrad']:>10.3f}  {pre_t['mean_mrad']:>11.3f}  {pre_t['num_samples']}")
+    print(f"  {'Post-training':<22} {post_v['mean_mrad']:>10.3f}  {post_t['mean_mrad']:>11.3f}  {post_t['num_samples']}")
+    print(f"  Min / Max test (post)  : {post_t['min_mrad']:.3f} / {post_t['max_mrad']:.3f} mrad")
+    print(f"  Training time          : stage1={stage1_time_s/60:.1f} min  stage2={stage2_time_s/60:.1f} min  total={train_time/60:.1f} min")
+    print(f"{'=' * W}\n")
 
     return results
 
@@ -298,7 +355,7 @@ def _write_metrics_table(results: dict, path) -> None:
 
 @torch.no_grad()
 def _save_flux_comparison_images(scenario, test_parser, test_mapping, device, output_dir, dataset_type: str = "synthetic") -> None:
-    from five_heliostats_synth.reporting import plot_flux_comparison
+    from utils.synth_reporting import plot_flux_comparison
     output_dir = output_dir / "flux_comparisons"
     output_dir.mkdir(parents=True, exist_ok=True)
 

@@ -16,6 +16,15 @@ import json
 import logging
 import time
 
+try:
+    import psutil as _psutil
+    def _ram_gb() -> float:
+        return _psutil.Process().memory_info().rss / 1024 ** 3
+except ImportError:
+    _psutil = None
+    def _ram_gb() -> float | None:
+        return None
+
 import h5py
 import numpy as np
 import torch
@@ -98,6 +107,7 @@ def run(
     overall_t0 = time.time()
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
+    _ram_start = _ram_gb()
 
     with h5py.File(scenario_path, "r") as f:
         scenario = Scenario.load_scenario_from_hdf5(
@@ -156,7 +166,9 @@ def run(
     )
     stage1_reconstructor.reconstruct_kinematics(loss_definition=stage1_loss_fn, device=device)
     stage1_history = stage1_reconstructor._convergence_history
-    log.info(f"Stage 1 done in {(time.time() - t0) / 60:.1f} min")
+    stage1_time_s = time.time() - t0
+    _ram_after_stage1 = _ram_gb()
+    log.info(f"Stage 1 done in {stage1_time_s / 60:.1f} min")
 
     log.info("Post-stage1 eval (alignment-trained scenario, perturbed test data) …")
     post_stage1_eval = evaluate_flux_accuracy(
@@ -188,8 +200,10 @@ def run(
     )
     stage2_reconstructor.reconstruct_kinematics(loss_definition=stage2_loss_fn, device=device)
     stage2_history = stage2_reconstructor._convergence_history
+    stage2_time_s = time.time() - t1
     train_time = time.time() - t0
-    log.info(f"Stage 2 done in {(time.time() - t1) / 60:.1f} min  (total {train_time / 60:.1f} min)")
+    _ram_after_stage2 = _ram_gb()
+    log.info(f"Stage 2 done in {stage2_time_s / 60:.1f} min  (total {train_time / 60:.1f} min)")
 
     epoch_offset = stage1_history[-1]["epoch"] + 1 if stage1_history else 0
     for entry in stage2_history:
@@ -261,19 +275,26 @@ def run(
         recovery = _param_recovery(scenario, perturbations, heliostat_ids, device)
 
     overall_time_s = time.time() - overall_t0
+    _ram_end = _ram_gb()
+    _ram_samples = [r for r in [_ram_start, _ram_after_stage1, _ram_after_stage2, _ram_end] if r is not None]
     timing = {
-        "overall_s":                   round(overall_time_s, 1),
-        "overall_min":                 round(overall_time_s / 60, 2),
-        "pre_training_eval_s":         round(pre_eval_time_s, 1),
-        "training_s":                  round(train_time, 1),
-        "training_min":                round(train_time / 60, 2),
-        "post_training_eval_s":        round(post_train_eval_time_s, 1),
+        "overall_s":                    round(overall_time_s, 1),
+        "overall_min":                  round(overall_time_s / 60, 2),
+        "pre_training_eval_s":          round(pre_eval_time_s, 1),
+        "stage1_training_s":            round(stage1_time_s, 1),
+        "stage1_training_min":          round(stage1_time_s / 60, 2),
+        "stage2_training_s":            round(stage2_time_s, 1),
+        "stage2_training_min":          round(stage2_time_s / 60, 2),
+        "total_training_s":             round(train_time, 1),
+        "total_training_min":           round(train_time / 60, 2),
+        "post_training_eval_s":         round(post_train_eval_time_s, 1),
         "peak_gpu_memory_allocated_gb": round(
             torch.cuda.max_memory_allocated() / 1024 ** 3, 3
         ) if torch.cuda.is_available() else None,
-        "peak_gpu_memory_reserved_gb": round(
+        "peak_gpu_memory_reserved_gb":  round(
             torch.cuda.max_memory_reserved() / 1024 ** 3, 3
         ) if torch.cuda.is_available() else None,
+        "peak_ram_gb":                  round(max(_ram_samples), 3) if _ram_samples else None,
     }
     with open(output_dir / "timing.json", "w") as f:
         json.dump(timing, f, indent=2)

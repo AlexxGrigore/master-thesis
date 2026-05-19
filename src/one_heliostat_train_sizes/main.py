@@ -43,15 +43,9 @@ sys.path.insert(0, str(_src))
 import config as cfg
 from train import run
 from utils.evaluation import build_heliostat_data_mapping
+from utils.synth_data import _equalize_mapping, SyntheticDatasetParser
+from utils.synth_reporting import plot_stage_convergence
 from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
-from five_heliostats_synth.data import (
-    _equalize_mapping,
-    SyntheticDatasetParser,
-)
-from five_heliostats_synth.reporting import (
-    plot_stage_convergence,
-    plot_param_recovery,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +74,6 @@ def _synth_split_has_heliostat(split: str, hid: str, n_samples: int) -> bool:
 
 def _run_reporting(
     results: dict,
-    perturbations_json: dict | None,
     heliostat_ids: list,
     output_dir: pathlib.Path,
 ) -> None:
@@ -100,8 +93,49 @@ def _run_reporting(
                 filename=filename,
             )
 
-    if results.get("param_recovery"):
-        plot_param_recovery(results["param_recovery"], output_dir)
+
+def _plot_convergence_overlay(
+    train_sizes: list[int],
+    run_dir: pathlib.Path,
+    loss_type: str,
+) -> None:
+    """Overlay stage-2 val-loss convergence curves for all train sizes on one plot."""
+    cmap = matplotlib.colormaps["plasma"].resampled(len(train_sizes))
+    fig, ax = plt.subplots(figsize=(9, 5))
+    fig.patch.set_facecolor("white")
+
+    plotted = 0
+    for i, n in enumerate(train_sizes):
+        hist_file = run_dir / f"train_size_{n}" / "convergence_history_stage2.json"
+        if not hist_file.exists():
+            continue
+        with open(hist_file) as f:
+            history = json.load(f)
+        epochs    = [e["epoch"]    for e in history]
+        val_loss  = [e.get("eval_loss") for e in history]
+        train_loss = [e.get("loss") for e in history]
+        color = cmap(i)
+        if any(v is not None for v in val_loss):
+            vals = [v for v in val_loss if v is not None]
+            eps  = [epochs[j] for j, v in enumerate(val_loss) if v is not None]
+            ax.plot(eps, vals, color=color, linewidth=1.8, label=f"n={n}")
+        elif train_loss:
+            ax.plot(epochs, train_loss, color=color, linewidth=1.8, linestyle="--", label=f"n={n} (train)")
+        plotted += 1
+
+    if plotted == 0:
+        plt.close(fig)
+        return
+
+    ax.set_xlabel("Epoch", fontsize=11)
+    ax.set_ylabel("Stage-2 validation loss", fontsize=11)
+    ax.set_title(f"Stage-2 convergence by train size — {loss_type}", fontsize=12)
+    ax.legend(fontsize=9, ncol=2)
+    ax.grid(True, alpha=0.35)
+    fig.tight_layout()
+    out = run_dir / "convergence_overlay.png"
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
 
 
 def _plot_summary(summary: dict, output_dir: pathlib.Path) -> None:
@@ -189,13 +223,18 @@ def main() -> None:
     elif cfg.IS_ON_DAIC:
         run_dir = cfg.BASE_DIR / "outputs" / f"one_hel_train_sizes_{timestamp}"
     else:
-        suffix = "smoke" if args.smoke_test else f"one_hel_train_sizes_{timestamp}"
-        run_dir = cfg.BASE_DIR / "outputs" / "local_runs" / suffix
+        if args.smoke_test:
+            run_dir = cfg.BASE_DIR / "outputs" / "local_runs" / "smoke_tests" / f"one_hel_{timestamp}"
+        else:
+            run_dir = cfg.BASE_DIR / "outputs" / "local_runs" / f"one_hel_train_sizes_{timestamp}"
 
     run_dir.mkdir(parents=True, exist_ok=True)
 
     set_logger_config()
     logging.getLogger().setLevel(logging.INFO)
+    for _h in logging.getLogger().handlers:
+        if isinstance(_h, logging.StreamHandler) and _h.stream is sys.stderr:
+            _h.stream = sys.stdout
     log = logging.getLogger(__name__)
 
     fh = logging.FileHandler(run_dir / "run.log")
@@ -389,10 +428,13 @@ def main() -> None:
                 f"({results['train_time_min']:.1f} min)"
             )
 
-            _run_reporting(results, perturbations_json_data, [heliostat_id], subdir)
+            _run_reporting(results, [heliostat_id], subdir)
 
             gc.collect()
             torch.cuda.empty_cache()
+
+    # ------------------------------------------------------------------ convergence overlay
+    _plot_convergence_overlay(train_sizes, run_dir, cfg.LOSS_TYPE)
 
     # ------------------------------------------------------------------ summary
     summary = {
