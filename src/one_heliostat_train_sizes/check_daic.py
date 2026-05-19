@@ -31,7 +31,7 @@ LOGS_DIR                    = BASE_DIR / "logs"
 
 DEFAULT_HELIOSTATS = ["AC36", "AG33", "AO34", "AW36", "BE35"]
 EXPECTED_SYNTH_SPLITS = ["train", "val", "test"]
-MIN_SAMPLES = 100  # need at least 100 train samples per heliostat
+MIN_SAMPLES = 90  # need at least 90 train samples (dataset gen may skip a few failed ray traces)
 
 
 def check(label: str, path: pathlib.Path, is_dir: bool = False) -> bool:
@@ -57,7 +57,7 @@ def check_heliostat_synth(hid: str) -> bool:
             ok = False
             continue
         n_samples = sum(1 for p in hel_dir.iterdir() if p.is_dir())
-        enough = n_samples >= MIN_SAMPLES if split == "train" else n_samples >= 50
+        enough = n_samples >= MIN_SAMPLES if split == "train" else n_samples >= 45
         status = "OK      " if enough else "WARN    "
         print(f"  [{status}] synthetic/{split}/{hid}/  ({n_samples} samples)")
         if not enough:
