@@ -1,6 +1,10 @@
 """
 Configuration for the one-heliostat train-size sensitivity experiment.
 
+Uses the corrected synthetic dataset from full_63_heli_kin_reconstruct:
+data was generated from a PERTURBED scenario, so the KR starts clean and
+must discover the perturbation values — the real inverse problem.
+
 Edit this file to change the heliostat, training sample sweep, hyperparameters,
 and dataset type.
 """
@@ -24,14 +28,15 @@ else:
     BASE_DIR  = pathlib.Path(__file__).resolve().parents[2]
     PAINT_DIR = BASE_DIR / "datasets" / "paint"
 
-SCENARIO_PATH              = BASE_DIR / "scenarios" / "one_heliostat_scenario" / "scenario.h5"
+# Per-heliostat scenario dir; main.py appends /{heliostat_id}/scenario.h5 at runtime.
+ONE_HELIOSTAT_SCENARIOS_DIR = BASE_DIR / "scenarios" / "one_heliostat_scenarios"
 BENCHMARK_CSV              = PAINT_DIR / "splits" / f"{BENCHMARK_NAME}.csv"
 CALIBRATION_PROPERTIES_DIR = PAINT_DIR / BENCHMARK_NAME / "calibration_properties"
 FLUX_IMAGE_DIR             = PAINT_DIR / BENCHMARK_NAME / "flux_image"
 
-# Synthetic data reused from the full-field experiment (already generated for all 63 heliostats).
-# No separate generate_dataset.py step is needed for this experiment.
-SYNTH_DATA_DIR = BASE_DIR / "scenarios" / "full_field_200_samples_scenario" / "synthetic_data"
+# Synthetic data from the corrected full-63-heliostat experiment.
+# Generated from a perturbed scenario — no separate generate_dataset.py step needed.
+SYNTH_DATA_DIR = BASE_DIR / "scenarios" / "full_63_heli_kin_reconstruct" / "synthetic_data"
 
 # ---------------------------------------------------------------------------
 # Heliostat selection
@@ -68,17 +73,18 @@ SURFACE_POINTS_PER_FACET = 25
 # ---------------------------------------------------------------------------
 # Perturbation
 # ---------------------------------------------------------------------------
-
-PERTURBATION_SEED = 42
-
-PERTURBATION_RANGES = {
-    "rotation_rad":        0.005,  # ±5 mrad  — 4 joint tilts
-    "actuator_angle_rad":  0.005,  # ±5 mrad  — a_i: 2 actuator initial angles (optimized)
-    "actuator_stroke_m":   0.005,  # ±5 mm    — b_i: 2 actuator stroke lengths  (frozen)
-    "actuator_offset_m":   0.005,  # ±5 mm    — c_i: 2 actuator offsets         (optimized)
-    "translation_m":       0.05,   # ±50 mm   — 9 joint + concentrator translations (optimized)
-    "base_position_m":     0.05,   # ±50 mm   — (east, north, up) base position  (optimized)
-}
+# Perturbations are fixed at dataset-generation time (see
+# full_63_heli_kin_reconstruct/generate_dataset.py and its config.py).
+# The ground-truth values are loaded at runtime from:
+#   SYNTH_DATA_DIR / "perturbations.json"
+# The ranges below are for reference only — do not use them to re-perturb.
+#
+# rotation_rad:        ±3 mrad   (4 joint tilts)
+# actuator_angle_rad:  ±3 mrad   (a_i)
+# actuator_stroke_m:   ±3 mm     (b_i, frozen during training)
+# actuator_offset_m:   ±3 mm     (c_i)
+# translation_m:       ±15 mm    (9 joint + concentrator translations)
+# base_position_m:     ±15 mm    (e, n, u)
 
 # ---------------------------------------------------------------------------
 # Dataset
@@ -98,6 +104,9 @@ DATASET_TYPE = "synthetic"
 # ---------------------------------------------------------------------------
 
 LOSS_TYPE = "focal_spot"
+
+STAGE1_EPOCHS = 50    # AlignmentLoss pre-training (no ray tracing)
+STAGE2_EPOCHS = 100   # Configured loss fine-tuning
 
 # ---------------------------------------------------------------------------
 # Optimisation

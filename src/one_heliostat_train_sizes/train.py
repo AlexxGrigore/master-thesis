@@ -1,15 +1,18 @@
 """
 Training and evaluation for the one-heliostat train-size sensitivity experiment.
 
-Three evaluation checkpoints per run, each reported on both val and test:
-  1. pre_perturbation  — clean scenario vs clean data (~0 mrad)
-  2. post_perturbation — perturbed scenario vs same clean data (high mrad)
-  3. post_training     — trained (recovered) scenario vs same clean data (low mrad)
+Corrected pipeline: the synthetic dataset was generated from a PERTURBED scenario.
+The KR starts from a clean scenario and must discover the perturbation values.
 
-The reconstructor internally saves and restores the best-val-loss checkpoint, so
-the scenario parameters after training reflect the epoch with lowest val loss,
-not the final epoch.
+Two evaluation checkpoints:
+  1. pre_training  — clean scenario vs perturbed data (high mrad, baseline)
+  2. post_training — trained scenario vs perturbed data (low mrad, result)
+
+Two-stage training per run:
+  Stage 1 — AlignmentLoss (no ray tracing, fast alignment pre-training)
+  Stage 2 — configured loss (focal_spot / pixel) with full ray tracing
 """
+import copy
 import gc
 import json
 import logging
@@ -74,12 +77,16 @@ def run(
     dataset_type: str = "synthetic",
     n_surface_pts: int = 25,
     train_rays: int = 10,
-    perturbations: dict | None = None,
+    perturbations_json: dict | None = None,
     heliostat_ids: list | None = None,
+    stage1_epochs: int = 50,
+    stage2_epochs: int = 100,
 ) -> dict:
     """
-    Train WortbergKinematicReconstructor for a single heliostat.
-    Returns metrics dict with all 3 evaluation results.
+    Train WortbergKinematicReconstructor for a single heliostat (corrected pipeline).
+
+    perturbations_json : dict keyed by heliostat ID loaded from perturbations.json,
+                         used only for param_recovery reporting — NOT applied to scenario.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -90,46 +97,23 @@ def run(
             number_of_surface_points_per_facet=torch.tensor([n_surface_pts, n_surface_pts]),
         )
     scenario.set_number_of_rays(train_rays)
-    kinematic = scenario.heliostat_field.heliostat_groups[0].kinematics
-    snapshot_clean = snapshot_perturbed = snapshot_trained = None
-
-    if heliostat_ids is not None:
-        snapshot_clean = _snapshot_kinematic_state(kinematic, heliostat_ids)
 
     # ------------------------------------------------------------------
-    # Stage 1: pre-perturbation eval (val + test)
+    # Pre-training eval: clean scenario vs perturbed data → high mrad
     # ------------------------------------------------------------------
-    log.info("Stage 1 — pre-perturbation eval (clean scenario)…")
+    log.info("Pre-training eval (clean scenario, perturbed data) …")
     pre_val_eval  = evaluate_flux_accuracy(scenario=scenario, heliostat_data_mapping=val_mapping,  data_parser=val_parser,  device=device)
     pre_test_eval = evaluate_flux_accuracy(scenario=scenario, heliostat_data_mapping=test_mapping, data_parser=test_parser, device=device)
     log.info(
-        f"  pre-perturb : val={pre_val_eval['mean_mrad']:.3f} mrad  "
+        f"  pre-training: val={pre_val_eval['mean_mrad']:.3f} mrad  "
         f"test={pre_test_eval['mean_mrad']:.3f} mrad"
     )
 
     # ------------------------------------------------------------------
-    # Stage 2: apply perturbations, then eval (val + test)
-    # ------------------------------------------------------------------
-    if perturbations is not None:
-        from five_heliostats_synth.data import apply_perturbations
-        apply_perturbations(kinematic, perturbations, device)
-        log.info("Perturbations applied to scenario kinematics in-place.")
-        if heliostat_ids is not None:
-            snapshot_perturbed = _snapshot_kinematic_state(kinematic, heliostat_ids)
-
-    log.info("Stage 2 — post-perturbation eval (perturbed scenario)…")
-    perturb_val_eval  = evaluate_flux_accuracy(scenario=scenario, heliostat_data_mapping=val_mapping,  data_parser=val_parser,  device=device)
-    perturb_test_eval = evaluate_flux_accuracy(scenario=scenario, heliostat_data_mapping=test_mapping, data_parser=test_parser, device=device)
-    log.info(
-        f"  post-perturb: val={perturb_val_eval['mean_mrad']:.3f} mrad  "
-        f"test={perturb_test_eval['mean_mrad']:.3f} mrad"
-    )
-
-    # ------------------------------------------------------------------
-    # Stage 3: train
+    # Two-stage training
     # ------------------------------------------------------------------
     data = {
-        config_dictionary.data_parser:           train_parser,
+        config_dictionary.data_parser:            train_parser,
         config_dictionary.heliostat_data_mapping: train_mapping,
     }
     eval_data = {
@@ -137,61 +121,84 @@ def run(
         "heliostat_data_mapping": val_mapping,
     }
 
-    reconstructor, loss_fn = _build_reconstructor(
+    stage1_config = copy.deepcopy(optimization_config)
+    stage1_config[config_dictionary.max_epoch] = stage1_epochs
+    stage2_config = copy.deepcopy(optimization_config)
+    stage2_config[config_dictionary.max_epoch] = stage2_epochs
+
+    t0 = time.time()
+
+    log.info(f"Stage 1 — AlignmentLoss pre-training ({stage1_epochs} epochs) …")
+    stage1_reconstructor, stage1_loss_fn = _build_reconstructor(
+        loss_type="alignment",
+        scenario=scenario,
+        ddp_setup=ddp_setup,
+        data=data,
+        eval_data=eval_data,
+        optimization_config=stage1_config,
+        train_position_deviation=True,
+        sample_mini_batch_size=10,
+    )
+    stage1_reconstructor.reconstruct_kinematics(loss_definition=stage1_loss_fn, device=device)
+    stage1_history = stage1_reconstructor._convergence_history
+    log.info(f"Stage 1 done in {(time.time() - t0) / 60:.1f} min")
+
+    del stage1_reconstructor
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    log.info(f"Stage 2 — {loss_type} fine-tuning ({stage2_epochs} epochs) …")
+    t1 = time.time()
+    stage2_reconstructor, stage2_loss_fn = _build_reconstructor(
         loss_type=loss_type,
         scenario=scenario,
         ddp_setup=ddp_setup,
         data=data,
         eval_data=eval_data,
-        optimization_config=optimization_config,
+        optimization_config=stage2_config,
         train_position_deviation=True,
         sample_mini_batch_size=10,
     )
-
-    t0 = time.time()
-    reconstructor.reconstruct_kinematics(loss_definition=loss_fn, device=device)
+    stage2_reconstructor.reconstruct_kinematics(loss_definition=stage2_loss_fn, device=device)
+    stage2_history = stage2_reconstructor._convergence_history
     train_time = time.time() - t0
-    log.info(f"Training done in {train_time / 60:.1f} min")
+    log.info(f"Stage 2 done in {(time.time() - t1) / 60:.1f} min  (total {train_time / 60:.1f} min)")
 
-    # Save convergence history as JSON and CSV
-    history = reconstructor._convergence_history
+    # Merge histories with a continuous epoch counter
+    epoch_offset = stage1_history[-1]["epoch"] + 1 if stage1_history else 0
+    for entry in stage2_history:
+        entry["epoch"] += epoch_offset
+    convergence_history = stage1_history + stage2_history
+
     with open(output_dir / "convergence_history.json", "w") as f:
-        json.dump(history, f, indent=2)
-    _save_convergence_csv(history, output_dir / "convergence_history.csv")
+        json.dump(convergence_history, f, indent=2)
+    with open(output_dir / "convergence_history_stage1.json", "w") as f:
+        json.dump(stage1_history, f, indent=2)
+    with open(output_dir / "convergence_history_stage2.json", "w") as f:
+        json.dump(stage2_history, f, indent=2)
+    _save_convergence_csv(convergence_history, output_dir / "convergence_history.csv")
 
     if heliostat_ids is not None:
         kinematic_history = _build_kinematic_history(
-            reconstructor._kinematic_history, heliostat_ids
+            stage2_reconstructor._kinematic_history, heliostat_ids
         )
         with open(output_dir / "kinematic_history.json", "w") as f:
             json.dump(kinematic_history, f, indent=2)
 
-    del reconstructor
+    del stage2_reconstructor
     gc.collect()
     torch.cuda.empty_cache()
 
-    if heliostat_ids is not None:
-        snapshot_trained = _snapshot_kinematic_state(kinematic, heliostat_ids)
-
     # ------------------------------------------------------------------
-    # Stage 3 eval (val + test) — scenario is now at best-val-loss params
+    # Post-training eval: trained scenario vs perturbed data → low mrad
     # ------------------------------------------------------------------
-    log.info("Stage 3 — post-training eval (best-val-loss checkpoint restored)…")
+    log.info("Post-training eval (trained scenario, perturbed data) …")
     trained_val_eval  = evaluate_flux_accuracy(scenario=scenario, heliostat_data_mapping=val_mapping,  data_parser=val_parser,  device=device)
     trained_test_eval = evaluate_flux_accuracy(scenario=scenario, heliostat_data_mapping=test_mapping, data_parser=test_parser, device=device)
     log.info(
-        f"  post-train  : val={trained_val_eval['mean_mrad']:.3f} mrad  "
+        f"  post-training: val={trained_val_eval['mean_mrad']:.3f} mrad  "
         f"test={trained_test_eval['mean_mrad']:.3f} mrad"
     )
-
-    if heliostat_ids is not None and snapshot_clean is not None:
-        kinematic_stages = {
-            "clean":     snapshot_clean,
-            "perturbed": snapshot_perturbed or snapshot_clean,
-            "trained":   snapshot_trained   or snapshot_clean,
-        }
-        with open(output_dir / "kinematic_stages.json", "w") as f:
-            json.dump(kinematic_stages, f, indent=2)
 
     _save_flux_comparison_images(
         scenario=scenario,
@@ -203,8 +210,8 @@ def run(
     )
 
     recovery = None
-    if perturbations is not None and heliostat_ids is not None:
-        recovery = _param_recovery(scenario, perturbations, heliostat_ids, device)
+    if perturbations_json is not None and heliostat_ids is not None:
+        recovery = _param_recovery(scenario, perturbations_json, heliostat_ids, device)
 
     def _pack(ev: dict) -> dict:
         return {
@@ -220,19 +227,16 @@ def run(
         }
 
     results = {
-        "pre_perturbation": {
+        "pre_training": {
             "val":  _pack(pre_val_eval),
             "test": _pack(pre_test_eval),
-        },
-        "post_perturbation": {
-            "val":  _pack(perturb_val_eval),
-            "test": _pack(perturb_test_eval),
         },
         "post_training": {
             "val":  {**_pack(trained_val_eval),  "min_mrad": trained_val_eval["min_mrad"],  "max_mrad": trained_val_eval["max_mrad"]},
             "test": {**_pack(trained_test_eval), "min_mrad": trained_test_eval["min_mrad"], "max_mrad": trained_test_eval["max_mrad"]},
         },
         "train_time_min": round(train_time / 60, 2),
+        "loss_type":      loss_type,
         "param_recovery": recovery,
     }
     with open(output_dir / "results.json", "w") as f:
@@ -276,9 +280,8 @@ def _write_metrics_table(results: dict, path) -> None:
         "-" * 66,
     ]
     for stage_key, label in [
-        ("pre_perturbation",  "Pre-perturbation"),
-        ("post_perturbation", "Post-perturbation"),
-        ("post_training",     "Post-training"),
+        ("pre_training",  "Pre-training"),
+        ("post_training", "Post-training"),
     ]:
         v = results[stage_key]["val"]
         t = results[stage_key]["test"]
@@ -290,36 +293,7 @@ def _write_metrics_table(results: dict, path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Kinematic state snapshot
-# ---------------------------------------------------------------------------
-
-def _snapshot_kinematic_state(kinematic, heliostat_ids: list) -> dict:
-    result = {}
-    for i, hid in enumerate(heliostat_ids):
-        base_pos = (
-            kinematic._base_position_deviation[i].detach().cpu().tolist()
-            if hasattr(kinematic, "_base_position_deviation")
-            else [0.0, 0.0, 0.0]
-        )
-        result[hid] = {
-            "rotation_rad":       kinematic.rotation_deviation_parameters[i].detach().cpu().tolist(),
-            "actuator_angle_rad": kinematic.actuators.optimizable_parameters[
-                i, index_mapping.actuator_initial_angle, :
-            ].detach().cpu().tolist(),
-            "actuator_stroke_m":  kinematic.actuators.optimizable_parameters[
-                i, index_mapping.actuator_initial_stroke_length, :
-            ].detach().cpu().tolist(),
-            "actuator_offset_m":  kinematic.actuators.non_optimizable_parameters[
-                i, index_mapping.actuator_offset, :
-            ].detach().cpu().tolist(),
-            "translation_m":      kinematic.translation_deviation_parameters[i].detach().cpu().tolist(),
-            "base_position_m":    base_pos,
-        }
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Flux comparison images (first test sample per heliostat)
+# Flux comparison images
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
@@ -351,6 +325,16 @@ def _save_flux_comparison_images(scenario, test_parser, test_mapping, device, ou
         heliostat_group.activate_heliostats(
             active_heliostats_mask=active_heliostats_mask, device=device
         )
+        kinematic = heliostat_group.kinematics
+        if hasattr(kinematic, "_base_position_deviation"):
+            base_dev = kinematic._base_position_deviation.repeat_interleave(
+                active_heliostats_mask, dim=0
+            )
+            pad = torch.zeros(base_dev.shape[0], 1, device=device)
+            kinematic.active_heliostat_positions = (
+                kinematic.active_heliostat_positions + torch.cat([base_dev, pad], dim=1)
+            )
+
         heliostat_group.align_surfaces_with_incident_ray_directions(
             aim_points=scenario.solar_tower.get_centers_of_target_areas(
                 target_area_mask, device=device
@@ -394,8 +378,8 @@ def _save_flux_comparison_images(scenario, test_parser, test_mapping, device, ou
         reference_target = scenario.solar_tower.target_areas[
             index_mapping.planar_target_areas
         ].centers[:, :3].mean(dim=0).to(device)
-        active_indices = torch.where(active_heliostats_mask.bool())[0]
-        distances = torch.norm(
+        active_indices  = torch.where(active_heliostats_mask.bool())[0]
+        distances       = torch.norm(
             heliostat_group.positions[active_indices, :3].to(device) - reference_target, dim=1
         )
         samples_per_hel = active_heliostats_mask[active_indices].long()
@@ -436,6 +420,85 @@ def _save_flux_comparison_images(scenario, test_parser, test_mapping, device, ou
 
 
 # ---------------------------------------------------------------------------
+# Parameter recovery — residual = |trained - perturbation|
+# ---------------------------------------------------------------------------
+
+def _param_recovery(scenario, perturbations_by_id: dict, heliostat_ids: list, device: torch.device) -> dict:
+    """
+    Compare trained kinematic parameters against ground-truth perturbations.
+
+    The KR starts from zero and converges toward the perturbation values, so
+    residual = |trained - perturbation| (lower is better).
+
+    perturbations_by_id : dict loaded from perturbations.json, keyed by heliostat ID.
+    """
+    kinematic = scenario.heliostat_field.heliostat_groups[0].kinematics
+    result = {}
+
+    for i, hid in enumerate(heliostat_ids):
+        if hid not in perturbations_by_id:
+            continue
+        pert = perturbations_by_id[hid]
+
+        perturbation_rot = pert["rotation_rad"]
+        rec_rot = kinematic.rotation_deviation_parameters[i].detach().cpu().tolist()
+        residual_rot = [abs(r - p) for r, p in zip(rec_rot, perturbation_rot)]
+
+        perturbation_act = pert["actuator_angle_rad"]
+        start_ang = (
+            kinematic._initial_actuator_initial_angle[i].cpu()
+            if hasattr(kinematic, "_initial_actuator_initial_angle")
+            else kinematic.actuators.optimizable_parameters[i, index_mapping.actuator_initial_angle, :].detach().cpu()
+        )
+        moved_act = (
+            kinematic.actuators.optimizable_parameters[i, index_mapping.actuator_initial_angle, :].detach().cpu()
+            - start_ang
+        ).tolist()
+        residual_act = [abs(m - p) for m, p in zip(moved_act, perturbation_act)]
+
+        perturbation_offset = pert["actuator_offset_m"]
+        start_off = (
+            kinematic._initial_actuator_offset[i].cpu()
+            if hasattr(kinematic, "_initial_actuator_offset")
+            else kinematic.actuators.non_optimizable_parameters[i, index_mapping.actuator_offset, :].detach().cpu()
+        )
+        moved_off = (
+            kinematic.actuators.non_optimizable_parameters[i, index_mapping.actuator_offset, :].detach().cpu()
+            - start_off
+        ).tolist()
+        residual_off = [abs(m - p) for m, p in zip(moved_off, perturbation_offset)]
+
+        perturbation_trans = pert["translation_m"]
+        start_trans = (
+            kinematic._initial_translation_deviation[i].cpu()
+            if hasattr(kinematic, "_initial_translation_deviation")
+            else kinematic.translation_deviation_parameters[i].detach().cpu()
+        )
+        moved_trans = (
+            kinematic.translation_deviation_parameters[i].detach().cpu() - start_trans
+        ).tolist()
+        residual_trans = [abs(m - p) for m, p in zip(moved_trans, perturbation_trans)]
+
+        perturbation_bp = pert["base_position_m"]
+        rec_bp = (
+            kinematic._base_position_deviation[i].detach().cpu().tolist()
+            if hasattr(kinematic, "_base_position_deviation")
+            else [0.0, 0.0, 0.0]
+        )
+        residual_bp = [abs(r - p) for r, p in zip(rec_bp, perturbation_bp)]
+
+        result[hid] = {
+            "rotation":       {"perturbation_rad": perturbation_rot, "recovered_rad": rec_rot,    "abs_residual_rad": residual_rot},
+            "actuator_angle": {"perturbation_rad": perturbation_act, "moved_rad": moved_act,       "abs_residual_rad": residual_act},
+            "actuator_offset":{"perturbation_m":   perturbation_offset, "moved_m": moved_off,      "abs_residual_m":   residual_off},
+            "translation":    {"perturbation_m":   perturbation_trans,  "moved_m": moved_trans,    "abs_residual_m":   residual_trans},
+            "base_position":  {"perturbation_m":   perturbation_bp,     "recovered_m": rec_bp,     "abs_residual_m":   residual_bp},
+        }
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Kinematic history
 # ---------------------------------------------------------------------------
 
@@ -453,72 +516,6 @@ def _build_kinematic_history(raw_history: list, heliostat_ids: list | None) -> l
                 "base_position_m":              entry["base_position_m"][i]                if entry.get("base_position_m")               else None,
             }
         result.append({"epoch": entry["epoch"], "heliostats": hel_data})
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Parameter recovery
-# ---------------------------------------------------------------------------
-
-def _param_recovery(scenario, perturbations: dict, heliostat_ids: list, device: torch.device) -> dict:
-    kinematic = scenario.heliostat_field.heliostat_groups[0].kinematics
-    result = {}
-
-    for i, hid in enumerate(heliostat_ids):
-        perturbation_rot = perturbations["rotation"][i].tolist()
-        rec_rot = kinematic.rotation_deviation_parameters[i].detach().cpu().tolist()
-
-        perturbation_act = perturbations["actuator_angle"][i].tolist()
-        start_ang = (
-            kinematic._initial_actuator_initial_angle[i].cpu()
-            if hasattr(kinematic, "_initial_actuator_initial_angle")
-            else kinematic.actuators.optimizable_parameters[i, index_mapping.actuator_initial_angle, :].detach().cpu()
-        )
-        final_ang = kinematic.actuators.optimizable_parameters[i, index_mapping.actuator_initial_angle, :].detach().cpu()
-        moved_act = (final_ang - start_ang).tolist()
-        deviation_act = [p + m for p, m in zip(perturbation_act, moved_act)]
-
-        perturbation_stroke = perturbations["actuator_stroke"][i].tolist()
-        rec_stroke = kinematic.actuators.optimizable_parameters[
-            i, index_mapping.actuator_initial_stroke_length, :
-        ].detach().cpu().tolist()
-
-        perturbation_offset = perturbations["actuator_offset"][i].tolist()
-        start_off = (
-            kinematic._initial_actuator_offset[i].cpu()
-            if hasattr(kinematic, "_initial_actuator_offset")
-            else kinematic.actuators.non_optimizable_parameters[i, index_mapping.actuator_offset, :].detach().cpu()
-        )
-        final_off = kinematic.actuators.non_optimizable_parameters[i, index_mapping.actuator_offset, :].detach().cpu()
-        moved_off = (final_off - start_off).tolist()
-        deviation_off = [p + m for p, m in zip(perturbation_offset, moved_off)]
-
-        perturbation_trans = perturbations["translation"][i].tolist()
-        start_trans = (
-            kinematic._initial_translation_deviation[i].cpu()
-            if hasattr(kinematic, "_initial_translation_deviation")
-            else kinematic.translation_deviation_parameters[i].detach().cpu()
-        )
-        final_trans = kinematic.translation_deviation_parameters[i].detach().cpu()
-        moved_trans = (final_trans - start_trans).tolist()
-        deviation_trans = [p + m for p, m in zip(perturbation_trans, moved_trans)]
-
-        perturbation_bp = perturbations["base_position"][i].tolist()
-        rec_bp = (
-            kinematic._base_position_deviation[i].detach().cpu().tolist()
-            if hasattr(kinematic, "_base_position_deviation")
-            else [0.0, 0.0, 0.0]
-        )
-
-        result[hid] = {
-            "rotation":       {"perturbation_rad": perturbation_rot, "recovered_rad": rec_rot,     "abs_residual_rad": [abs(r) for r in rec_rot]},
-            "actuator_angle": {"perturbation_rad": perturbation_act, "moved_rad": moved_act,        "deviation_from_clean_rad": deviation_act, "abs_residual_rad": [abs(d) for d in deviation_act]},
-            "actuator_stroke":{"perturbation_m":   perturbation_stroke, "final_m": rec_stroke,      "abs_residual_m": [abs(p) for p in perturbation_stroke], "note": "frozen — perturbation is permanent"},
-            "actuator_offset":{"perturbation_m":   perturbation_offset, "moved_m": moved_off,       "deviation_from_clean_m": deviation_off, "abs_residual_m": [abs(d) for d in deviation_off]},
-            "translation":    {"perturbation_m":   perturbation_trans,  "moved_m": moved_trans,     "deviation_from_clean_m": deviation_trans, "abs_residual_m": [abs(d) for d in deviation_trans]},
-            "base_position":  {"perturbation_m":   perturbation_bp,     "recovered_m": rec_bp,      "abs_residual_m": [abs(r) for r in rec_bp]},
-        }
-
     return result
 
 
