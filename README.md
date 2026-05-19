@@ -128,6 +128,19 @@ Previous experiments generated data from the clean scenario, applied perturbatio
 then trained the KR to push parameters back to zero — a trivial task that did not
 reflect reality.
 
+**Perturbations applied during dataset generation** (seed 42, uniform ±range):
+
+| Parameter | Range | Count | Notes |
+|---|---|---|---|
+| Rotation deviations | ±3 mrad | 4 | Joint tilts |
+| Actuator initial angle `a_i` | ±3 mrad | 2 | |
+| Actuator stroke `b_i` | ±3 mm | 2 | Frozen during training |
+| Actuator offset `c_i` | ±3 mm | 2 | |
+| Translation deviations | ±15 mm | 9 | Joint + concentrator |
+| Base position `(e, n, u)` | ±15 mm | 3 | |
+
+Ranges were chosen so that fewer than 2 % of generated flux images miss the target entirely.
+
 **Two-stage training:**
 1. **Stage 1 — AlignmentLoss** (no ray tracing, fast) — pre-trains joint angle parameters
    from motor-position measurements.
