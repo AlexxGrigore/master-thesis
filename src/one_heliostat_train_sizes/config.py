@@ -105,8 +105,8 @@ DATASET_TYPE = "synthetic"
 
 LOSS_TYPE = "focal_spot"
 
-STAGE1_EPOCHS = 100   # AlignmentLoss pre-training (no ray tracing)
-STAGE2_EPOCHS = 300   # Configured loss fine-tuning
+STAGE1_EPOCHS = 20    # AlignmentLoss pre-training (no ray tracing)
+STAGE2_EPOCHS = 200   # Configured loss fine-tuning
 
 # ---------------------------------------------------------------------------
 # Optimisation

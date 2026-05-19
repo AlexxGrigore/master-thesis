@@ -18,5 +18,5 @@ apptainer exec --nv \
         --daic \
         --dataset-type real \
         --loss-type pixel \
-        --stage1-epochs 100 \
-        --stage2-epochs 500
+        --stage1-epochs 20 \
+        --stage2-epochs 200

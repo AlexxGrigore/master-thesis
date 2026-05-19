@@ -18,5 +18,5 @@ apptainer exec --nv \
         --daic \
         --dataset-type synthetic \
         --loss-type focal_spot \
-        --stage1-epochs 100 \
-        --stage2-epochs 300
+        --stage1-epochs 20 \
+        --stage2-epochs 200
