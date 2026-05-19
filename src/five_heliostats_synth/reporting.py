@@ -178,6 +178,72 @@ def plot_per_heliostat_accuracy_table(
     plt.close(fig)
 
 
+def plot_per_heliostat_accuracy_histogram(
+    rows: list[dict],
+    output_dir: pathlib.Path,
+) -> None:
+    """
+    Plot a histogram of per-heliostat focal-spot accuracy after stage 2.
+
+    Parameters
+    ----------
+    rows : list[dict]
+        Each entry must have ``post_stage2_mrad`` (float or None).
+    output_dir : pathlib.Path
+        Directory where ``per_heliostat_accuracy_histogram.png`` is saved.
+    """
+    values = [r["post_stage2_mrad"] for r in rows if r.get("post_stage2_mrad") is not None]
+    if not values:
+        print("WARNING: No post_stage2_mrad values — skipping histogram.")
+        return
+
+    arr = np.array(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    mean_val   = float(np.mean(arr))
+    median_val = float(np.median(arr))
+    std_val    = float(np.std(arr))
+    n          = len(arr)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    fig.patch.set_facecolor("white")
+
+    ax.hist(arr, bins=30, color="steelblue", edgecolor="white", linewidth=0.5, alpha=0.85)
+    ax.axvline(mean_val,   color="crimson",    linestyle="--", linewidth=2.0,
+               label=f"Mean:   {mean_val:.2f} mrad")
+    ax.axvline(median_val, color="darkorange", linestyle="-.", linewidth=2.0,
+               label=f"Median: {median_val:.2f} mrad")
+    ax.axvspan(mean_val - std_val, mean_val + std_val,
+               alpha=0.10, color="crimson", label=f"±1 std: {std_val:.2f} mrad")
+
+    stats_text = (
+        f"$n$ = {n}\n"
+        f"mean = {mean_val:.2f} mrad\n"
+        f"median = {median_val:.2f} mrad\n"
+        f"std = {std_val:.2f} mrad\n"
+        f"min = {arr.min():.2f} mrad\n"
+        f"max = {arr.max():.2f} mrad"
+    )
+    ax.text(
+        0.97, 0.97, stats_text,
+        transform=ax.transAxes,
+        fontsize=8,
+        verticalalignment="top",
+        horizontalalignment="right",
+        bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="grey", alpha=0.85),
+    )
+
+    ax.legend(fontsize=9, framealpha=0.85)
+    ax.grid(axis="y", color="grey", alpha=0.3, linewidth=0.6)
+    ax.set_xlabel("Focal-spot error after stage 2 (mrad)", fontsize=10)
+    ax.set_ylabel("Number of heliostats", fontsize=10)
+    ax.set_title("Per-heliostat accuracy distribution (post stage 2)", fontsize=11, fontweight="bold")
+    plt.tight_layout()
+    out_path = output_dir / "per_heliostat_accuracy_histogram.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved per-heliostat accuracy histogram to {out_path}")
+
+
 # ---------------------------------------------------------------------------
 # Convergence plot
 # ---------------------------------------------------------------------------

@@ -415,8 +415,15 @@ class SyntheticDatasetParser:
     sample counts matter.
     """
 
-    def __init__(self, data_dir: pathlib.Path | str) -> None:
+    def __init__(
+        self,
+        data_dir: pathlib.Path | str,
+        backlash_amplitude_mrad: float = 0.0,
+        gravity_sag_amplitude_mrad: float = 0.0,
+    ) -> None:
         self._data_dir = pathlib.Path(data_dir)
+        self._backlash_amplitude_rad   = backlash_amplitude_mrad   * 1e-3
+        self._gravity_sag_amplitude_rad = gravity_sag_amplitude_mrad * 1e-3
 
     def parse_data_for_reconstruction(
         self,
@@ -437,12 +444,26 @@ class SyntheticDatasetParser:
         all_incident_rays: list[list] = []
         all_motor_pos: list[list] = []
         all_target_indices: list[int] = []
+        all_hel_distances: list[float] = []  # heliostat-to-tower distance per sample (for backlash)
+
+        # Tower reference: mean of planar target area centers (computed once).
+        if self._backlash_amplitude_rad > 0.0:
+            from artist.util import index_mapping as _idx
+            _planar   = scenario.solar_tower.target_areas[_idx.planar_target_areas]
+            _tower_ref = _planar.centers[:, :3].mean(dim=0)
+        else:
+            _tower_ref = None
 
         for i, hid in enumerate(heliostat_group.names):
             n = mapping_dict.get(hid, 0)
             if n == 0:
                 continue
             active_mask[i] = n
+
+            dist = 0.0
+            if _tower_ref is not None:
+                hel_pos = heliostat_group.positions[i, :3].float()
+                dist = float(torch.norm(hel_pos - _tower_ref.float()).item())
 
             hel_dir = self._data_dir / hid
             for k in range(n):
@@ -457,6 +478,7 @@ class SyntheticDatasetParser:
                     mp["axis_1_motor_position"], mp["axis_2_motor_position"]
                 ])
                 all_target_indices.append(int(cal["target_area_index"]))
+                all_hel_distances.append(dist)
 
                 img = Image.open(meas_dir / "flux_image.png").convert("L")
                 flux_arr = np.array(img, dtype=np.float32) / 255.0
@@ -473,5 +495,21 @@ class SyntheticDatasetParser:
         incident_rays   = torch.tensor(all_incident_rays, dtype=torch.float32).to(device)
         motor_positions = torch.tensor(all_motor_pos,     dtype=torch.float32).to(device)
         target_mask     = torch.tensor(all_target_indices, dtype=torch.long).to(device)
+
+        dist_tensor = torch.tensor(all_hel_distances, dtype=torch.float32, device=device)
+
+        if self._backlash_amplitude_rad > 0.0:
+            # sign: +1 if sun is east (morning), -1 if sun is west (afternoon)
+            signs = torch.where(
+                incident_rays[:, 0] < 0,
+                torch.ones(len(incident_rays),  device=device),
+                -torch.ones(len(incident_rays), device=device),
+            )
+            focal_spots[:, 0] = focal_spots[:, 0] + signs * dist_tensor * self._backlash_amplitude_rad
+
+        if self._gravity_sag_amplitude_rad > 0.0:
+            # elevation proxy: |U-component| of incident ray (0 at horizon, 1 at zenith)
+            elevation = incident_rays[:, 2].abs()
+            focal_spots[:, 0] = focal_spots[:, 0] + elevation * dist_tensor * self._gravity_sag_amplitude_rad
 
         return measured_flux, focal_spots, incident_rays, motor_positions, active_mask.to(device), target_mask

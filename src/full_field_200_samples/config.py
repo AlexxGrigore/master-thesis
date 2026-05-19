@@ -71,7 +71,42 @@ PERTURBATION_RANGES = {
 # "real"      — PAINT calibration images; kinematic perturbations are skipped
 # ---------------------------------------------------------------------------
 
-DATASET_TYPE = "real"
+DATASET_TYPE = "synthetic"  # "synthetic" or "real"
+
+# ---------------------------------------------------------------------------
+# Backlash perturbation  (synthetic dataset generation only)
+#
+# Models drive-train hysteresis: the focal spot centroid is shifted by
+# ±(heliostat_distance × amplitude_rad) along the target's E-axis depending
+# on whether the sun is east (morning) or west (afternoon) of the target.
+#
+#   sun east of target  (incident_ray E-component < 0) → +amplitude shift
+#   sun west of target  (incident_ray E-component ≥ 0) → −amplitude shift
+#
+# amplitude_mrad is the net effect on the focal spot in mrad.
+# Has no effect when DATASET_TYPE = "real".
+# ---------------------------------------------------------------------------
+
+BACKLASH_PERTURBATION = {
+    "enabled":        False,
+    "amplitude_mrad": 3.0,   # ±3 mrad shift (morning vs afternoon)
+}
+
+# ---------------------------------------------------------------------------
+# Gravity-sag perturbation  (synthetic training only)
+#
+# Models elevation-dependent structural deformation: focal spot shifted by
+# (|incident_ray_U| × distance × amplitude_rad) along the target E-axis.
+# Magnitude scales with sin(elevation) — zero at horizon, max at zenith.
+# The reconstructor learns the mean sag but cannot remove the residual
+# variation across samples at different elevations.
+# Has no effect when DATASET_TYPE = "real".
+# ---------------------------------------------------------------------------
+
+GRAVITY_SAG_PERTURBATION = {
+    "enabled":        False,
+    "amplitude_mrad": 3.0,   # peak shift at zenith (90° elevation)
+}
 
 # ---------------------------------------------------------------------------
 # Loss
@@ -85,7 +120,7 @@ DATASET_TYPE = "real"
 # "alignment"  — MSE on motor positions converted to joint angles (no ray tracing)
 # ---------------------------------------------------------------------------
 
-LOSS_TYPE     = "focal_spot"
+LOSS_TYPE     = "focal_spot"  # "focal_spot", "pixel", or "alignment"
 STAGE1_EPOCHS = 50
 STAGE2_EPOCHS = 250
 

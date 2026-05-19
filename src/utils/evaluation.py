@@ -155,6 +155,19 @@ def evaluate_flux_accuracy(
             device=device,
         )
 
+        # Inject trained base-position deviation when present.  The reconstructor
+        # manages this attribute outside ARTIST's standard parameter set, so it
+        # must be applied manually after activate_heliostats each forward pass.
+        kinematic = heliostat_group.kinematics
+        if hasattr(kinematic, "_base_position_deviation"):
+            base_dev = kinematic._base_position_deviation.repeat_interleave(
+                active_heliostats_mask, dim=0
+            )
+            pad = torch.zeros(base_dev.shape[0], 1, device=device)
+            kinematic.active_heliostat_positions = (
+                kinematic.active_heliostat_positions + torch.cat([base_dev, pad], dim=1)
+            )
+
         heliostat_group.align_surfaces_with_incident_ray_directions(
             aim_points=scenario.solar_tower.get_centers_of_target_areas(
                 target_area_mask, device=device
