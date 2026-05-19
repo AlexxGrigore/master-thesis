@@ -2,9 +2,9 @@
 #SBATCH --job-name=f63_real_pixel
 #SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/f63_real_pixel_out_%j.log
 #SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/f63_real_pixel_err_%j.log
-#SBATCH --time=12:00:00
+#SBATCH --time=2:00:00
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
+#SBATCH --mem=16G
 #SBATCH --gres=gpu:a40:1
 
 mkdir -p /home/nfs/agrigore/projects/githubProjects/master-thesis/logs
