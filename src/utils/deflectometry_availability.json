@@ -1,0 +1,8062 @@
+{
+  "AA23": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA24": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA25": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA26": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA27": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA28": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA29": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA31": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA32": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA33": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA34": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA37": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AA38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA40": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AA41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AA42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AA43": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AA44": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AA46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AA47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AA48": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AA49": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA50": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AA51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AB23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AB24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AB25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AB26": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB27": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB28": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AB29": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AB32": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB33": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB34": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB36": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AB37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB40": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB41": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB42": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB43": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB44": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB45": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB46": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB47": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AB49": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AB50": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AB51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AB52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AC23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AC24": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC25": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC26": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC27": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC28": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC29": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC31": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC32": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC33": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC34": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC40": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC41": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC42": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC43": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AC45": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AC47": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC48": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AC49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AC50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AC51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AC52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AC53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AD23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AD24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AD25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AD26": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AD27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AD28": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AD29": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AD30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AD31": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AD32": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AD33": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AD34": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AD35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AD36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AD37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AD38": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AD39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AD40": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AD41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AD42": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AD43": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AD44": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AD45": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AD46": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AD47": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AD48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AD49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AD50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AD51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AD52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AD53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AD54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AE21": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AE23": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AE24": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AE25": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AE26": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AE27": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AE28": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AE29": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AE30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AE31": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AE32": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AE33": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE34": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AE35": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AE37": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE38": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE39": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE40": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE44": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AE45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AE56": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AF18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AF19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AF20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AF21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AF23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF26": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF28": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF29": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AF30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AF31": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AF32": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AF33": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AF34": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AF35": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AF37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AF38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AF39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AF40": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AF41": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AF42": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AF43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF44": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AF45": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AF46": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AF47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AF57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AG19": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AG20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AG21": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AG22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AG24": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AG25": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AG26": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AG27": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AG28": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AG29": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AG30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AG31": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AG32": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AG33": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AG34": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AG35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AG36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AG37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AG38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AG39": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG40": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AG58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AH18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AH19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AH20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AH21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AH22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AH23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH26": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH28": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AH29": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AH30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AH31": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AH32": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AH33": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AH34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AH36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AH37": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH38": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AH40": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH46": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AH47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AH59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AI18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AI19": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AI20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AI21": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AI22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AI23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI25": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AI26": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AI27": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AI28": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI29": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI30": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI32": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI33": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI35": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AI37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AI38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AI39": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI40": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI43": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AI44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AI61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AJ17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AJ18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AJ19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AJ20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AJ21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AJ22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AJ23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ26": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AJ27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ28": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ29": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ30": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ32": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ33": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ35": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ36": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AJ38": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ39": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ40": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ46": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AJ47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ59": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AJ60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AJ63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AK17": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AK18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AK19": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AK20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AK21": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AK22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AK23": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK24": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK25": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK26": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK27": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK28": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK29": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK31": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK32": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK33": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK34": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK40": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK54": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AK55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AK64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AL16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AL17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AL18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AL19": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AL20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AL21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AL22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AL23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL26": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL28": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL29": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AL31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL32": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL33": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AL36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AL37": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL38": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL39": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL40": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AL64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AM16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AM17": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AM18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AM19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AM20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AM21": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AM22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AM23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM24": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AM25": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AM26": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AM27": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AM28": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM29": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM30": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM31": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AM32": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM33": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AM36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AM37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AM38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AM39": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM40": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM55": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AM56": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AM57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AM65": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AN15": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AN16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AN17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AN18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AN19": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AN20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AN21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AN22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AN23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN26": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN28": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN29": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN30": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN32": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AN33": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AN34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AN36": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN37": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN38": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN39": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN40": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN53": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AN54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN65": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AN66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AO15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AO16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AO17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AO18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AO19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AO20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AO21": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AO22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AO23": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AO24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO26": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO27": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AO28": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AO29": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AO30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AO31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO32": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AO33": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AO34": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AO35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AO36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AO37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AO38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AO39": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO40": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO49": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AO50": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AO51": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AO52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO61": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AO62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO65": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AO67": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP13": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AP14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AP15": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AP16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AP17": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AP18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AP19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AP20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AP21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AP22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AP23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP26": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP28": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP29": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP31": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP32": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP33": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP36": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP40": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP41": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP43": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP44": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP46": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP47": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP49": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP50": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP51": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP57": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AP58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP60": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP61": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AP62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP65": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP67": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AP68": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AQ13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AQ14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AQ15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AQ16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AQ17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AQ18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AQ19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AQ20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AQ21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AQ22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AQ23": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AQ24": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AQ25": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AQ26": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AQ27": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AQ28": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AQ29": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AQ31": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AQ32": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AQ33": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ35": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ36": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ37": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ38": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ39": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ40": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ50": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AQ51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ65": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ67": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AQ68": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AR13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AR14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AR15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AR16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AR17": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AR18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AR19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AR20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AR21": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AR22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AR23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR26": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR28": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR29": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR30": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR32": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR33": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR35": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR36": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR37": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR38": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR39": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR40": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR64": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AR65": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR67": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR68": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AR69": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AS12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AS13": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AS14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AS15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AS16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AS17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AS18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AS19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AS20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AS21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AS22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AS24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS26": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS28": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS29": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS30": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS32": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS33": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS35": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS36": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS37": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AS38": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS39": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS40": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AS41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS65": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS67": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS68": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS69": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AS70": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AT12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AT13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AT14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AT15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AT16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AT17": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AT18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AT19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AT20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AT21": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AT22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AT23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT26": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT28": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT29": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT30": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT32": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT33": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT35": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT36": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT37": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT38": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT39": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT40": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT43": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AT44": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AT45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT46": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AT47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT51": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AT52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT61": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AT62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT65": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT67": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT68": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT69": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AT70": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AU10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU19": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU23": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU24": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU25": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU26": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU27": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU28": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU29": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU30": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU31": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU32": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU33": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU34": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU35": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU36": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU37": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU38": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU39": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU40": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU41": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU42": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU43": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU44": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU45": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU46": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU47": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU48": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU49": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU50": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU51": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU52": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU53": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU54": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU55": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU56": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU57": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU58": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU59": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU60": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU61": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU62": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU63": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU64": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU65": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU66": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU67": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU68": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU69": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AU70": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AU71": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AV09": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV21": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AV22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV23": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV24": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV25": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AV26": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AV27": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV28": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV29": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV30": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV31": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV32": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV33": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV34": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV35": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AV36": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AV37": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AV38": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AV39": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AV40": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AV41": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV42": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AV43": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AV44": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AV45": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV46": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV47": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV48": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV49": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV50": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV51": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV52": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV53": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV54": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV55": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV56": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV57": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV58": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV59": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV60": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV61": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV62": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV63": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV64": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV65": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV66": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV67": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV68": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV69": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV70": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AV71": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW08": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW09": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW19": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AW20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW26": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW28": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW29": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW30": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW32": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW33": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AW36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AW37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AW38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AW39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AW40": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AW41": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AW42": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AW43": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AW44": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AW45": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW57": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW65": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW67": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW68": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW69": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AW70": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AW71": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX08": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AX09": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AX10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AX11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AX12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AX13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AX14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AX15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AX16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AX17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AX18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AX19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AX20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AX21": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AX22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AX23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX26": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX29": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX30": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX32": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX33": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AX36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AX37": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX38": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AX40": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AX41": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AX42": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AX43": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AX44": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AX45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX61": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AX62": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AX63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX65": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX67": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX68": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX69": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX70": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX71": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AX72": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY07": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY08": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY09": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY19": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AY20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY23": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY26": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY27": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY28": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY29": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY30": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY32": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY33": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY40": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY41": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY42": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY43": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY44": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY51": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AY52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY55": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY56": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY57": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY60": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY65": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY67": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY68": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY69": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY70": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AY71": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AY72": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ05": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ06": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ07": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ08": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ09": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ21": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AZ22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ26": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ27": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ28": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ29": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ30": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ32": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AZ33": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ34": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ37": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AZ38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ39": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AZ40": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ41": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ42": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ43": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ44": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ45": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ46": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ47": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ48": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ52": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ53": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ55": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "AZ56": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "AZ57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ58": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ60": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ65": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ67": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "AZ68": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ69": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ70": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ71": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ72": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "AZ73": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA03": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA04": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA05": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA06": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA07": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA08": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA09": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA26": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA27": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA28": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA29": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA30": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA32": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA33": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA40": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BA41": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA42": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA43": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA44": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA47": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA60": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BA61": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA62": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA63": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA65": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA66": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA67": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA68": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BA69": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA70": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA71": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA72": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BA73": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BB01": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB02": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB03": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB04": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB05": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB06": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB07": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB08": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB09": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB21": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BB22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB26": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB28": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BB29": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BB30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BB31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB32": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB33": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB35": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB36": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BB38": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BB40": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BB41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB44": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB53": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB54": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB65": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB67": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB68": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BB69": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB70": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BB71": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BB72": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BB73": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC01": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC02": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC03": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC04": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC05": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC06": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC07": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC08": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC09": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC17": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BC18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC19": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BC20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC22": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC26": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC28": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BC29": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC30": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC32": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BC33": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BC34": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BC35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BC36": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC37": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC38": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC39": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC40": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC47": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BC48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC60": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BC61": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BC62": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BC63": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BC64": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BC65": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC66": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BC67": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC68": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC69": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC70": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC71": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BC72": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BC73": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD01": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD02": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD03": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD04": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD05": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD06": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD07": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD08": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD09": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BD23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD26": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD28": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BD29": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BD31": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BD32": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BD33": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD34": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BD35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BD36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BD37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BD38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BD39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BD40": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BD41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD65": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD67": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD68": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD69": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD70": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD71": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BD72": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BD73": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE02": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE03": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE04": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE05": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE06": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE07": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE08": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE09": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE19": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BE20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE21": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BE23": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE24": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BE25": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE26": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE28": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE29": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE31": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE32": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE33": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE34": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE40": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE41": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE45": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE52": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE53": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE56": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE57": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE59": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE63": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BE64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE65": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE67": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE68": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE69": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE70": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BE71": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE72": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BE73": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF02": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF03": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF04": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF05": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF06": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF07": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF08": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF09": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF23": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BF24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF26": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BF27": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BF28": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BF29": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BF30": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BF31": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BF32": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF33": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BF34": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BF35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BF36": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BF37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BF38": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BF40": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BF41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF42": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BF43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF45": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF50": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF54": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BF55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF58": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF65": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BF66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF67": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF68": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF69": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BF70": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF71": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BF72": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG03": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG04": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG05": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG06": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG07": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG08": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG09": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG19": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BG20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG21": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BG23": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BG24": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BG25": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BG26": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG28": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG29": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG30": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BG31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG32": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG33": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG34": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BG35": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BG36": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG37": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BG38": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BG39": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BG40": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BG41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG44": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG45": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BG46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG49": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG50": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BG51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG56": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BG57": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG60": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BG61": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BG62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG63": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG65": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BG66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG67": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG68": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG69": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG70": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BG71": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH04": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH05": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH06": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH07": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH08": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH09": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH17": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BH18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH23": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH24": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH25": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH26": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH27": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH28": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH29": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH30": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH31": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH32": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH33": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH34": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH35": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH36": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH37": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH38": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH39": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH40": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH41": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH42": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH43": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH44": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH45": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BH46": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH47": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH48": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH49": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BH50": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BH51": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH52": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH53": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH54": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH55": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH56": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH57": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH58": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH59": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH60": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH61": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH62": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH63": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH64": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH65": {
+    "has_deflectometry": true,
+    "in_benchmark": true
+  },
+  "BH66": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH67": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH68": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BH69": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BH70": {
+    "has_deflectometry": false,
+    "in_benchmark": true
+  },
+  "BI05": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI06": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI07": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI08": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI09": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI23": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI24": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI25": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI26": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI27": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI28": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI29": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI30": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI31": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI32": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI33": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI34": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI35": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI36": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI37": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI38": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI39": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI40": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI41": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI42": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI43": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI44": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI45": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BI46": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI47": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI48": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BI49": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI50": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI51": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI52": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI53": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI54": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI55": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI56": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI57": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BI58": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI59": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI60": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI61": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI62": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BI63": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI64": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI65": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BI66": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI67": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI68": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BI69": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ08": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ09": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ17": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BJ18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ23": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ24": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ25": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BJ26": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BJ27": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BJ28": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BJ29": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ30": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BJ31": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BJ32": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BJ33": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ34": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ35": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ36": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ37": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ38": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ39": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ40": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ41": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ42": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ43": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ44": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ45": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ46": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ47": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ48": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ49": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ50": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BJ51": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BJ52": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ53": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ54": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ55": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ56": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BJ57": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ58": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ59": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ60": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ61": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BJ62": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ63": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ64": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ65": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ66": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BJ67": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BK10": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BK11": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BK12": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BK13": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BK14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BK15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BK16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BK17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BK18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BK19": {
+    "has_deflectometry": true,
+    "in_benchmark": false
+  },
+  "BK20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BK21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BL14": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BL15": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BL16": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BL17": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BL18": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BL19": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BL20": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "BL21": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  },
+  "metadata": {
+    "has_deflectometry": false,
+    "in_benchmark": false
+  }
+}
