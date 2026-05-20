@@ -28,12 +28,13 @@ except ImportError:
 import h5py
 import numpy as np
 import torch
-from artist.core.heliostat_ray_tracer import HeliostatRayTracer
+from artist.raytracing.heliostat_ray_tracer import HeliostatRayTracer
 from artist.scenario.scenario import Scenario
-from artist.util import config_dictionary, index_mapping
-from artist.util.utils import get_center_of_mass, bitmap_coordinates_to_target_coordinates
+from artist.util import constants as config_dictionary, indices as index_mapping
+from artist.geometry import bitmap_coordinates_to_target_coordinates
+from artist.flux import get_center_of_mass
 
-from artist.core.loss_functions import FocalSpotLoss, PixelLoss
+from artist.optim.loss import FocalSpotLoss, PixelLoss
 
 from artist_extensions.kinematic_reconstructors import (
     WortbergAlignmentReconstructor,

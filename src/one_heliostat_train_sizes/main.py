@@ -34,8 +34,8 @@ import matplotlib.pyplot as plt
 import h5py
 import torch
 from artist.scenario.scenario import Scenario
-from artist.util import config_dictionary, set_logger_config
-from artist.util.environment_setup import get_device, setup_distributed_environment
+from artist.util import constants as config_dictionary, set_logger_config
+from artist.util.env import get_device, setup_distributed_environment
 _here = pathlib.Path(__file__).resolve().parent
 _src  = _here.parent
 sys.path.insert(0, str(_src))
@@ -45,7 +45,7 @@ from train import run
 from utils.evaluation import build_heliostat_data_mapping
 from utils.synth_data import _equalize_mapping, SyntheticDatasetParser
 from utils.synth_reporting import plot_stage_convergence
-from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
+from artist.io.paint_calibration_parser import PaintCalibrationDataParser
 
 
 # ---------------------------------------------------------------------------
@@ -251,8 +251,20 @@ def main() -> None:
     # the ID before loading the scenario (not after).
     heliostat_id = args.heliostat_id or cfg.HELIOSTAT_ID
     if not heliostat_id:
-        log.error("No heliostat ID specified. Use --heliostat-id or set HELIOSTAT_ID in config.py.")
-        sys.exit(1)
+        # Auto-select: first heliostat sub-directory that has a scenario.h5
+        scenarios_root = cfg.ONE_HELIOSTAT_SCENARIOS_DIR
+        if scenarios_root.is_dir():
+            for candidate in sorted(scenarios_root.iterdir()):
+                if (candidate / "scenario.h5").exists():
+                    heliostat_id = candidate.name
+                    log.info(f"Auto-selected heliostat: {heliostat_id}")
+                    break
+        if not heliostat_id:
+            log.error(
+                "No heliostat ID specified and no scenarios found in "
+                f"{scenarios_root}. Use --heliostat-id or set HELIOSTAT_ID in config.py."
+            )
+            sys.exit(1)
     log.info(f"Heliostat: {heliostat_id}")
 
     scenario_path = cfg.ONE_HELIOSTAT_SCENARIOS_DIR / heliostat_id / "scenario.h5"

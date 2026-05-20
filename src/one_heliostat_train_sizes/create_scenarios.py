@@ -19,14 +19,14 @@ import pathlib
 import sys
 
 import torch
-from artist.data_parser import paint_scenario_parser
-from artist.scenario.configuration_classes import (
+from artist.io import paint_scenario_parser
+from artist.util.config import (
     LightSourceConfig,
     LightSourceListConfig,
 )
 from artist.scenario.h5_scenario_generator import H5ScenarioGenerator
-from artist.util import config_dictionary, set_logger_config
-from artist.util.environment_setup import get_device
+from artist.util import constants as config_dictionary, set_logger_config
+from artist.util import get_device
 
 _HERE = pathlib.Path(__file__).resolve().parent
 _SRC  = _HERE.parent

@@ -22,10 +22,11 @@ import pathlib
 import numpy as np
 import torch
 from PIL import Image
-from artist.core.heliostat_ray_tracer import HeliostatRayTracer
-from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
-from artist.util import index_mapping
-from artist.util.utils import get_center_of_mass, bitmap_coordinates_to_target_coordinates
+from artist.raytracing.heliostat_ray_tracer import HeliostatRayTracer
+from artist.io.paint_calibration_parser import PaintCalibrationDataParser
+from artist.util import indices as index_mapping
+from artist.geometry import bitmap_coordinates_to_target_coordinates
+from artist.flux import get_center_of_mass
 
 log = logging.getLogger(__name__)
 

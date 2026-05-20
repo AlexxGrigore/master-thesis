@@ -43,7 +43,7 @@ def check_cuda() -> None:
     else:
         print("  [WARN] CUDA not available — will run on CPU")
 
-    from artist.util.environment_setup import get_device
+    from artist.util.env import get_device
     device = get_device()
     _ok(f"get_device() → {device}")
 

@@ -29,8 +29,8 @@ matplotlib.use("Agg")
 import h5py
 import torch
 from artist.scenario.scenario import Scenario
-from artist.util import config_dictionary, set_logger_config
-from artist.util.environment_setup import get_device, setup_distributed_environment
+from artist.util import constants as config_dictionary, set_logger_config
+from artist.util import get_device, setup_distributed_environment
 
 _here = pathlib.Path(__file__).resolve().parent
 _src  = _here.parent
@@ -48,7 +48,7 @@ from utils.synth_reporting import (
     plot_per_heliostat_accuracy_histogram,
     write_summary,
 )
-from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
+from artist.io.paint_calibration_parser import PaintCalibrationDataParser
 from reporting import (
     plot_field_accuracy_map,
     render_summary_table,

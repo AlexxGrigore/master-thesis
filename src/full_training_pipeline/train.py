@@ -15,15 +15,15 @@ sys.path.insert(0, str(_src))
 
 import h5py
 import torch
-from artist.core.loss_functions import FocalSpotLoss, PixelLoss
-from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
+from artist.optim.loss import FocalSpotLoss, PixelLoss
+from artist.io.paint_calibration_parser import PaintCalibrationDataParser
 from artist.scenario.scenario import Scenario
 from artist_extensions.cached_paint_parser import CachedPaintCalibrationDataParser
 from artist.util import set_logger_config
-from artist.util.environment_setup import get_device
+from artist.util import get_device
 
 from artist_extensions.loss_functions_ext import AlignmentLoss
-from five_heliostats_synth.data import SyntheticDatasetParser
+from utils.synth_data import SyntheticDatasetParser
 from full_training_pipeline.config import PipelineConfig, build_config
 from full_training_pipeline.data import (
     SplitDataBundle,

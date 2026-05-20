@@ -9,7 +9,7 @@ against a clean reference dataset.
 import pathlib
 
 import paint.util.paint_mappings as paint_mappings
-from artist.util import config_dictionary
+from artist.util import constants as config_dictionary
 
 # ---------------------------------------------------------------------------
 # Environment
@@ -48,7 +48,7 @@ TEST_SAMPLES  = 50
 
 SYNTH_GEN_RAYS           = 100   # high ray count → clean centroids
 TRAIN_RAYS               = 10
-SURFACE_POINTS_PER_FACET = 25    # 25×25 = 625 pts/facet
+SURFACE_POINTS_PER_FACET = 50    # 50×50 = 2500 pts/facet
 
 # ---------------------------------------------------------------------------
 # Perturbation
@@ -61,8 +61,8 @@ PERTURBATION_RANGES = {
     "actuator_angle_rad":  0.003,
     "actuator_stroke_m":   0.003,
     "actuator_offset_m":   0.003,
-    "translation_m":       0.015,
-    "base_position_m":     0.015,
+    "translation_m":       0.050,
+    "base_position_m":     0.050,
 }
 
 # ---------------------------------------------------------------------------
