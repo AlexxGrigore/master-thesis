@@ -20,8 +20,8 @@ from __future__ import annotations
 import logging
 
 import torch
-from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
-from artist.util.environment_setup import get_device
+from artist.io.paint_calibration_parser import PaintCalibrationDataParser
+from artist.util import get_device
 
 log = logging.getLogger(__name__)
 

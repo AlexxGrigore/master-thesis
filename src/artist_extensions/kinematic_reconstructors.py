@@ -13,11 +13,11 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from artist.core import core_utils, learning_rate_schedulers
-from artist.core.heliostat_ray_tracer import HeliostatRayTracer
-from artist.core.kinematics_reconstructor import KinematicsReconstructor
-from artist.util import config_dictionary, index_mapping
-from artist.util.environment_setup import get_device
+from artist.optim import training as learning_rate_schedulers, mean_loss_per_heliostat
+from artist.raytracing.heliostat_ray_tracer import HeliostatRayTracer
+from artist.optim.kinematics_reconstructor import KinematicsReconstructor
+from artist.util import constants as config_dictionary, indices as index_mapping
+from artist.util import get_device
 
 log = logging.getLogger(__name__)
 
@@ -648,7 +648,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
             reduction_dimensions=reduction_dims,
             device=device,
         )
-        return core_utils.mean_loss_per_heliostat(
+        return mean_loss_per_heliostat(
             loss_per_sample=loss_per_sample,
             number_of_samples_per_heliostat=number_of_samples_per_heliostat,
         )
@@ -757,7 +757,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
             reduction_dimensions=reduction_dims,
             device=device,
         )
-        loss_per_heliostat = core_utils.mean_loss_per_heliostat(
+        loss_per_heliostat = mean_loss_per_heliostat(
             loss_per_sample=loss_per_sample,
             number_of_samples_per_heliostat=n_samples,
         )
@@ -850,7 +850,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                 reduction_dimensions=reduction_dims,
                 device=device,
             )
-            loss_per_heliostat = core_utils.mean_loss_per_heliostat(
+            loss_per_heliostat = mean_loss_per_heliostat(
                 loss_per_sample=loss_per_sample,
                 number_of_samples_per_heliostat=n_samples,
             )
@@ -1408,7 +1408,7 @@ class WortbergPixelReconstructor(WortbergKinematicReconstructor):
             reduction_dimensions=reduction_dims,
             device=device,
         )
-        return core_utils.mean_loss_per_heliostat(
+        return mean_loss_per_heliostat(
             loss_per_sample=loss_per_sample,
             number_of_samples_per_heliostat=number_of_samples_per_heliostat,
         )
@@ -1517,7 +1517,7 @@ class WortbergAnnealingReconstructor(WortbergKinematicReconstructor):
             reduction_dimensions=(index_mapping.focal_spots,),
             device=device,
         )
-        focal_per_heliostat = core_utils.mean_loss_per_heliostat(
+        focal_per_heliostat = mean_loss_per_heliostat(
             loss_per_sample=focal_per_sample,
             number_of_samples_per_heliostat=number_of_samples_per_heliostat,
         )
@@ -1530,7 +1530,7 @@ class WortbergAnnealingReconstructor(WortbergKinematicReconstructor):
             reduction_dimensions=(index_mapping.batched_bitmap_e, index_mapping.batched_bitmap_u),
             device=device,
         )
-        pixel_per_heliostat = core_utils.mean_loss_per_heliostat(
+        pixel_per_heliostat = mean_loss_per_heliostat(
             loss_per_sample=pixel_per_sample,
             number_of_samples_per_heliostat=number_of_samples_per_heliostat,
         )

@@ -4,7 +4,7 @@ Custom loss functions that extend ARTIST's built-in loss_functions.py.
 
 import torch
 import torch.nn.functional as F
-from artist.core.loss_functions import PixelLoss
+from artist.optim.loss import PixelLoss
 
 
 class PixelLossL1(PixelLoss):

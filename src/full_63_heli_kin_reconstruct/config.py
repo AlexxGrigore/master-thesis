@@ -9,7 +9,7 @@ against a clean reference dataset.
 import pathlib
 
 import paint.util.paint_mappings as paint_mappings
-from artist.util import config_dictionary
+from artist.util import constants as config_dictionary
 
 # ---------------------------------------------------------------------------
 # Environment
@@ -57,12 +57,12 @@ SURFACE_POINTS_PER_FACET = 25    # 25×25 = 625 pts/facet
 PERTURBATION_SEED = 42
 
 PERTURBATION_RANGES = {
-    "rotation_rad":        0.003,
-    "actuator_angle_rad":  0.003,
-    "actuator_stroke_m":   0.003,
-    "actuator_offset_m":   0.003,
-    "translation_m":       0.015,
-    "base_position_m":     0.015,
+    "rotation_rad":        0.005,
+    "actuator_angle_rad":  0.005,
+    "actuator_stroke_m":   0.005,
+    "actuator_offset_m":   0.005,
+    "translation_m":       0.050,
+    "base_position_m":     0.050,
 }
 
 # ---------------------------------------------------------------------------

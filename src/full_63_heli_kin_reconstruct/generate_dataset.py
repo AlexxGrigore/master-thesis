@@ -34,12 +34,13 @@ import h5py
 import numpy as np
 import torch
 from PIL import Image
-from artist.core.heliostat_ray_tracer import HeliostatRayTracer
-from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
+from artist.raytracing.heliostat_ray_tracer import HeliostatRayTracer
+from artist.io.paint_calibration_parser import PaintCalibrationDataParser
 from artist.scenario.scenario import Scenario
-from artist.util import config_dictionary, set_logger_config
-from artist.util.environment_setup import get_device, setup_distributed_environment
-from artist.util.utils import bitmap_coordinates_to_target_coordinates, get_center_of_mass
+from artist.util import constants as config_dictionary, set_logger_config
+from artist.util import get_device, setup_distributed_environment
+from artist.geometry import bitmap_coordinates_to_target_coordinates
+from artist.flux import get_center_of_mass
 
 _here = pathlib.Path(__file__).resolve().parent
 _src  = _here.parent
