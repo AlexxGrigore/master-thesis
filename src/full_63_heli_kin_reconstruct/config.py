@@ -61,8 +61,8 @@ PERTURBATION_RANGES = {
     "actuator_angle_rad":  0.003,
     "actuator_stroke_m":   0.003,
     "actuator_offset_m":   0.003,
-    "translation_m":       0.050,
-    "base_position_m":     0.050,
+    "translation_m":       0.015,
+    "base_position_m":     0.015,
 }
 
 # ---------------------------------------------------------------------------
