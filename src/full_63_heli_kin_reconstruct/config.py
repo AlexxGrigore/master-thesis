@@ -48,7 +48,7 @@ TEST_SAMPLES  = 50
 
 SYNTH_GEN_RAYS           = 100   # high ray count → clean centroids
 TRAIN_RAYS               = 10
-SURFACE_POINTS_PER_FACET = 25    # 25×25 = 625 pts/facet
+SURFACE_POINTS_PER_FACET = 50    # 50×50 = 2500 pts/facet
 
 # ---------------------------------------------------------------------------
 # Perturbation
@@ -57,10 +57,10 @@ SURFACE_POINTS_PER_FACET = 25    # 25×25 = 625 pts/facet
 PERTURBATION_SEED = 42
 
 PERTURBATION_RANGES = {
-    "rotation_rad":        0.005,
-    "actuator_angle_rad":  0.005,
-    "actuator_stroke_m":   0.005,
-    "actuator_offset_m":   0.005,
+    "rotation_rad":        0.003,
+    "actuator_angle_rad":  0.003,
+    "actuator_stroke_m":   0.003,
+    "actuator_offset_m":   0.003,
     "translation_m":       0.050,
     "base_position_m":     0.050,
 }
