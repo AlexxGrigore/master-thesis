@@ -8,7 +8,7 @@ import numpy as np
 from PIL import Image
 import paint.util.paint_mappings as paint_mappings
 import torch
-from artist.util.utils import convert_wgs84_coordinates_to_local_enu
+from artist.geometry import convert_wgs84_coordinates_to_local_enu
 
 from full_training_pipeline.features import (
     CalibrationNormStats,

@@ -11,7 +11,7 @@ and dataset type.
 import pathlib
 
 import paint.util.paint_mappings as paint_mappings
-from artist.util import config_dictionary
+from artist.util import constants as config_dictionary
 
 # ---------------------------------------------------------------------------
 # Environment

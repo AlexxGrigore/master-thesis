@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
-from artist.core.heliostat_ray_tracer import HeliostatRayTracer
-from artist.util import index_mapping
+from artist.raytracing.heliostat_ray_tracer import HeliostatRayTracer
+from artist.util import indices as index_mapping
 from artist_extensions.kinematic_reconstructors import WortbergPixelReconstructor
 from artist_extensions.loss_functions_ext import AlignmentLoss
 
