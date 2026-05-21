@@ -111,6 +111,7 @@ def _run_reporting(results: dict, perturbations_json: dict | None, heliostat_ids
             "focal_spot": "FocalSpotLoss (m)",
             "pixel":      "PixelLoss (MSE)",
             "alignment":  "AlignmentLoss (rad²)",
+            "contour":    "ContourLoss",
         }
         loss_label = loss_label_map.get(results.get("loss_type", "focal_spot"), "Stage-2 Loss")
         plot_stage_convergence(
@@ -150,7 +151,7 @@ def main() -> None:
         description="Full-63-heliostat kinematic reconstruction experiment."
     )
     parser.add_argument("--output-dir",    type=pathlib.Path, default=None)
-    parser.add_argument("--loss-type",     choices=["focal_spot", "pixel", "alignment"], default=None)
+    parser.add_argument("--loss-type",     choices=["focal_spot", "pixel", "alignment", "contour"], default=None)
     parser.add_argument("--dataset-type",  choices=["synthetic", "real"], default="synthetic")
     parser.add_argument("--stage1-epochs", type=int, default=None,
                         help="Override Stage-1 (AlignmentLoss) epoch count.")
@@ -209,6 +210,7 @@ def main() -> None:
         "perturbation_seed":        cfg.PERTURBATION_SEED,
         "perturbation_ranges":      cfg.PERTURBATION_RANGES,
         "optimization_config":      {str(k): v for k, v in cfg.OPTIMIZATION_CONFIG.items()},
+        "contour_params":           cfg.CONTOUR_PARAMS,
         "smoke_test":               args.smoke_test,
         "output_dir":               str(run_dir),
         "pipeline":                 "corrected",
@@ -343,6 +345,7 @@ def main() -> None:
             heliostat_ids=heliostat_ids,
             stage1_epochs=stage1_epochs,
             stage2_epochs=stage2_epochs,
+            contour_params=cfg.CONTOUR_PARAMS,
         )
 
         gc.collect()

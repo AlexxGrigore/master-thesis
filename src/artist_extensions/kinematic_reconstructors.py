@@ -862,3 +862,24 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
         )
         counts = active_mask[active_mask > 0].tolist()
         return torch.stack([c.mean() for c in torch.split(lps, counts)]).mean().item()
+
+
+# ---------------------------------------------------------------------------
+# Contour-loss variant
+# ---------------------------------------------------------------------------
+
+class WortbergContourReconstructor(WortbergKinematicReconstructor):
+    """Contour-loss variant: upper-edge contour matching instead of COM regression.
+
+    Uses ``ContourLoss`` (three-term: coarse distance field + DICE + gravity) on
+    the raw flux images rather than collapsing each image to a single COM point.
+    The full preprocessing pipeline (normalise → smooth → soft-threshold →
+    soft-erosion → vertical Sobel) is applied internally by ``ContourLoss``.
+
+    This subclass only needs to redirect the ground-truth tensor from focal-spot
+    coordinates to flux images; all other training logic is inherited unchanged.
+    """
+
+    def _get_ground_truth_and_reduction_dims(self, measured_flux, focal_spots):
+        """Use raw flux images as ground truth (same as WortbergPixelReconstructor)."""
+        return measured_flux, (indices.batched_bitmap_e, indices.batched_bitmap_u)

@@ -69,9 +69,22 @@ PERTURBATION_RANGES = {
 # Loss / training
 # ---------------------------------------------------------------------------
 
+# Available loss types: "focal_spot", "pixel", "contour", "alignment"
 LOSS_TYPE     = "focal_spot"
 STAGE1_EPOCHS = 20
 STAGE2_EPOCHS = 100
+
+# Hyperparameters for ContourLoss (only used when LOSS_TYPE = "contour").
+# Defaults follow Wortberg (2025); τ and η were Bayesian-optimised by Tristan.
+CONTOUR_PARAMS = {
+    "smoothing_rounds":     2,
+    "gaussian_kernel_size": 5,
+    "gaussian_sigma":       1.0,
+    "threshold_tau":        0.58,   # sigmoid centre
+    "threshold_eta":        70.0,   # sigmoid sharpness
+    "weight_coarse":        0.3,    # β  (distance-field term)
+    "weight_gravity":       0.2,    # γ  (COM-distance term); fine = 1 − β − γ = 0.5
+}
 
 # ---------------------------------------------------------------------------
 # Optimisation

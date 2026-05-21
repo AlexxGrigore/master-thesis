@@ -38,10 +38,11 @@ from artist.optim.loss import FocalSpotLoss, PixelLoss
 
 from artist_extensions.kinematic_reconstructors import (
     WortbergAlignmentReconstructor,
+    WortbergContourReconstructor,
     WortbergKinematicReconstructor,
     WortbergPixelReconstructor,
 )
-from artist_extensions.loss_functions_ext import AlignmentLoss
+from artist_extensions.loss_functions_ext import AlignmentLoss, ContourLoss
 from utils.evaluation import evaluate_flux_accuracy, _gaussian_blur_batch
 from reporting import plot_flux_grid
 
@@ -51,10 +52,12 @@ _LOSS_CONFIGS: dict[str, tuple] = {
     "focal_spot": (WortbergKinematicReconstructor, lambda s: FocalSpotLoss(scenario=s)),
     "pixel":      (WortbergPixelReconstructor,     lambda s: PixelLoss(scenario=s)),
     "alignment":  (WortbergAlignmentReconstructor, lambda _: AlignmentLoss()),
+    "contour":    (WortbergContourReconstructor,   None),  # loss built from contour_params
 }
 
 
-def _build_reconstructor(loss_type, scenario, ddp_setup, data, eval_data, optimization_config, **kwargs):
+def _build_reconstructor(loss_type, scenario, ddp_setup, data, eval_data, optimization_config,
+                          contour_params=None, **kwargs):
     if loss_type not in _LOSS_CONFIGS:
         raise ValueError(f"Unknown loss_type {loss_type!r}. Choose from {list(_LOSS_CONFIGS)}.")
     cls, loss_fn_factory = _LOSS_CONFIGS[loss_type]
@@ -69,7 +72,11 @@ def _build_reconstructor(loss_type, scenario, ddp_setup, data, eval_data, optimi
         **extra,
         **kwargs,
     )
-    return reconstructor, loss_fn_factory(scenario)
+    if loss_type == "contour":
+        loss_fn = ContourLoss(**(contour_params or {}))
+    else:
+        loss_fn = loss_fn_factory(scenario)
+    return reconstructor, loss_fn
 
 
 def run(
@@ -92,6 +99,7 @@ def run(
     heliostat_ids: list | None = None,
     stage1_epochs: int = 50,
     stage2_epochs: int = 250,
+    contour_params: dict | None = None,
 ) -> dict:
     """
     Train on perturbed synthetic data for 63 heliostats using a two-stage approach:
@@ -196,6 +204,7 @@ def run(
         data=data,
         eval_data=eval_data,
         optimization_config=stage2_config,
+        contour_params=contour_params,
         train_position_deviation=True,
         sample_mini_batch_size=10,
     )
