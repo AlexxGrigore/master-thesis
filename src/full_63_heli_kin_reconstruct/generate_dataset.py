@@ -98,7 +98,7 @@ def _forward_pass_chunked(
     active_mask: torch.Tensor,
     target_mask: torch.Tensor,
     device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     heliostat_group.activate_heliostats(active_heliostats_mask=active_mask, device=device)
     kinematic = heliostat_group.kinematics
 
@@ -118,6 +118,11 @@ def _forward_pass_chunked(
         active_heliostats_mask=active_mask,
         device=device,
     )
+
+    # Capture motor positions computed by the perturbed model during alignment.
+    # These are the ground-truth motor positions for Stage-1 AlignmentLoss and
+    # are in the same natural (incident_rays) order as incident_rays.
+    perturbed_motor_positions = kinematic.active_motor_positions.detach().clone()
 
     ray_tracer = HeliostatRayTracer(
         scenario=scenario,
@@ -146,7 +151,7 @@ def _forward_pass_chunked(
     )
 
     inverse_perm = torch.argsort(sample_indices)
-    return centroids_sampler[inverse_perm], flux_sampler[inverse_perm]
+    return centroids_sampler[inverse_perm], flux_sampler[inverse_perm], perturbed_motor_positions
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +210,7 @@ def _generate_split(
         if active_mask.sum() == 0:
             continue
 
-        centroids, flux = _forward_pass_chunked(
+        centroids, flux, perturbed_motor_pos = _forward_pass_chunked(
             scenario, heliostat_group, incident_rays, active_mask, target_mask, device,
         )
 
@@ -228,7 +233,9 @@ def _generate_split(
                     "target_area_index":      int(target_mask[i].item()),
                     "incident_ray_direction": incident_rays[i].tolist(),
                     "focal_spot_enu":         centroids[i].tolist(),
-                    "motor_position":         motor_pos[i].tolist(),
+                    # Motor positions from the PERTURBED model (not real PAINT values).
+                    # Stage-1 AlignmentLoss must match these, not real-measurement positions.
+                    "motor_position":         perturbed_motor_pos[i].tolist(),
                 }
                 with open(meas_dir / "calibration_properties.json", "w") as fh:
                     json.dump(cal, fh, indent=2)
@@ -247,7 +254,7 @@ def _generate_split(
 
         total_saved += chunk_saved
 
-        del centroids, flux, incident_rays, active_mask, target_mask, motor_pos
+        del centroids, flux, perturbed_motor_pos, incident_rays, active_mask, target_mask, motor_pos
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
