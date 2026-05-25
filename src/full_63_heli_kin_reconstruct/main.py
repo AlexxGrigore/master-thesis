@@ -177,7 +177,7 @@ def main() -> None:
         cfg.IS_ON_DAIC = True
         cfg.BASE_DIR   = pathlib.Path("/home/nfs/agrigore/projects/githubProjects/master-thesis")
         cfg.PAINT_DIR  = pathlib.Path("/tudelft.net/staff-umbrella/StudentsCVlab/agrigore/datasets/paint")
-        cfg.SCENARIO_PATH              = cfg.BASE_DIR / "scenarios" / "full_field_200_samples_scenario" / "scenario.h5"
+        cfg.SCENARIO_PATH              = cfg.BASE_DIR / "scenarios" / "full_63_heli_kin_reconstruct" / "scenario.h5"
         cfg.SYNTHETIC_DATA_DIR         = cfg.BASE_DIR / "scenarios" / "full_63_heli_kin_reconstruct" / "synthetic_data"
         cfg.BENCHMARK_CSV              = cfg.PAINT_DIR / "splits" / f"{cfg.BENCHMARK_NAME}.csv"
         cfg.CALIBRATION_PROPERTIES_DIR = cfg.PAINT_DIR / cfg.BENCHMARK_NAME / "calibration_properties"

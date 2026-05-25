@@ -23,7 +23,7 @@ PAINT_DIR = pathlib.Path("/tudelft.net/staff-umbrella/StudentsCVlab/agrigore/dat
 SIF_PATH  = pathlib.Path("/tudelft.net/staff-umbrella/StudentsCVlab/agrigore/artist-local.sif")
 
 BENCHMARK_NAME             = "benchmark_split-balanced_train-100_validation-50_deflectometry"
-SCENARIO_PATH              = BASE_DIR / "scenarios" / "full_field_200_samples_scenario" / "scenario.h5"
+SCENARIO_PATH              = BASE_DIR / "scenarios" / "full_63_heli_kin_reconstruct" / "scenario.h5"
 SYNTHETIC_DATA_DIR         = BASE_DIR / "scenarios" / "full_63_heli_kin_reconstruct" / "synthetic_data"
 BENCHMARK_CSV              = PAINT_DIR / "splits" / f"{BENCHMARK_NAME}.csv"
 CALIBRATION_PROPERTIES_DIR = PAINT_DIR / BENCHMARK_NAME / "calibration_properties"

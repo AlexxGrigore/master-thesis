@@ -26,8 +26,7 @@ else:
     BASE_DIR  = pathlib.Path(__file__).resolve().parents[2]
     PAINT_DIR = BASE_DIR / "datasets" / "paint"
 
-# Reuse the existing 63-heliostat scenario (no need to recreate it).
-SCENARIO_PATH              = BASE_DIR / "scenarios" / "full_field_200_samples_scenario" / "scenario.h5"
+SCENARIO_PATH              = BASE_DIR / "scenarios" / "full_63_heli_kin_reconstruct" / "scenario.h5"
 BENCHMARK_CSV              = PAINT_DIR / "splits" / f"{BENCHMARK_NAME}.csv"
 CALIBRATION_PROPERTIES_DIR = PAINT_DIR / BENCHMARK_NAME / "calibration_properties"
 FLUX_IMAGE_DIR             = PAINT_DIR / BENCHMARK_NAME / "flux_image"
