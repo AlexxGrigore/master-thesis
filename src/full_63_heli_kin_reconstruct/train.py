@@ -44,7 +44,12 @@ from artist_extensions.kinematic_reconstructors import (
 )
 from artist_extensions.loss_functions_ext import AlignmentLoss, ContourLoss
 from utils.evaluation import evaluate_flux_accuracy, _gaussian_blur_batch
-from reporting import plot_flux_grid
+from reporting import (
+    plot_flux_grid,
+    plot_contour_overlay,
+    plot_pipeline_steps,
+    plot_all_heliostats_flux_grid,
+)
 
 log = logging.getLogger(__name__)
 
@@ -256,7 +261,7 @@ def run(
         f"pixel_loss={post_train_eval['mean_pixel_loss']:.4f}"
     )
 
-    _save_flux_grids(
+    hel_data = _save_flux_grids(
         scenario=scenario,
         test_parser=test_parser,
         test_mapping=test_mapping,
@@ -264,6 +269,13 @@ def run(
         output_dir=output_dir,
         dataset_type=dataset_type,
     )
+
+    if loss_type == "contour" and hel_data:
+        _save_contour_diagnostics(
+            hel_data=hel_data,
+            output_dir=output_dir,
+            contour_params=contour_params,
+        )
 
     # Post-training val eval — needed for the summary table.
     log.info("Post-training val eval …")
@@ -499,21 +511,24 @@ def _save_flux_grids(scenario, test_parser, test_mapping, device, output_dir, da
                 mean_mrad = float("nan")
 
             hel_data[hid] = {
-                "measured":  meas_imgs,
-                "predicted": pred_imgs,
-                "mean_mrad": mean_mrad,
+                "measured":         meas_imgs,
+                "predicted":        pred_imgs,
+                "mean_mrad":        mean_mrad,
+                # Raw tensors kept for contour overlay / pipeline plots.
+                "measured_tensors":  [meas_slice[k].unsqueeze(0) for k in range(n)],
+                "predicted_tensors": [pred_slice[k].unsqueeze(0) for k in range(n)],
             }
             offset += n
 
     if not hel_data:
         log.warning("No heliostat data collected — skipping flux grids.")
-        return
+        return {}
 
     # Identify best (lowest mrad) and worst (highest mrad), ignoring NaN.
     valid = {h: d["mean_mrad"] for h, d in hel_data.items() if np.isfinite(d["mean_mrad"])}
     if not valid:
         log.warning("All mrad values are NaN — skipping flux grids.")
-        return
+        return hel_data
 
     best_hid  = min(valid, key=valid.get)
     worst_hid = max(valid, key=valid.get)
@@ -531,6 +546,59 @@ def _save_flux_grids(scenario, test_parser, test_mapping, device, output_dir, da
             role=role,
             output_dir=output_dir,
         )
+
+    return hel_data
+
+
+# ---------------------------------------------------------------------------
+# Contour-specific diagnostics
+# ---------------------------------------------------------------------------
+
+def _save_contour_diagnostics(
+    hel_data: dict,
+    output_dir,
+    contour_params: dict | None = None,
+) -> None:
+    """Save contour overlay, pipeline steps, and per-heliostat flux grids."""
+    valid = {h: d["mean_mrad"] for h, d in hel_data.items() if np.isfinite(d["mean_mrad"])}
+    if not valid:
+        log.warning("No valid mrad values — skipping contour diagnostics.")
+        return
+
+    best_hid  = min(valid, key=valid.get)
+    worst_hid = max(valid, key=valid.get)
+
+    for role, hid in [("best", best_hid), ("worst", worst_hid)]:
+        d = hel_data[hid]
+        m_tensors = d.get("measured_tensors", [])
+        p_tensors = d.get("predicted_tensors", [])
+        if not m_tensors or not p_tensors:
+            continue
+
+        plot_contour_overlay(
+            measured_tensors=m_tensors,
+            predicted_tensors=p_tensors,
+            heliostat_id=hid,
+            mean_mrad=d["mean_mrad"],
+            role=role,
+            output_dir=output_dir,
+            contour_params=contour_params,
+        )
+        log.info(f"Contour overlay saved: {role} heliostat {hid}")
+
+        plot_pipeline_steps(
+            measured_tensor=m_tensors[0],
+            predicted_tensor=p_tensors[0],
+            heliostat_id=hid,
+            mean_mrad=d["mean_mrad"],
+            role=role,
+            output_dir=output_dir,
+            contour_params=contour_params,
+        )
+        log.info(f"Pipeline steps saved: {role} heliostat {hid}")
+
+    plot_all_heliostats_flux_grid(hel_data=hel_data, output_dir=output_dir)
+    log.info(f"Per-heliostat flux grids saved → {output_dir / 'flux_grids_all'}")
 
 
 # ---------------------------------------------------------------------------

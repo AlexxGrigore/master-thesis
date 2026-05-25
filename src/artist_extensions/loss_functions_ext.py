@@ -110,6 +110,10 @@ class ContourLoss:
         self.weight_coarse          = weight_coarse
         self.weight_gravity         = weight_gravity
         self.weight_fine            = 1.0 - weight_coarse - weight_gravity
+        # Cache: hash(binary_gt[i].tobytes()) -> float32 distance-transform array.
+        # GT images are fixed across epochs, so the cache fills in epoch 1 and
+        # gives 100% hits from epoch 2 onward, eliminating the per-epoch CPU cost.
+        self._dt_cache: dict[int, np.ndarray] = {}
 
     def __call__(
         self,
@@ -216,11 +220,15 @@ class ContourLoss:
         # distance_transform_edt: each non-zero pixel → distance to nearest zero pixel.
         # Passing ~binary_gt gives each non-contour pixel its distance to the nearest
         # contour pixel; contour pixels themselves get 0.
-        d_gt = np.stack([
-            distance_transform_edt(~binary_gt[i]).astype(np.float32)
-            for i in range(N)
-        ], axis=0)
-        d_gt_t = torch.from_numpy(d_gt).to(device=c_pred.device, dtype=c_pred.dtype)
+        d_gt_arrays = []
+        for i in range(N):
+            key = hash(binary_gt[i].tobytes())
+            if key not in self._dt_cache:
+                self._dt_cache[key] = distance_transform_edt(~binary_gt[i]).astype(np.float32)
+            d_gt_arrays.append(self._dt_cache[key])
+        d_gt_t = torch.from_numpy(np.stack(d_gt_arrays, axis=0)).to(
+            device=c_pred.device, dtype=c_pred.dtype
+        )
         return (c_pred * d_gt_t).sum(dim=(-2, -1))
 
     def _fine_loss(self, c_pred: torch.Tensor, c_gt: torch.Tensor) -> torch.Tensor:
@@ -246,3 +254,69 @@ class ContourLoss:
 
         # Detach GT: we only backpropagate through the predicted side.
         return torch.norm(_com(c_pred) - _com(c_gt).detach(), dim=-1)
+
+    # ------------------------------------------------------------------
+    # Component-aware forward (for logging)
+    # ------------------------------------------------------------------
+
+    def forward_with_components(
+        self,
+        prediction: torch.Tensor,
+        ground_truth: torch.Tensor,
+        target_area_indices=None,
+        reduction_dimensions=None,
+        device: torch.device | None = None,
+    ) -> tuple[torch.Tensor, float, float, float]:
+        """Like __call__ but also returns unweighted per-term means for logging.
+
+        Returns
+        -------
+        total : torch.Tensor, shape [N]  — weighted sum (same as __call__)
+        mean_coarse : float              — unweighted coarse term mean over N
+        mean_fine   : float              — unweighted fine term mean over N
+        mean_gravity: float              — unweighted gravity term mean over N
+        """
+        if device is not None:
+            ground_truth = ground_truth.to(device)
+        c_pred = self._to_contour(prediction)
+        c_gt   = self._to_contour(ground_truth)
+        coarse  = self._coarse_loss(c_pred, c_gt)
+        fine    = self._fine_loss(c_pred, c_gt)
+        gravity = self._gravity_loss(c_pred, c_gt)
+        total   = self.weight_coarse * coarse + self.weight_fine * fine + self.weight_gravity * gravity
+        return (
+            total,
+            coarse.detach().mean().item(),
+            fine.detach().mean().item(),
+            gravity.detach().mean().item(),
+        )
+
+    # ------------------------------------------------------------------
+    # Pipeline introspection (for step-by-step visualization)
+    # ------------------------------------------------------------------
+
+    @torch.no_grad()
+    def get_intermediate_steps(
+        self, x: torch.Tensor
+    ) -> list[tuple[str, np.ndarray]]:
+        """Run the contour pipeline on a single image and return each intermediate.
+
+        Parameters
+        ----------
+        x : torch.Tensor, shape [1, H, W]  — one flux image (batch dim required)
+
+        Returns
+        -------
+        list of (step_name, H×W float32 numpy array) in pipeline order:
+            Raw, Normalized, Smoothed, Thresholded, Eroded, Contour
+        """
+        def _np(t: torch.Tensor) -> np.ndarray:
+            return t[0].cpu().float().numpy()
+
+        steps = [("Raw", _np(x))]
+        x = self._normalize(x);    steps.append(("Normalized",  _np(x)))
+        x = self._smooth(x);       steps.append(("Smoothed",    _np(x)))
+        x = self._soft_threshold(x); steps.append(("Thresholded", _np(x)))
+        x = self._soft_erosion(x); steps.append(("Eroded",      _np(x)))
+        x = self._sobel_upper_edge(x); steps.append(("Contour",  _np(x)))
+        return steps

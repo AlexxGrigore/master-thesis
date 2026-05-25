@@ -48,7 +48,7 @@ TEST_SAMPLES  = 50
 
 SYNTH_GEN_RAYS           = 100   # high ray count → clean centroids
 TRAIN_RAYS               = 10
-SURFACE_POINTS_PER_FACET = 25    # 25×25 = 625 pts/facet
+SURFACE_POINTS_PER_FACET = 50    # 50×50 = 2500 pts/facet
 
 # ---------------------------------------------------------------------------
 # Perturbation

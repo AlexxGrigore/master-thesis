@@ -51,6 +51,7 @@ from utils.synth_reporting import (
 from artist.io.paint_calibration_parser import PaintCalibrationDataParser
 from reporting import (
     plot_field_accuracy_map,
+    plot_contour_loss_components,
     render_summary_table,
 )
 
@@ -120,6 +121,9 @@ def _run_reporting(results: dict, perturbations_json: dict | None, heliostat_ids
             loss_label=loss_label,
             filename="convergence_stage2.png",
         )
+        if results.get("loss_type") == "contour":
+            plot_contour_loss_components(stage2_history, output_dir, split="train")
+            plot_contour_loss_components(stage2_history, output_dir, split="val")
 
     plot_per_heliostat_accuracy_table(results, heliostat_ids, output_dir)
     with open(output_dir / "per_heliostat_accuracy.json") as _f:

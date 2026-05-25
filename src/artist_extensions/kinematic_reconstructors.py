@@ -883,3 +883,99 @@ class WortbergContourReconstructor(WortbergKinematicReconstructor):
     def _get_ground_truth_and_reduction_dims(self, measured_flux, focal_spots):
         """Use raw flux images as ground truth (same as WortbergPixelReconstructor)."""
         return measured_flux, (indices.batched_bitmap_e, indices.batched_bitmap_u)
+
+    def _compute_epoch_loss(
+        self, epoch, flux, measured_flux, focal_spots, sample_indices,
+        target_indices, loss_fn, ground_truth, reduction_dims,
+        n_samples_per_heliostat, device,
+    ) -> torch.Tensor:
+        """Call forward_with_components and accumulate per-term means for logging."""
+        from artist.optim import mean_loss_per_heliostat as _mlph
+        total, coarse, fine, gravity = loss_fn.forward_with_components(
+            prediction=flux,
+            ground_truth=ground_truth[sample_indices],
+            target_area_indices=target_indices[sample_indices],
+            reduction_dimensions=reduction_dims,
+            device=device,
+        )
+        lph = _mlph(total, n_samples_per_heliostat)
+
+        # Reset accumulators when a new epoch starts (called once per mini-batch).
+        if epoch != getattr(self, "_comp_epoch", -1):
+            self._comp_epoch = epoch
+            self._comp_sum   = [0.0, 0.0, 0.0]
+            self._comp_count = 0
+        self._comp_sum[0] += coarse
+        self._comp_sum[1] += fine
+        self._comp_sum[2] += gravity
+        self._comp_count  += 1
+
+        return lph
+
+    def _log_epoch(self, rank, epoch, loss, eval_loss, optimizer, kinematic,
+                   group_idx, init_angle, init_offset):
+        """Extend the base history entry with per-component loss values."""
+        super()._log_epoch(rank, epoch, loss, eval_loss, optimizer, kinematic,
+                           group_idx, init_angle, init_offset)
+        entry = self._convergence_history[-1]
+        n = self._comp_count or 1
+        entry["loss_coarse"]  = self._comp_sum[0] / n
+        entry["loss_fine"]    = self._comp_sum[1] / n
+        entry["loss_gravity"] = self._comp_sum[2] / n
+        # Attach eval components if they were computed this epoch.
+        if hasattr(self, "_last_eval_components") and self._last_eval_components is not None:
+            ec = self._last_eval_components
+            entry["eval_loss_coarse"]  = ec[0]
+            entry["eval_loss_fine"]    = ec[1]
+            entry["eval_loss_gravity"] = ec[2]
+            self._last_eval_components = None  # consume
+
+    @torch.no_grad()
+    def _eval_loss_from_cache(self, cache, group, loss_fn, device) -> float | None:
+        """Eval loss with per-component breakdown stored for _log_epoch to pick up."""
+        if cache is None:
+            return None
+        measured_flux, focal_spots, ray_dirs, active_mask, target_mask = cache
+        opt = self.optimizer_dict
+
+        group.activate_heliostats(active_heliostats_mask=active_mask, device=device)
+        kinematic = group.kinematics
+        self._inject_base_position(kinematic, active_mask, device)
+
+        group.align_surfaces_with_incident_ray_directions(
+            aim_points=self.scenario.solar_tower.get_centers_of_target_areas(target_mask, device),
+            incident_ray_directions=ray_dirs,
+            active_heliostats_mask=active_mask,
+            device=device,
+        )
+        ray_tracer = HeliostatRayTracer(
+            scenario=self.scenario,
+            heliostat_group=group,
+            blocking_active=False,
+            world_size=self.ddp_setup[constants.heliostat_group_world_size],
+            rank=self.ddp_setup[constants.heliostat_group_rank],
+            batch_size=opt[constants.batch_size],
+            random_seed=self.ddp_setup[constants.heliostat_group_rank],
+            bitmap_resolution=self.bitmap_resolution,
+        )
+        flux, _, _, _ = ray_tracer.trace_rays(
+            incident_ray_directions=ray_dirs,
+            active_heliostats_mask=active_mask,
+            target_area_indices=target_mask,
+            device=device,
+        )
+        sample_idx = ray_tracer.get_sampler_indices()
+        n = int(active_mask.sum() / (active_mask > 0).sum())
+
+        gt, rdims = self._get_ground_truth_and_reduction_dims(measured_flux, focal_spots)
+        total, coarse, fine, gravity = loss_fn.forward_with_components(
+            prediction=flux,
+            ground_truth=gt[sample_idx],
+            target_area_indices=target_mask[sample_idx],
+            reduction_dimensions=rdims,
+            device=device,
+        )
+        from artist.optim import mean_loss_per_heliostat as _mlph
+        scalar = _mlph(total, n).mean().item()
+        self._last_eval_components = (coarse, fine, gravity)
+        return scalar
