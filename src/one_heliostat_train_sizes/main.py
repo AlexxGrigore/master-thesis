@@ -205,6 +205,10 @@ def main() -> None:
         help="Run 5 epochs / 1 train ray on first 2 sizes only — quick end-to-end check.",
     )
     parser.add_argument("--daic", action="store_true", help="Use DAIC cluster paths.")
+    parser.add_argument(
+        "--no-deflectometry", dest="ideal_scenario", action="store_true",
+        help="Train using ideal (flat) scenarios instead of deflectometry-fitted ones.",
+    )
     args = parser.parse_args()
 
     if args.daic:
@@ -217,16 +221,23 @@ def main() -> None:
         cfg.CALIBRATION_PROPERTIES_DIR  = cfg.PAINT_DIR / cfg.BENCHMARK_NAME / "calibration_properties"
         cfg.FLUX_IMAGE_DIR              = cfg.PAINT_DIR / cfg.BENCHMARK_NAME / "flux_image"
 
+    scenario_label = "ideal" if args.ideal_scenario else "deflectometry"
+    scenarios_root = (
+        cfg.ONE_HELIOSTAT_SCENARIOS_DIR / "ideal"
+        if args.ideal_scenario
+        else cfg.ONE_HELIOSTAT_SCENARIOS_DIR
+    )
+
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     if args.output_dir:
         run_dir = args.output_dir
     elif cfg.IS_ON_DAIC:
-        run_dir = cfg.BASE_DIR / "outputs" / f"one_hel_train_sizes_{timestamp}"
+        run_dir = cfg.BASE_DIR / "outputs" / f"one_hel_train_sizes_{scenario_label}_{timestamp}"
     else:
         if args.smoke_test:
             run_dir = cfg.BASE_DIR / "outputs" / "local_runs" / "smoke_tests" / f"one_hel_{timestamp}"
         else:
-            run_dir = cfg.BASE_DIR / "outputs" / "local_runs" / f"one_hel_train_sizes_{timestamp}"
+            run_dir = cfg.BASE_DIR / "outputs" / "local_runs" / f"one_hel_train_sizes_{scenario_label}_{timestamp}"
 
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -252,7 +263,6 @@ def main() -> None:
     heliostat_id = args.heliostat_id or cfg.HELIOSTAT_ID
     if not heliostat_id:
         # Auto-select: first heliostat sub-directory that has a scenario.h5
-        scenarios_root = cfg.ONE_HELIOSTAT_SCENARIOS_DIR
         if scenarios_root.is_dir():
             for candidate in sorted(scenarios_root.iterdir()):
                 if (candidate / "scenario.h5").exists():
@@ -265,13 +275,14 @@ def main() -> None:
                 f"{scenarios_root}. Use --heliostat-id or set HELIOSTAT_ID in config.py."
             )
             sys.exit(1)
-    log.info(f"Heliostat: {heliostat_id}")
+    log.info(f"Heliostat: {heliostat_id}  (scenario: {scenario_label})")
 
-    scenario_path = cfg.ONE_HELIOSTAT_SCENARIOS_DIR / heliostat_id / "scenario.h5"
+    scenario_path = scenarios_root / heliostat_id / "scenario.h5"
     if not scenario_path.exists():
+        flag = " --no-deflectometry" if args.ideal_scenario else ""
         log.error(
             f"Scenario not found for {heliostat_id}: {scenario_path}\n"
-            f"Run: python one_heliostat_train_sizes/create_scenarios.py --heliostat-ids {heliostat_id}"
+            f"Run: python one_heliostat_train_sizes/create_scenarios.py --heliostat-ids {heliostat_id}{flag}"
         )
         sys.exit(1)
     log.info(f"Scenario: {scenario_path}")
@@ -356,6 +367,7 @@ def main() -> None:
         "smoke_test":               args.smoke_test,
         "output_dir":               str(run_dir),
         "pipeline":                 "corrected",
+        "scenario_label":           scenario_label,
     }
     with open(run_dir / "config.json", "w") as f:
         json.dump(_config_snapshot, f, indent=2)

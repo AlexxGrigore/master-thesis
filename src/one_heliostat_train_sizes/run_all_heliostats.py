@@ -50,6 +50,10 @@ def main() -> None:
         action="store_true",
         help="Pass --smoke-test to each main.py call (quick end-to-end check).",
     )
+    parser.add_argument(
+        "--no-deflectometry", dest="ideal_scenario", action="store_true",
+        help="Train using ideal (flat) scenarios instead of deflectometry-fitted ones.",
+    )
     args = parser.parse_args()
 
     if args.output_parent is None:
@@ -77,6 +81,8 @@ def main() -> None:
             cmd.append("--daic")
         if args.smoke_test:
             cmd.append("--smoke-test")
+        if args.ideal_scenario:
+            cmd.append("--no-deflectometry")
 
         print(f"\n{'='*60}")
         print(f"  Running heliostat {hid}  →  {out_dir}")

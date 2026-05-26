@@ -2,14 +2,17 @@
 Create one single-heliostat scenario HDF5 per target heliostat.
 
 Builds each scenario from scratch using ARTIST's paint_scenario_parser:
-tower geometry, light source, and deflectometry-fitted NURBS surface.
+tower geometry, light source, and either deflectometry-fitted or ideal (flat) NURBS surface.
 
-Output: scenarios/one_heliostat_scenarios/<ID>/scenario.h5
+Output:
+    scenarios/one_heliostat_scenarios/deflectometry/<ID>/scenario.h5  (default)
+    scenarios/one_heliostat_scenarios/ideal/<ID>/scenario.h5           (--no-deflectometry)
 
 Usage
 -----
     cd src
     python one_heliostat_train_sizes/create_scenarios.py
+    python one_heliostat_train_sizes/create_scenarios.py --no-deflectometry
     python one_heliostat_train_sizes/create_scenarios.py --daic
     python one_heliostat_train_sizes/create_scenarios.py --heliostat-ids AC36 BE35
     python one_heliostat_train_sizes/create_scenarios.py --force
@@ -57,16 +60,22 @@ def create_scenario(
     tower_file: pathlib.Path,
     out_path: pathlib.Path,
     device: torch.device,
+    with_deflectometry: bool = True,
 ) -> None:
     props = heliostats_dir / hid / "Properties" / f"{hid}-heliostat-properties.json"
-    defl  = _find_deflectometry(hid, heliostats_dir)
 
     if not props.exists():
         sys.exit(f"Properties file missing for {hid}: {props}")
 
+    surface_label = "deflectometry" if with_deflectometry else "ideal"
     print(f"\n  Heliostat    : {hid}")
+    print(f"  Surface      : {surface_label}")
     print(f"  Properties   : {props}")
-    print(f"  Deflectometry: {defl}")
+
+    if with_deflectometry:
+        defl = _find_deflectometry(hid, heliostats_dir)
+        print(f"  Deflectometry: {defl}")
+
     print(f"  Output       : {out_path}")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,32 +99,41 @@ def create_scenario(
         ]
     )
 
-    nurbs_fit_optimizer = torch.optim.Adam(
-        [torch.empty(1, requires_grad=True)], lr=1e-3
-    )
-    nurbs_fit_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        nurbs_fit_optimizer,
-        mode="min",
-        factor=0.2,
-        patience=50,
-        threshold=1e-7,
-        threshold_mode="abs",
-    )
-
-    heliostat_list_config, prototype_config = (
-        paint_scenario_parser.extract_paint_heliostats_fitted_surface(
-            paths=[(hid, props, defl)],
-            power_plant_position=power_plant_config.power_plant_position,
-            number_of_nurbs_control_points=NUMBER_OF_NURBS_CONTROL_POINTS,
-            deflectometry_step_size=NURBS_DEFLECTOMETRY_STEP_SIZE,
-            nurbs_fit_method=NURBS_FIT_METHOD,
-            nurbs_fit_tolerance=NURBS_FIT_TOLERANCE,
-            nurbs_fit_max_epoch=NURBS_FIT_MAX_EPOCH,
-            nurbs_fit_optimizer=nurbs_fit_optimizer,
-            nurbs_fit_scheduler=nurbs_fit_scheduler,
-            device=device,
+    if with_deflectometry:
+        nurbs_fit_optimizer = torch.optim.Adam(
+            [torch.empty(1, requires_grad=True)], lr=1e-3
         )
-    )
+        nurbs_fit_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            nurbs_fit_optimizer,
+            mode="min",
+            factor=0.2,
+            patience=50,
+            threshold=1e-7,
+            threshold_mode="abs",
+        )
+        heliostat_list_config, prototype_config = (
+            paint_scenario_parser.extract_paint_heliostats_fitted_surface(
+                paths=[(hid, props, defl)],
+                power_plant_position=power_plant_config.power_plant_position,
+                number_of_nurbs_control_points=NUMBER_OF_NURBS_CONTROL_POINTS,
+                deflectometry_step_size=NURBS_DEFLECTOMETRY_STEP_SIZE,
+                nurbs_fit_method=NURBS_FIT_METHOD,
+                nurbs_fit_tolerance=NURBS_FIT_TOLERANCE,
+                nurbs_fit_max_epoch=NURBS_FIT_MAX_EPOCH,
+                nurbs_fit_optimizer=nurbs_fit_optimizer,
+                nurbs_fit_scheduler=nurbs_fit_scheduler,
+                device=device,
+            )
+        )
+    else:
+        heliostat_list_config, prototype_config = (
+            paint_scenario_parser.extract_paint_heliostats_ideal_surface(
+                paths=[(hid, props)],
+                power_plant_position=power_plant_config.power_plant_position,
+                number_of_nurbs_control_points=NUMBER_OF_NURBS_CONTROL_POINTS,
+                device=device,
+            )
+        )
 
     H5ScenarioGenerator(
         file_path=out_path,
@@ -136,7 +154,7 @@ def main() -> None:
     torch.cuda.manual_seed(7)
 
     parser = argparse.ArgumentParser(
-        description="Create per-heliostat scenario HDF5 files from PAINT deflectometry data."
+        description="Create per-heliostat scenario HDF5 files from PAINT data."
     )
     parser.add_argument("--daic", action="store_true", help="Use DAIC cluster paths.")
     parser.add_argument(
@@ -144,22 +162,29 @@ def main() -> None:
         help=f"Heliostat IDs to create scenarios for (default: {DEFAULT_HELIOSTATS}).",
     )
     parser.add_argument("--force", action="store_true", help="Overwrite existing files.")
+    parser.add_argument(
+        "--no-deflectometry", dest="with_deflectometry", action="store_false",
+        help="Use ideal (flat) surfaces instead of deflectometry-fitted NURBS.",
+    )
+    parser.set_defaults(with_deflectometry=True)
     args = parser.parse_args()
 
     if args.daic:
         cfg.IS_ON_DAIC = True
         cfg.BASE_DIR   = pathlib.Path("/home/nfs/agrigore/projects/githubProjects/master-thesis")
 
-    artist_dir       = cfg.BASE_DIR.parent / "ARTIST"
-    tower_file       = artist_dir / "tutorials" / "data" / "paint" / "tower-measurements.json"
-    heliostats_dir   = cfg.BASE_DIR / "datasets" / "paint" / "heliostats"
-    out_dir          = cfg.ONE_HELIOSTAT_SCENARIOS_DIR
+    artist_dir     = cfg.BASE_DIR.parent / "ARTIST"
+    tower_file     = artist_dir / "tutorials" / "data" / "paint" / "tower-measurements.json"
+    heliostats_dir = cfg.BASE_DIR / "datasets" / "paint" / "heliostats"
+    surface_label  = "deflectometry" if args.with_deflectometry else "ideal"
+    out_dir        = cfg.ONE_HELIOSTAT_SCENARIOS_DIR / surface_label
 
     if not tower_file.exists():
         sys.exit(f"tower-measurements.json not found: {tower_file}")
     if not heliostats_dir.exists():
         sys.exit(f"PAINT heliostats directory not found: {heliostats_dir}")
 
+    print(f"Surface type     : {surface_label}")
     print(f"Tower file       : {tower_file}")
     print(f"Heliostats dir   : {heliostats_dir}")
     print(f"Output directory : {out_dir}")
@@ -171,7 +196,7 @@ def main() -> None:
         if out_path.exists() and not args.force:
             print(f"\n  [SKIP] {hid} — already exists (use --force to overwrite)")
             continue
-        create_scenario(hid, heliostats_dir, tower_file, out_path, device)
+        create_scenario(hid, heliostats_dir, tower_file, out_path, device, args.with_deflectometry)
 
     print("\nAll done.")
 

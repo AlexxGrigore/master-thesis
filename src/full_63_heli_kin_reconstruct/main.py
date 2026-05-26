@@ -164,6 +164,10 @@ def main() -> None:
     parser.add_argument("--daic", action="store_true")
     parser.add_argument("--smoke-test", action="store_true",
                         help="Run 5 epochs with 1 train ray for a quick end-to-end check.")
+    parser.add_argument(
+        "--no-deflectometry", dest="ideal_scenario", action="store_true",
+        help="Train using the ideal (flat) scenario instead of the deflectometry one.",
+    )
     args = parser.parse_args()
 
     if args.loss_type is not None:
@@ -183,17 +187,21 @@ def main() -> None:
         cfg.CALIBRATION_PROPERTIES_DIR = cfg.PAINT_DIR / cfg.BENCHMARK_NAME / "calibration_properties"
         cfg.FLUX_IMAGE_DIR             = cfg.PAINT_DIR / cfg.BENCHMARK_NAME / "flux_image"
 
+    if args.ideal_scenario:
+        cfg.SCENARIO_PATH = cfg.BASE_DIR / "scenarios" / "full_63_heli_kin_reconstruct" / "scenario_ideal.h5"
+
+    scenario_label = "ideal" if args.ideal_scenario else "deflectometry"
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     dataset_type = args.dataset_type
     if args.output_dir:
         run_dir = args.output_dir
     elif cfg.IS_ON_DAIC:
-        run_dir = cfg.BASE_DIR / "outputs" / f"full_63_{dataset_type}_{cfg.LOSS_TYPE}_{timestamp}"
+        run_dir = cfg.BASE_DIR / "outputs" / f"full_63_{dataset_type}_{cfg.LOSS_TYPE}_{scenario_label}_{timestamp}"
     else:
         if args.smoke_test:
             run_dir = cfg.BASE_DIR / "outputs" / "local_runs" / "smoke_tests" / f"full_63_{timestamp}"
         else:
-            run_dir = cfg.BASE_DIR / "outputs" / "local_runs" / f"full_63_{dataset_type}_{cfg.LOSS_TYPE}_{timestamp}"
+            run_dir = cfg.BASE_DIR / "outputs" / "local_runs" / f"full_63_{dataset_type}_{cfg.LOSS_TYPE}_{scenario_label}_{timestamp}"
 
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -218,6 +226,7 @@ def main() -> None:
         "smoke_test":               args.smoke_test,
         "output_dir":               str(run_dir),
         "pipeline":                 "corrected",
+        "scenario_label":           scenario_label,
     }
     with open(run_dir / "config.json", "w") as f:
         json.dump(_config_snapshot, f, indent=2)
