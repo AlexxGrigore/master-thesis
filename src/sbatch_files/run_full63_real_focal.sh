@@ -2,7 +2,7 @@
 #SBATCH --job-name=f63_real_focal
 #SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/f63_real_focal_out_%j.log
 #SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/f63_real_focal_err_%j.log
-#SBATCH --time=00:45:00
+#SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:a40:1

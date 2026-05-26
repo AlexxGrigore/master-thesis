@@ -2,7 +2,7 @@
 #SBATCH --job-name=f63_real_contour
 #SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/f63_real_contour_out_%j.log
 #SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/f63_real_contour_err_%j.log
-#SBATCH --time=01:30:00
+#SBATCH --time=02:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:a40:1
@@ -18,5 +18,5 @@ apptainer exec --nv \
         --daic \
         --dataset-type real \
         --loss-type contour \
-        --stage1-epochs 50 \
-        --stage2-epochs 250
+        --stage1-epochs 20 \
+        --stage2-epochs 200
