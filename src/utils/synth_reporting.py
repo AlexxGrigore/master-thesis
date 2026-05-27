@@ -253,6 +253,23 @@ def plot_per_heliostat_accuracy_histogram(rows: list[dict], output_dir: pathlib.
     print(f"Saved per-heliostat accuracy histogram to {out_path}")
 
 
+def _ph_mean_median(section: dict) -> tuple[float, float]:
+    """Return (mean, median) of per-heliostat focal-spot errors from an eval section."""
+    ph = section.get("per_heliostat", {})
+    vals = [
+        v.get("focal_spot_error_mrad")
+        for v in ph.values()
+        if isinstance(v, dict) and v.get("focal_spot_error_mrad") is not None
+    ]
+    if not vals:
+        return float("nan"), float("nan")
+    arr = np.array(vals, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if len(arr) == 0:
+        return float("nan"), float("nan")
+    return float(np.mean(arr)), float(np.median(arr))
+
+
 def write_summary(results: dict, perturbations_json: dict, output_dir: pathlib.Path) -> None:
     with open(output_dir / "summary.json", "w") as f:
         json.dump({"results": results, "perturbations": perturbations_json}, f, indent=2)
@@ -261,15 +278,19 @@ def write_summary(results: dict, perturbations_json: dict, output_dir: pathlib.P
     trn  = results.get("post_training", {})
     pre  = results.get("pre_training",  {})
 
-    W = 70
+    trn_ph_mean, trn_ph_median = _ph_mean_median(trn)
+
+    W = 72
     print(f"\n{'=' * W}")
-    print(f"  {'Checkpoint':<36} {'Mean (mrad)':>11}  {'Median (mrad)':>13}  n")
-    print(f"  {'-' * 36} {'-' * 11}  {'-' * 13}  -")
+    print(f"  {'Checkpoint':<36} {'Mean/hel':>9}  {'Med/hel':>9}  n")
+    print(f"  {'-' * 36} {'-' * 9}  {'-' * 9}  -")
     if pre:
-        print(f"  {'Pre-training (clean scenario)':<36} {pre.get('mean_mrad', float('nan')):>11.3f}  {pre.get('median_mrad', float('nan')):>13.3f}  {pre.get('num_samples', '?')}")
+        pre_ph_mean, pre_ph_median = _ph_mean_median(pre)
+        print(f"  {'Pre-training (clean scenario)':<36} {pre_ph_mean:>9.3f}  {pre_ph_median:>9.3f}  {pre.get('num_samples', '?')}")
     if st1:
-        print(f"  {'Post-stage1 (alignment, best-val)':<36} {st1.get('mean_mrad', float('nan')):>11.3f}  {st1.get('median_mrad', float('nan')):>13.3f}  {st1.get('num_samples', '?')}")
-    print(f"  {'Post-training (stage-2 best-val)':<36} {trn.get('mean_mrad', float('nan')):>11.3f}  {trn.get('median_mrad', float('nan')):>13.3f}  {trn.get('num_samples', '?')}")
+        st1_ph_mean, st1_ph_median = _ph_mean_median(st1)
+        print(f"  {'Post-stage1 (alignment, best-val)':<36} {st1_ph_mean:>9.3f}  {st1_ph_median:>9.3f}  {st1.get('num_samples', '?')}")
+    print(f"  {'Post-training (stage-2 best-val)':<36} {trn_ph_mean:>9.3f}  {trn_ph_median:>9.3f}  {trn.get('num_samples', '?')}")
     print(f"  Min / Max (post-training)          : {trn.get('min_mrad', float('nan')):.3f} / {trn.get('max_mrad', float('nan')):.3f} mrad")
     print(f"  Training time                      : {results.get('train_time_min', 0):.1f} min")
     if trn.get("num_nan_samples"):

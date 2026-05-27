@@ -4,17 +4,26 @@ Create one single-heliostat scenario HDF5 per target heliostat.
 Builds each scenario from scratch using ARTIST's paint_scenario_parser:
 tower geometry, light source, and either deflectometry-fitted or ideal (flat) NURBS surface.
 
-Output:
-    scenarios/one_heliostat_scenarios/deflectometry/<ID>/scenario.h5  (default)
-    scenarios/one_heliostat_scenarios/ideal/<ID>/scenario.h5           (--no-deflectometry)
+Output paths (matching the notebook's SCENARIO_PATH):
+    scenarios/one_heliostat_scenarios/<ID>/scenario.h5          (deflectometry, default)
+    scenarios/one_heliostat_scenarios/ideal/<ID>/scenario.h5    (--no-deflectometry)
 
 Usage
 -----
     cd src
+    # All 63 dataset heliostats (default):
     python one_heliostat_train_sizes/create_scenarios.py
-    python one_heliostat_train_sizes/create_scenarios.py --no-deflectometry
-    python one_heliostat_train_sizes/create_scenarios.py --daic
+
+    # Specific heliostats only:
     python one_heliostat_train_sizes/create_scenarios.py --heliostat-ids AC36 BE35
+
+    # Ideal (flat) surfaces:
+    python one_heliostat_train_sizes/create_scenarios.py --no-deflectometry
+
+    # DAIC cluster:
+    python one_heliostat_train_sizes/create_scenarios.py --daic
+
+    # Overwrite existing files:
     python one_heliostat_train_sizes/create_scenarios.py --force
 """
 import argparse
@@ -37,7 +46,33 @@ sys.path.insert(0, str(_SRC))
 
 import config as cfg
 
-DEFAULT_HELIOSTATS = ["AC36", "AG33", "AO34", "AW36", "BE35"]
+# All 63 heliostats present in the full_63_heli_kin_reconstruct synthetic dataset.
+DEFAULT_HELIOSTATS = [
+    "AA23", "AA24", "AA25", "AA49",
+    "AB26", "AB33", "AB43", "AB50",
+    "AC24", "AC25", "AC27", "AC33", "AC35", "AC36", "AC39", "AC41", "AC47", "AC48",
+    "AD39", "AD40",
+    "AE23", "AE24", "AE29", "AE30", "AE32",
+    "AF37", "AF38", "AF40", "AF44",
+    "AG25", "AG27", "AG31", "AG33",
+    "AH30",
+    "AI36",
+    "AJ37",
+    "AK29", "AK32",
+    "AM25", "AM38",
+    "AN35",
+    "AO32", "AO34",
+    "AP29", "AP43",
+    "AQ24",
+    "AW36",
+    "AX39",
+    "AY36", "AY37", "AY39", "AY42", "AY43", "AY44",
+    "AZ27", "AZ41",
+    "BA28", "BA35", "BA42",
+    "BD39",
+    "BE25", "BE35",
+    "BF39",
+]
 
 NUMBER_OF_NURBS_CONTROL_POINTS = torch.tensor([20, 20])
 NURBS_FIT_METHOD               = config_dictionary.fit_nurbs_from_normals
@@ -177,7 +212,13 @@ def main() -> None:
     tower_file     = artist_dir / "tutorials" / "data" / "paint" / "tower-measurements.json"
     heliostats_dir = cfg.BASE_DIR / "datasets" / "paint" / "heliostats"
     surface_label  = "deflectometry" if args.with_deflectometry else "ideal"
-    out_dir        = cfg.ONE_HELIOSTAT_SCENARIOS_DIR / surface_label
+    # Deflectometry scenarios go directly under ONE_HELIOSTAT_SCENARIOS_DIR/<ID>/
+    # to match the notebook's SCENARIO_PATH and the existing 5 scenarios.
+    # Ideal scenarios go under ONE_HELIOSTAT_SCENARIOS_DIR/ideal/<ID>/.
+    if args.with_deflectometry:
+        out_dir = cfg.ONE_HELIOSTAT_SCENARIOS_DIR
+    else:
+        out_dir = cfg.ONE_HELIOSTAT_SCENARIOS_DIR / "ideal"
 
     if not tower_file.exists():
         sys.exit(f"tower-measurements.json not found: {tower_file}")

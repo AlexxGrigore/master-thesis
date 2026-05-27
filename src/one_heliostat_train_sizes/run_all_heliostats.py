@@ -16,6 +16,7 @@ Usage
     python one_heliostat_train_sizes/run_all_heliostats.py --output-parent outputs/my_run
 """
 import argparse
+import datetime
 import pathlib
 import subprocess
 import sys
@@ -61,7 +62,8 @@ def main() -> None:
             base = pathlib.Path("/home/nfs/agrigore/projects/githubProjects/master-thesis")
         else:
             base = _SRC.parent
-        args.output_parent = base / "outputs" / "one_hel_train_sizes"
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        args.output_parent = base / "outputs" / f"one_hel_train_sizes_{timestamp}"
 
     args.output_parent.mkdir(parents=True, exist_ok=True)
     comparison_dir = args.output_parent / "comparison"

@@ -227,8 +227,12 @@ def render_summary_table(
     """
     Render a clean PNG table showing val + test accuracy.
 
-    Columns: Split | Mean (mrad) | Median (mrad)
+    Columns: Split | Mean/sample | Median/sample | Mean/hel | Median/hel
     Rows   : Validation, Test
+
+    The per-heliostat columns aggregate each heliostat's mean error first, then
+    take the mean/median over heliostats — matching the histogram statistics.
+    The per-sample columns are the mean/median over all individual samples.
 
     Parameters
     ----------
@@ -242,15 +246,31 @@ def render_summary_table(
         v = d.get(key)
         return f"{v:.3f}" if v is not None else "—"
 
+    def _ph_stats(d: dict | None) -> tuple[str, str]:
+        if d is None:
+            return "—", "—"
+        ph = d.get("per_heliostat", {})
+        vals = [
+            v.get("focal_spot_error_mrad")
+            for v in ph.values()
+            if isinstance(v, dict) and v.get("focal_spot_error_mrad") is not None
+        ]
+        if not vals:
+            return "—", "—"
+        arr = np.array(vals, dtype=float)
+        arr = arr[np.isfinite(arr)]
+        if len(arr) == 0:
+            return "—", "—"
+        return f"{np.mean(arr):.3f}", f"{np.median(arr):.3f}"
+
+    val_ph_mean,  val_ph_median  = _ph_stats(val_eval)
+    test_ph_mean, test_ph_median = _ph_stats(test_eval)
+
     rows = [
-        ["Validation",
-         _fmt(val_eval,  "mean_mrad"),
-         _fmt(val_eval,  "median_mrad")],
-        ["Test",
-         _fmt(test_eval, "mean_mrad"),
-         _fmt(test_eval, "median_mrad")],
+        ["Validation", val_ph_mean,  val_ph_median],
+        ["Test",       test_ph_mean, test_ph_median],
     ]
-    col_headers = ["Split", "Mean (mrad)", "Median (mrad)"]
+    col_headers = ["Split", "Mean/hel (mrad)", "Median/hel (mrad)"]
 
     fig, ax = plt.subplots(figsize=(5, 1.8))
     fig.patch.set_facecolor("white")
@@ -277,7 +297,7 @@ def render_summary_table(
             tbl[r, c].set_facecolor("#f5f5f5" if r % 2 == 0 else "white")
 
     ax.set_title(
-        "Post-training accuracy",
+        "Post-training accuracy  (mrad)",
         fontsize=11, fontweight="bold", pad=8,
     )
     fig.tight_layout()
