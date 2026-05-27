@@ -14,6 +14,7 @@ import copy
 import gc
 import json
 import logging
+import pathlib
 import time
 
 try:
@@ -27,13 +28,13 @@ except ImportError:
 
 import h5py
 import numpy as np
+from PIL import Image as _PIL_Image
 import torch
 from artist.raytracing.heliostat_ray_tracer import HeliostatRayTracer
 from artist.scenario.scenario import Scenario
 from artist.util import constants as config_dictionary, indices as index_mapping
 from artist.geometry import bitmap_coordinates_to_target_coordinates
 from artist.flux import get_center_of_mass
-
 from artist.optim.loss import FocalSpotLoss, PixelLoss
 
 from artist_extensions.kinematic_reconstructors import (
@@ -45,13 +46,388 @@ from artist_extensions.kinematic_reconstructors import (
 from artist_extensions.loss_functions_ext import AlignmentLoss, ContourLoss
 from utils.evaluation import evaluate_flux_accuracy, _gaussian_blur_batch
 from reporting import (
-    plot_flux_grid,
+    plot_gt_flux_grids,
     plot_contour_overlay,
     plot_pipeline_steps,
-    plot_all_heliostats_flux_grid,
 )
 
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# GT flux filtering + count normalisation
+# ---------------------------------------------------------------------------
+
+def _filter_flux_map(
+    mapping: list,
+    dataset_type: str,
+    min_active_pct: float,
+    synth_data_dir=None,
+    split_name: str = "",
+) -> list:
+    """Remove mapping entries whose GT flux image is too sparse.
+
+    Rejects samples where fewer than ``min_active_pct`` percent of pixels have
+    values > 0.01 (normalised [0,1]).
+
+    For real data the flux path comes directly from the mapping tuple.
+    For synthetic data the flux path is constructed from ``synth_data_dir`` and
+    ``split_name``; if ``synth_data_dir`` is None the filter is skipped.
+
+    Filtering is especially important for synthetic data: the same fixed perturbation
+    is applied to every sample of a heliostat, so perturbed heliostats that are badly
+    mis-aimed will miss the target for some sun positions, producing empty flux images
+    that must be excluded before training.
+
+    Note: ``SyntheticDatasetParser`` reads samples by sequential index (0000…N-1),
+    so removing an entry reduces the loaded sample count rather than skipping a
+    specific on-disk index.
+    """
+    if dataset_type == "synthetic" and synth_data_dir is None:
+        return mapping
+
+    synth_base = pathlib.Path(synth_data_dir) if synth_data_dir is not None else None
+
+    kept = []
+    removed = 0
+    for hid, cal_paths, flux_paths in mapping:
+        if not cal_paths:
+            kept.append((hid, cal_paths, flux_paths))
+            continue
+        ok_cal, ok_flux = [], []
+        for idx, (cal, flux) in enumerate(zip(cal_paths, flux_paths)):
+            if dataset_type == "synthetic":
+                flux_to_check = synth_base / split_name / hid / f"{idx:04d}" / "flux_image.png"
+            else:
+                flux_to_check = flux
+            try:
+                img = np.array(_PIL_Image.open(flux_to_check)).astype(np.float32) / 255.0
+                if float((img > 0.01).mean()) * 100.0 >= min_active_pct:
+                    ok_cal.append(cal)
+                    ok_flux.append(flux)
+                else:
+                    removed += 1
+            except Exception:
+                ok_cal.append(cal)
+                ok_flux.append(flux)
+        kept.append((hid, ok_cal, ok_flux))
+
+    if removed:
+        log.info(f"Flux filter removed {removed} sparse/empty samples from mapping.")
+    return kept
+
+
+def _normalize_mapping(mapping: list, seed: int = 0) -> list:
+    """Pad all heliostats to the maximum post-filter sample count by cycling.
+
+    The KR mini-batch logic requires every active heliostat to have the same
+    number of samples.  After flux filtering, counts can differ.  Rather than
+    truncating to the minimum (losing samples), this function pads short
+    heliostats up to the global maximum by cycling their existing samples in a
+    shuffled order.
+
+    For ``SyntheticDatasetParser``, the parser uses modular indexing on disk
+    (``k % n_on_disk``), so extra path entries in the mapping are handled
+    transparently.  For real data the path entries themselves are repeated.
+
+    Heliostats with zero remaining samples are dropped entirely.
+    """
+    import random as _random
+    valid = [(hid, cal, flux) for hid, cal, flux in mapping if cal]
+    if not valid:
+        return mapping
+    max_count = max(len(cal) for _, cal, _ in valid)
+    n_dropped = len(mapping) - len(valid)
+    if n_dropped:
+        log.info(f"Mapping: {n_dropped} heliostats dropped (zero samples after filtering).")
+    rng = _random.Random(seed)
+    result = []
+    for hid, cal, flux in valid:
+        n = len(cal)
+        if n < max_count:
+            shuffled = list(range(n))
+            rng.shuffle(shuffled)
+            indices = [shuffled[k % n] for k in range(max_count)]
+            cal  = [cal[i]  for i in indices]
+            flux = [flux[i] for i in indices]
+        result.append((hid, cal, flux))
+    log.info(f"Mapping normalised to {max_count} samples/heliostat (cyclic padding, seed={seed}).")
+    return result
+
+
+def _apply_threshold_exclusion(
+    train_map: list,
+    val_map: list,
+    test_map: list,
+    min_train: int = 10,
+    min_val: int   = 5,
+    min_test: int  = 5,
+) -> tuple:
+    """Remove heliostats that fall below minimum sample thresholds from all splits.
+
+    A heliostat is excluded from train, val, AND test if it fails any single
+    threshold, ensuring a consistent heliostat set across all three splits.
+    """
+    train_counts = {hid: len(cal) for hid, cal, _ in train_map}
+    val_counts   = {hid: len(cal) for hid, cal, _ in val_map}
+    test_counts  = {hid: len(cal) for hid, cal, _ in test_map}
+    all_hids     = set(train_counts) | set(val_counts) | set(test_counts)
+
+    excluded = {}
+    for hid in all_hids:
+        n_tr = train_counts.get(hid, 0)
+        n_va = val_counts.get(hid, 0)
+        n_te = test_counts.get(hid, 0)
+        if n_tr < min_train:
+            excluded[hid] = f"train={n_tr} < {min_train}"
+        elif n_va < min_val:
+            excluded[hid] = f"val={n_va} < {min_val}"
+        elif n_te < min_test:
+            excluded[hid] = f"test={n_te} < {min_test}"
+
+    if excluded:
+        for hid, reason in sorted(excluded.items()):
+            log.info(f"  Excluding {hid}: {reason}")
+        log.info(f"Threshold exclusion: {len(excluded)} heliostats removed from all splits.")
+    else:
+        log.info("Threshold exclusion: all heliostats passed thresholds.")
+
+    keep = all_hids - set(excluded)
+    train_map = [(hid, cal, flux) for hid, cal, flux in train_map if hid in keep]
+    val_map   = [(hid, cal, flux) for hid, cal, flux in val_map   if hid in keep]
+    test_map  = [(hid, cal, flux) for hid, cal, flux in test_map  if hid in keep]
+    return train_map, val_map, test_map
+
+
+# ---------------------------------------------------------------------------
+# Centroid trail capture (attached as Stage-2 epoch callback)
+# ---------------------------------------------------------------------------
+
+class _CentroidTrailRecorder:
+    """Captures predicted centroid positions at regular Stage-2 epoch intervals.
+
+    Preloads up to ``n_disp`` training samples per heliostat once at construction,
+    then runs a lightweight forward pass every ``stride`` epochs to record where
+    the predicted centroid is at that point in training.
+
+    After training call ``save_trail_plots(trail_dir)`` to write one PNG per
+    heliostat into ``trail_dir/``.
+    """
+
+    def __init__(
+        self,
+        train_parser,
+        train_mapping: list,
+        scenario,
+        device: torch.device,
+        stride: int,
+        n_disp: int,
+        bitmap_res: int = 256,
+    ) -> None:
+        self.stride      = stride
+        self.n_disp      = n_disp
+        self.scenario    = scenario
+        self.device      = device
+        self.bitmap_res  = torch.tensor([bitmap_res, bitmap_res])
+
+        # Populated in _preload: hid → dict of tensors / metadata
+        self._hid_data: dict[str, dict] = {}
+        # hid → {epoch: [[E,N,U], ...]} per captured epoch
+        self.trail_data: dict[str, dict[int, list]] = {}
+
+        self._preload(train_parser, train_mapping)
+
+    @torch.no_grad()
+    def _preload(self, parser, mapping: list) -> None:
+        """Parse training data once and keep per-heliostat subsets."""
+        for heliostat_group in self.scenario.heliostat_field.heliostat_groups:
+            try:
+                (
+                    measured_flux,
+                    focal_spots,
+                    incident_rays,
+                    _,
+                    active_mask,
+                    target_mask,
+                ) = parser.parse_data_for_reconstruction(
+                    heliostat_data_mapping=mapping,
+                    heliostat_group=heliostat_group,
+                    scenario=self.scenario,
+                    device=self.device,
+                )
+            except Exception as exc:
+                log.warning(f"CentroidTrailRecorder preload failed: {exc}")
+                return
+
+            if active_mask.sum() == 0:
+                continue
+
+            active_indices  = torch.where(active_mask.bool())[0]
+            samples_per_hel = active_mask[active_indices].long()
+
+            # Target area geometry for ENU → pixel projection.
+            planar  = self.scenario.solar_tower.target_areas[index_mapping.planar_target_areas]
+            reference_target = planar.centers[:, :3].mean(dim=0).cpu()
+
+            offset = 0
+            for j, idx in enumerate(active_indices):
+                hid    = heliostat_group.names[idx.item()]
+                n      = int(samples_per_hel[j].item())
+                n_show = min(n, self.n_disp)   # per-heliostat: counts differ after filtering
+
+                # Flux images (background for the trail plot)
+                flux_imgs = []
+                for k in range(n_show):
+                    img = measured_flux[offset + k]
+                    mx  = img.max().item()
+                    flux_imgs.append((img / max(mx, 1e-12)).cpu().numpy())
+
+                dist_m = float(torch.norm(heliostat_group.positions[idx, :3].cpu() - reference_target))
+
+                # Per-sample target area geometry (each sample can use a different area).
+                sample_area_indices = target_mask[offset: offset + n_show].cpu().tolist()
+                sample_centers = [planar.centers[int(a), :3].cpu().tolist() for a in sample_area_indices]
+                sample_dims    = [planar.dimensions[int(a)].cpu().tolist()  for a in sample_area_indices]
+
+                self._hid_data[hid] = {
+                    "flux_imgs":      flux_imgs,
+                    "gt_centroids":   focal_spots[offset: offset + n_show, :3].cpu().tolist(),
+                    "rays":           incident_rays[offset: offset + n_show].clone(),
+                    "target_mask":    target_mask[offset: offset + n_show].clone(),
+                    "area_idx":       int(target_mask[offset].item()),
+                    "target_centers": sample_centers,   # per-sample, list of [E,N,U]
+                    "target_dims_list": sample_dims,    # per-sample, list of [w,h]
+                    "dist_m":         dist_m,
+                }
+                self.trail_data[hid] = {}
+                offset += n
+
+    @torch.no_grad()
+    def __call__(self, epoch: int) -> None:
+        if epoch % self.stride != 0 or not self._hid_data:
+            return
+
+        bm_res = self.bitmap_res.to(self.device)
+
+        for heliostat_group in self.scenario.heliostat_field.heliostat_groups:
+            for hid, data in self._hid_data.items():
+                if hid not in heliostat_group.names:
+                    continue
+
+                hel_idx    = list(heliostat_group.names).index(hid)
+                rays       = data["rays"].to(self.device)
+                tgt_mask   = data["target_mask"].to(self.device)
+                n_show     = len(rays)
+
+                sub_mask = torch.zeros(
+                    len(heliostat_group.names), dtype=torch.long, device=self.device
+                )
+                sub_mask[hel_idx] = n_show
+
+                heliostat_group.activate_heliostats(
+                    active_heliostats_mask=sub_mask, device=self.device
+                )
+                kinematic = heliostat_group.kinematics
+
+                if hasattr(kinematic, "_base_position_deviation"):
+                    base_dev = kinematic._base_position_deviation.repeat_interleave(
+                        sub_mask, dim=0
+                    )
+                    pad = torch.zeros(base_dev.shape[0], 1, device=self.device)
+                    kinematic.active_heliostat_positions = (
+                        kinematic.active_heliostat_positions + torch.cat([base_dev, pad], dim=1)
+                    )
+
+                heliostat_group.align_surfaces_with_incident_ray_directions(
+                    aim_points=self.scenario.solar_tower.get_centers_of_target_areas(
+                        tgt_mask, self.device
+                    ),
+                    incident_ray_directions=rays,
+                    active_heliostats_mask=sub_mask,
+                    device=self.device,
+                )
+
+                ray_tracer = HeliostatRayTracer(
+                    scenario=self.scenario,
+                    heliostat_group=heliostat_group,
+                    blocking_active=False,
+                    batch_size=n_show,
+                    random_seed=epoch,
+                    bitmap_resolution=bm_res,
+                )
+                flux, _, _, _ = ray_tracer.trace_rays(
+                    incident_ray_directions=rays,
+                    active_heliostats_mask=sub_mask,
+                    target_area_indices=tgt_mask,
+                    device=self.device,
+                )
+                inv_perm    = torch.argsort(ray_tracer.get_sampler_indices())
+                flux_nat    = flux[inv_perm]
+                tgt_nat     = tgt_mask  # targets are in natural order
+
+                bm_coords = get_center_of_mass(bitmaps=flux_nat, device=self.device)
+                centroids  = bitmap_coordinates_to_target_coordinates(
+                    bitmap_coordinates=bm_coords,
+                    bitmap_resolution=bm_res,
+                    solar_tower=self.scenario.solar_tower,
+                    target_area_indices=tgt_nat,
+                    device=self.device,
+                )
+
+                self.trail_data[hid][epoch] = centroids[:, :3].cpu().tolist()
+
+    def has_data(self) -> bool:
+        return any(bool(v) for v in self.trail_data.values())
+
+    def compute_mean_mrad_per_epoch(self) -> dict:
+        """Return {epoch: mean_mrad} averaged over all heliostats and display samples."""
+        epoch_errs: dict[int, list] = {}
+        for hid, epoch_map in self.trail_data.items():
+            if hid not in self._hid_data:
+                continue
+            gt_list = self._hid_data[hid]["gt_centroids"]
+            dist_m  = self._hid_data[hid]["dist_m"]
+            if dist_m <= 0:
+                continue
+            for ep, pred_list in epoch_map.items():
+                if ep not in epoch_errs:
+                    epoch_errs[ep] = []
+                for gt, pred in zip(gt_list, pred_list):
+                    err_m    = float(np.sqrt(sum((p - g) ** 2 for p, g in zip(pred, gt))))
+                    epoch_errs[ep].append(err_m / dist_m * 1000.0)
+        return {ep: float(np.mean(errs)) for ep, errs in sorted(epoch_errs.items())}
+
+    def save_trail_plots(self, trail_dir) -> None:
+        import pathlib
+        from reporting import plot_centroid_trail_grids
+
+        trail_dir = pathlib.Path(trail_dir)
+        trail_dir.mkdir(parents=True, exist_ok=True)
+
+        n_saved = 0
+        for hid, epoch_map in self.trail_data.items():
+            if not epoch_map or hid not in self._hid_data:
+                continue
+            data         = self._hid_data[hid]
+            trail_epochs = sorted(epoch_map.keys())
+            trail_cents  = {ep: epoch_map[ep] for ep in trail_epochs}
+
+            plot_centroid_trail_grids(
+                trail_dir=trail_dir,
+                hid=hid,
+                flux_images=data["flux_imgs"],
+                gt_centroids_enu=data["gt_centroids"],
+                trail_epochs=trail_epochs,
+                trail_centroids_enu=trail_cents,
+                target_centers=data["target_centers"],
+                target_dims_list=data["target_dims_list"],
+                dist_m=data.get("dist_m", 1.0),
+            )
+            n_saved += 1
+
+        log.info(f"Centroid trail plots saved for {n_saved} heliostats → {trail_dir}")
+
+
+# ---------------------------------------------------------------------------
 
 _LOSS_CONFIGS: dict[str, tuple] = {
     "focal_spot": (WortbergKinematicReconstructor, lambda s: FocalSpotLoss(scenario=s)),
@@ -105,6 +481,8 @@ def run(
     stage1_epochs: int = 50,
     stage2_epochs: int = 250,
     contour_params: dict | None = None,
+    trail_stride: int = 5,
+    trail_n_disp: int = 25,
 ) -> dict:
     """
     Train on perturbed synthetic data for 63 heliostats using a two-stage approach:
@@ -149,6 +527,19 @@ def run(
     )
 
     # ------------------------------------------------------------------
+    # GT flux grids (one PNG per split, independent of training)
+    # ------------------------------------------------------------------
+    log.info("Saving GT flux grids …")
+    for _split_name, _split_parser, _split_mapping in [
+        ("train", train_parser, train_mapping),
+        ("val",   val_parser,   val_mapping),
+        ("test",  test_parser,  test_mapping),
+    ]:
+        _gt_imgs = _collect_gt_images(_split_parser, _split_mapping, scenario, device)
+        plot_gt_flux_grids(_gt_imgs, _split_name, output_dir)
+    log.info(f"GT flux grids saved → {output_dir / 'gt_grids'}")
+
+    # ------------------------------------------------------------------
     # Two-stage training
     # ------------------------------------------------------------------
     data = {
@@ -168,6 +559,16 @@ def run(
     t0 = time.time()
 
     log.info(f"Stage 1 — alignment pre-training ({stage1_epochs} epochs) …")
+
+    trail_recorder_s1 = _CentroidTrailRecorder(
+        train_parser=train_parser,
+        train_mapping=train_mapping,
+        scenario=scenario,
+        device=device,
+        stride=trail_stride,
+        n_disp=trail_n_disp,
+    )
+
     stage1_reconstructor, stage1_loss_fn = _build_reconstructor(
         loss_type="alignment",
         scenario=scenario,
@@ -177,6 +578,7 @@ def run(
         optimization_config=stage1_config,
         train_position_deviation=True,
         sample_mini_batch_size=10,
+        epoch_callback=trail_recorder_s1,
     )
     stage1_reconstructor.reconstruct_kinematics(loss_definition=stage1_loss_fn, device=device)
     stage1_history = stage1_reconstructor._convergence_history
@@ -202,6 +604,16 @@ def run(
 
     log.info(f"Stage 2 — {loss_type} fine-tuning ({stage2_epochs} epochs) …")
     t1 = time.time()
+
+    trail_recorder = _CentroidTrailRecorder(
+        train_parser=train_parser,
+        train_mapping=train_mapping,
+        scenario=scenario,
+        device=device,
+        stride=trail_stride,
+        n_disp=trail_n_disp,
+    )
+
     stage2_reconstructor, stage2_loss_fn = _build_reconstructor(
         loss_type=loss_type,
         scenario=scenario,
@@ -212,6 +624,7 @@ def run(
         contour_params=contour_params,
         train_position_deviation=True,
         sample_mini_batch_size=10,
+        epoch_callback=trail_recorder,
     )
     stage2_reconstructor.reconstruct_kinematics(loss_definition=stage2_loss_fn, device=device)
     stage2_history = stage2_reconstructor._convergence_history
@@ -219,6 +632,11 @@ def run(
     train_time = time.time() - t0
     _ram_after_stage2 = _ram_gb()
     log.info(f"Stage 2 done in {stage2_time_s / 60:.1f} min  (total {train_time / 60:.1f} min)")
+
+    if trail_recorder.has_data():
+        trail_recorder.save_trail_plots(output_dir / "centroid_trails")
+    else:
+        log.warning("No centroid trail data captured — trail plots skipped.")
 
     epoch_offset = stage1_history[-1]["epoch"] + 1 if stage1_history else 0
     for entry in stage2_history:
@@ -261,12 +679,11 @@ def run(
         f"pixel_loss={post_train_eval['mean_pixel_loss']:.4f}"
     )
 
-    hel_data = _save_flux_grids(
+    hel_data = _collect_hel_data(
         scenario=scenario,
         test_parser=test_parser,
         test_mapping=test_mapping,
         device=device,
-        output_dir=output_dir,
         dataset_type=dataset_type,
     )
 
@@ -291,6 +708,17 @@ def run(
     )
 
     _save_field_positions(scenario, output_dir / "field_positions.json")
+
+    # Save per-epoch mrad trajectory (both stages) for the unified convergence plot.
+    _save_mrad_trajectory(
+        trail_s1=trail_recorder_s1,
+        trail_s2=trail_recorder,
+        stage1_last_epoch=stage1_history[-1]["epoch"] if stage1_history else 0,
+        pre_mrad=pre_eval["mean_mrad"],
+        post_s1_mrad=post_stage1_eval["mean_mrad"],
+        post_mrad=post_train_eval["mean_mrad"],
+        output_dir=output_dir,
+    )
 
     recovery = None
     if perturbations is not None and heliostat_ids is not None:
@@ -379,11 +807,103 @@ def run(
 
 
 # ---------------------------------------------------------------------------
-# Flux grid images (best and worst heliostat)
+# Mrad trajectory  (unified Stage-1 + Stage-2 convergence in mrad)
+# ---------------------------------------------------------------------------
+
+def _save_mrad_trajectory(
+    trail_s1: "_CentroidTrailRecorder",
+    trail_s2: "_CentroidTrailRecorder",
+    stage1_last_epoch: int,
+    pre_mrad: float,
+    post_s1_mrad: float,
+    post_mrad: float,
+    output_dir,
+) -> None:
+    """Compute per-epoch mrad from both trail recorders and save to JSON.
+
+    The JSON is consumed by ``reporting.plot_unified_mrad()`` in the reporting step.
+    Stage-2 epochs are stored as-is (0-based); the offset is saved separately so
+    the plotting function can align them on a combined x-axis.
+    """
+    import pathlib
+    output_dir = pathlib.Path(output_dir)
+
+    s1_mrad = trail_s1.compute_mean_mrad_per_epoch() if trail_s1.has_data() else {}
+    s2_mrad = trail_s2.compute_mean_mrad_per_epoch() if trail_s2.has_data() else {}
+
+    payload = {
+        "stage1":              {str(k): v for k, v in s1_mrad.items()},
+        "stage2":              {str(k): v for k, v in s2_mrad.items()},
+        "stage2_epoch_offset": stage1_last_epoch + 1,
+        "pre_training_mrad":   pre_mrad,
+        "post_stage1_mrad":    post_s1_mrad,
+        "post_training_mrad":  post_mrad,
+    }
+    path = output_dir / "mrad_trajectory.json"
+    with open(path, "w") as fh:
+        json.dump(payload, fh, indent=2)
+    log.info(f"mrad trajectory saved → {path}")
+
+
+# ---------------------------------------------------------------------------
+# GT flux image collection  (for gt_grids/ plots)
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def _save_flux_grids(scenario, test_parser, test_mapping, device, output_dir, dataset_type="synthetic"):
+def _collect_gt_images(
+    parser,
+    mapping: list,
+    scenario,
+    device: torch.device,
+    n_per_hel: int = 10,
+) -> "dict[str, list[np.ndarray]]":
+    """Return {hid: [H×W float32 normalised array, ...]} for each heliostat."""
+    hel_images: dict = {}
+    for heliostat_group in scenario.heliostat_field.heliostat_groups:
+        try:
+            (
+                measured_flux, _, _, _,
+                active_mask, _,
+            ) = parser.parse_data_for_reconstruction(
+                heliostat_data_mapping=mapping,
+                heliostat_group=heliostat_group,
+                scenario=scenario,
+                device=device,
+            )
+        except Exception as exc:
+            log.warning(f"_collect_gt_images failed: {exc}")
+            continue
+
+        if active_mask.sum() == 0:
+            continue
+
+        active_indices  = torch.where(active_mask.bool())[0]
+        samples_per_hel = active_mask[active_indices].long()
+
+        offset = 0
+        for j, idx in enumerate(active_indices):
+            hid   = heliostat_group.names[idx.item()]
+            n     = int(samples_per_hel[j].item())
+            n_show = min(n, n_per_hel)
+
+            imgs = []
+            for k in range(n_show):
+                img = measured_flux[offset + k]
+                mx  = img.max().item()
+                imgs.append((img / max(mx, 1e-12)).cpu().numpy())
+
+            hel_images[hid] = imgs
+            offset += n
+
+    return hel_images
+
+
+# ---------------------------------------------------------------------------
+# Per-heliostat data collection (used for contour diagnostics)
+# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def _collect_hel_data(scenario, test_parser, test_mapping, device, dataset_type="synthetic"):
     """
     Identify the best and worst heliostats by post-training FSE and save a
     10-row × 5-pair flux grid (measured | predicted) for each.
@@ -521,31 +1041,8 @@ def _save_flux_grids(scenario, test_parser, test_mapping, device, output_dir, da
             offset += n
 
     if not hel_data:
-        log.warning("No heliostat data collected — skipping flux grids.")
+        log.warning("No heliostat data collected.")
         return {}
-
-    # Identify best (lowest mrad) and worst (highest mrad), ignoring NaN.
-    valid = {h: d["mean_mrad"] for h, d in hel_data.items() if np.isfinite(d["mean_mrad"])}
-    if not valid:
-        log.warning("All mrad values are NaN — skipping flux grids.")
-        return hel_data
-
-    best_hid  = min(valid, key=valid.get)
-    worst_hid = max(valid, key=valid.get)
-    log.info(f"Flux grids: best={best_hid} ({valid[best_hid]:.3f} mrad), "
-             f"worst={worst_hid} ({valid[worst_hid]:.3f} mrad)")
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    for role, hid in [("best", best_hid), ("worst", worst_hid)]:
-        d = hel_data[hid]
-        plot_flux_grid(
-            measured=d["measured"],
-            predicted=d["predicted"],
-            heliostat_id=hid,
-            mean_mrad=d["mean_mrad"],
-            role=role,
-            output_dir=output_dir,
-        )
 
     return hel_data
 
@@ -596,9 +1093,6 @@ def _save_contour_diagnostics(
             contour_params=contour_params,
         )
         log.info(f"Pipeline steps saved: {role} heliostat {hid}")
-
-    plot_all_heliostats_flux_grid(hel_data=hel_data, output_dir=output_dir)
-    log.info(f"Per-heliostat flux grids saved → {output_dir / 'flux_grids_all'}")
 
 
 # ---------------------------------------------------------------------------

@@ -3,117 +3,280 @@ Reporting and visualisation for the full-63-heliostat kinematic reconstruction e
 
 Output files
 ------------
-flux_grid_best_{hid}.png          — 10×5-pair grid of measured|predicted for best heliostat
-flux_grid_worst_{hid}.png         — same for worst heliostat
+filter_stats.png                  — per-heliostat sample counts after flux filtering (train/val/test)
+convergence_unified_mrad.png      — Stage 1 + Stage 2 on a single mrad y-axis
+convergence_stage1.png            — Stage 1 AlignmentLoss in rad² over epochs
+convergence_stage2.png            — Stage 2 loss in native units over epochs
+gt_grids/train.png                — GT measured flux grid for training split (one row per heliostat)
+gt_grids/val.png                  — same for validation split
+gt_grids/test.png                 — same for test split
+centroid_trails/{hid}_trail.png   — Stage-2 training samples with per-epoch centroid trail overlay
+per_heliostat_accuracy.png        — table of pre/post mrad for every heliostat
+per_heliostat_accuracy_histogram.png — histogram of post-training mrad across heliostats
 field_accuracy_map.png            — ENU field scatter plot coloured by post-training accuracy
-summary_table.png                 — clean table: val + test mean/median mrad
-contour_components_train.png      — per-component train loss over epochs (contour loss only)
-contour_components_val.png        — per-component val loss over epochs (contour loss only)
-contour_overlay_best_{hid}.png    — GT flux + GT/pred contour overlaid for best heliostat
+summary_table.png                 — clean 2-row table: val + test mean/median mrad
+contour_components_train.png      — (contour loss only) coarse/fine/gravity per-component train loss
+contour_components_val.png        — (contour loss only) same, val split
+contour_overlay_best_{hid}.png    — (contour loss only) GT flux + GT/pred contour for best heliostat
 contour_overlay_worst_{hid}.png   — same for worst heliostat
-pipeline_steps_best_{hid}.png     — step-by-step contour pipeline for best heliostat
+pipeline_steps_best_{hid}.png     — (contour loss only) step-by-step contour pipeline, best heliostat
 pipeline_steps_worst_{hid}.png    — same for worst heliostat
-flux_grids_all/{hid}.png          — 50×2 GT|predicted grid for every heliostat
 """
 import json
 import pathlib
 
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 import numpy as np
 
 
 # ---------------------------------------------------------------------------
-# Flux grid  (10 rows × 5 pairs, each pair = measured | predicted)
+# Filter stats table  (per-heliostat sample counts after flux filtering)
 # ---------------------------------------------------------------------------
 
-def plot_flux_grid(
-    measured: "list[np.ndarray]",
-    predicted: "list[np.ndarray]",
-    heliostat_id: str,
-    mean_mrad: float,
-    role: str,
+_C_FULL    = "#d5e8d4"   # light green  — full count retained
+_C_PARTIAL = "#fff2cc"   # light yellow — some samples removed
+_C_EMPTY   = "#f8cecc"   # light red    — all samples removed
+_C_ID_COL  = "#f0f0f0"   # light grey   — heliostat-ID column
+
+
+def plot_filter_stats_table(
+    hel_counts: "dict[str, dict[str, int]]",
+    max_train: int,
+    max_val: int,
+    max_test: int,
     output_dir: pathlib.Path,
 ) -> None:
-    """
-    Save a grid of flux image pairs for a single heliostat.
-
-    Layout: 10 rows × 5 pairs.  Each pair occupies two adjacent subplot columns
-    (left = measured, right = predicted).  Up to 50 samples are shown.
+    """Save a per-heliostat sample-count table after flux filtering.
 
     Parameters
     ----------
-    measured     : list of H×W float arrays (peak-normalised [0, 1])
-    predicted    : list of H×W float arrays (peak-normalised [0, 1])
-    heliostat_id : heliostat name for the title and filename
-    mean_mrad    : post-training focal-spot error in mrad
-    role         : "best" or "worst"
-    output_dir   : directory where the PNG is saved
+    hel_counts : {"train": {hid: n, ...}, "val": {hid: n, ...}, "test": {hid: n, ...}}
+    max_train  : original (unfiltered) train sample count per heliostat
+    max_val    : same for val
+    max_test   : same for test
+    output_dir : destination (``filter_stats.png`` written here)
     """
-    n_samples   = min(len(measured), len(predicted), 50)
-    n_pairs_col = 5    # pairs per row
-    n_rows      = 10   # rows of pairs
-    n_img_cols  = n_pairs_col * 2   # each pair = 2 image columns
+    splits     = ["train", "val", "test"]
+    max_counts = {"train": max_train, "val": max_val, "test": max_test}
 
-    fig = plt.figure(figsize=(n_img_cols * 1.1, n_rows * 1.15))
+    all_hids = sorted(set().union(*(set(hel_counts.get(s, {})) for s in splits)))
+    if not all_hids:
+        return
+
+    col_labels = [
+        "Heliostat",
+        f"Train  (/{max_train})",
+        f"Val  (/{max_val})",
+        f"Test  (/{max_test})",
+    ]
+
+    cell_text, cell_colors = [], []
+    for hid in all_hids:
+        row_t = [hid]
+        row_c = [_C_ID_COL]
+        for split in splits:
+            cnt   = hel_counts.get(split, {}).get(hid, 0)
+            max_c = max_counts[split]
+            row_t.append(str(cnt))
+            if cnt == max_c:
+                row_c.append(_C_FULL)
+            elif cnt > 0:
+                row_c.append(_C_PARTIAL)
+            else:
+                row_c.append(_C_EMPTY)
+        cell_text.append(row_t)
+        cell_colors.append(row_c)
+
+    n_rows   = len(all_hids)
+    cell_h   = 0.22
+    header_h = 0.34
+
+    fig, ax = plt.subplots(figsize=(7, 2))
+    fig.patch.set_facecolor("white")
+    ax.axis("off")
+
+    tbl = ax.table(
+        cellText=cell_text,
+        colLabels=col_labels,
+        cellColours=cell_colors,
+        cellLoc="center",
+        loc="upper center",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(7.5)
+
+    for c in range(len(col_labels)):
+        tbl[0, c].set_height(header_h)
+        tbl[0, c].set_facecolor("#3a3a3a")
+        tbl[0, c].set_text_props(color="white", fontweight="bold")
+
+    for r in range(1, n_rows + 1):
+        for c in range(len(col_labels)):
+            tbl[r, c].set_height(cell_h)
+        tbl[r, 0].get_text().set_ha("left")
+
+    ax.set_title(
+        "Samples remaining after flux filtering  "
+        "(green = full  ·  yellow = partial  ·  red = zero)",
+        fontsize=9, fontweight="bold", pad=6,
+    )
+    fig.tight_layout()
+
+    out_path = output_dir / "filter_stats.png"
+    fig.savefig(out_path, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# GT flux grid  (one row per heliostat, one column per sample)
+# ---------------------------------------------------------------------------
+
+def plot_gt_flux_grids(
+    hel_images: "dict[str, list[np.ndarray]]",
+    split_name: str,
+    output_dir: pathlib.Path,
+    n_cols: int = 10,
+) -> None:
+    """Save a GT flux grid for one data split.
+
+    Layout: one row per heliostat (labelled on the left), up to ``n_cols``
+    sample images per row.  Written to ``output_dir/gt_grids/{split_name}.png``.
+
+    Parameters
+    ----------
+    hel_images : {hid: [H×W float array (peak-normalised [0,1]), ...]}
+    split_name : "train", "val", or "test" — used in title and filename
+    output_dir : experiment output directory (``gt_grids/`` subdirectory created inside)
+    n_cols     : maximum number of samples shown per heliostat row
+    """
+    hids = [h for h in hel_images if hel_images[h]]
+    if not hids:
+        return
+
+    n_rows = len(hids)
+    n_cols_actual = min(n_cols, max(len(hel_images[h]) for h in hids))
+
+    cell_w, cell_h = 0.85, 0.75
+    fig, axes = plt.subplots(
+        n_rows, n_cols_actual,
+        figsize=(n_cols_actual * cell_w + 1.2, n_rows * cell_h + 0.5),
+        squeeze=False,
+    )
     fig.patch.set_facecolor("white")
 
-    gs = gridspec.GridSpec(
-        n_rows, n_img_cols,
-        figure=fig,
-        wspace=0.04,
-        hspace=0.08,
-        left=0.02, right=0.98,
-        top=0.90, bottom=0.02,
-    )
-
-    for i in range(n_samples):
-        row     = i // n_pairs_col
-        pair    = i  % n_pairs_col
-        col_m   = pair * 2
-        col_p   = pair * 2 + 1
-
-        ax_m = fig.add_subplot(gs[row, col_m])
-        ax_p = fig.add_subplot(gs[row, col_p])
-
-        ax_m.imshow(measured[i],  cmap="inferno", vmin=0, vmax=1)
-        ax_p.imshow(predicted[i], cmap="inferno", vmin=0, vmax=1)
-
-        for ax in (ax_m, ax_p):
+    for r, hid in enumerate(hids):
+        imgs = hel_images[hid]
+        for c in range(n_cols_actual):
+            ax = axes[r, c]
+            if c < len(imgs):
+                ax.imshow(imgs[c], cmap="inferno", vmin=0, vmax=1)
+            else:
+                ax.set_visible(False)
             ax.set_xticks([])
             ax.set_yticks([])
+        axes[r, 0].set_ylabel(hid, fontsize=5.5, rotation=0,
+                               labelpad=4, va="center", ha="right")
 
-        # Label the sample index on the left column of each pair
-        ax_m.set_ylabel(f"{i+1}", fontsize=6, rotation=0, labelpad=8,
-                        va="center", ha="right")
-
-    # Column-header labels: "M / P" above each pair
-    for pair in range(n_pairs_col):
-        col_m = pair * 2
-        col_p = pair * 2 + 1
-        # Use the first-row axes positions to place text via figure coords
-        ax_m0 = fig.add_subplot(gs[0, col_m])
-        ax_p0 = fig.add_subplot(gs[0, col_p])
-        ax_m0.set_xticks([])
-        ax_m0.set_yticks([])
-        ax_p0.set_xticks([])
-        ax_p0.set_yticks([])
-
-    # Re-draw sample 0 (first row already plotted above — GridSpec reuse is fine)
-    # Title
-    role_str = role.upper()
-    mrad_str = f"{mean_mrad:.3f}" if not np.isnan(mean_mrad) else "NaN"
     fig.suptitle(
-        f"{role_str} heliostat — {heliostat_id}   |   "
-        f"Post-training FSE = {mrad_str} mrad   |   "
-        f"Left = measured, Right = predicted   (50 test samples, 10 rows × 5 pairs)",
-        fontsize=9,
-        fontweight="bold",
-        y=0.97,
+        f"GT measured flux — {split_name} split  "
+        f"({n_rows} heliostats, up to {n_cols_actual} samples/row)",
+        fontsize=9, fontweight="bold",
     )
+    fig.tight_layout(rect=[0.05, 0, 1, 0.98], h_pad=0.05, w_pad=0.05)
 
-    out_path = output_dir / f"flux_grid_{role}_{heliostat_id}.png"
-    fig.savefig(out_path, dpi=130, bbox_inches="tight")
+    grid_dir = output_dir / "gt_grids"
+    grid_dir.mkdir(parents=True, exist_ok=True)
+    out_path = grid_dir / f"{split_name}.png"
+    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Unified mrad convergence  (Stage 1 + Stage 2 on the same axis)
+# ---------------------------------------------------------------------------
+
+def plot_unified_mrad(
+    mrad_trajectory_path: pathlib.Path,
+    output_dir: pathlib.Path,
+) -> None:
+    """Plot both training stages on a single mrad y-axis.
+
+    Reads ``mrad_trajectory.json`` produced by ``_save_mrad_trajectory()`` in
+    train.py.  Trail-recorder samples (one dot every CAPTURE_STRIDE epochs) are
+    shown as a curve; the three exact eval-pass reference points
+    (pre-training, post-Stage-1, post-training) are shown as larger markers.
+
+    Stage 1 is plotted in blue, Stage 2 in orange.  A vertical dashed line
+    marks the stage boundary.
+
+    Parameters
+    ----------
+    mrad_trajectory_path : path to ``mrad_trajectory.json``
+    output_dir           : directory where ``convergence_unified_mrad.png`` is saved
+    """
+    if not mrad_trajectory_path.exists():
+        return
+
+    with open(mrad_trajectory_path) as f:
+        data = json.load(f)
+
+    offset     = int(data["stage2_epoch_offset"])
+    pre_mrad   = data.get("pre_training_mrad")
+    post_s1    = data.get("post_stage1_mrad")
+    post_train = data.get("post_training_mrad")
+
+    s1_items = sorted((int(k), v) for k, v in data["stage1"].items())
+    s2_items = sorted((int(k), v) for k, v in data["stage2"].items())
+
+    s1_x = [ep         for ep, _ in s1_items]
+    s1_y = [v          for _,  v in s1_items]
+    s2_x = [ep + offset for ep, _ in s2_items]
+    s2_y = [v           for _,  v in s2_items]
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    fig.patch.set_facecolor("white")
+
+    _C1 = "#2980b9"   # Stage 1 — blue
+    _C2 = "#e67e22"   # Stage 2 — orange
+
+    if s1_x:
+        ax.plot(s1_x, s1_y, color=_C1, linewidth=1.5, label="Stage 1 (AlignmentLoss)")
+        ax.scatter(s1_x, s1_y, color=_C1, s=18, zorder=3)
+
+    if s2_x:
+        ax.plot(s2_x, s2_y, color=_C2, linewidth=1.5, label="Stage 2 (ray-tracing loss)")
+        ax.scatter(s2_x, s2_y, color=_C2, s=18, zorder=3)
+
+    # Stage boundary
+    if offset > 0:
+        ax.axvline(offset, color="grey", linewidth=0.9, linestyle="--", alpha=0.7)
+        ax.text(offset + 0.5, ax.get_ylim()[1], "S1→S2", fontsize=7,
+                color="grey", va="top")
+
+    # Exact eval reference points
+    ref_x_max = (s2_x[-1] if s2_x else (s1_x[-1] if s1_x else offset))
+
+    if pre_mrad is not None:
+        ax.scatter(0, pre_mrad, marker="D", s=60, color="black",
+                   zorder=5, label=f"Pre-train ({pre_mrad:.2f} mrad)")
+    if post_s1 is not None and offset > 0:
+        ax.scatter(offset, post_s1, marker="D", s=60, color=_C1,
+                   zorder=5, label=f"Post-S1 ({post_s1:.2f} mrad)", edgecolors="black",
+                   linewidths=0.8)
+    if post_train is not None:
+        ax.scatter(ref_x_max, post_train, marker="D", s=60, color=_C2,
+                   zorder=5, label=f"Post-train ({post_train:.2f} mrad)",
+                   edgecolors="black", linewidths=0.8)
+
+    ax.set_xlabel("Training epoch (Stage 1 → Stage 2)", fontsize=11)
+    ax.set_ylabel("Mean mrad (train samples)", fontsize=11)
+    ax.set_title("Unified convergence — both stages in mrad", fontsize=12, fontweight="bold")
+    ax.legend(fontsize=9, framealpha=0.9)
+    ax.grid(alpha=0.25, linestyle="--", linewidth=0.6)
+    fig.tight_layout()
+
+    out_path = output_dir / "convergence_unified_mrad.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -535,57 +698,178 @@ def plot_pipeline_steps(
 
 
 # ---------------------------------------------------------------------------
-# Per-heliostat 50×2 flux grid (all heliostats)
+# Centroid trail grid  (Stage-2 training samples + per-epoch predicted centroid)
 # ---------------------------------------------------------------------------
 
-def plot_all_heliostats_flux_grid(
-    hel_data: dict,
-    output_dir: pathlib.Path,
-) -> None:
-    """
-    Save one PNG per heliostat: 50 rows × 2 columns (measured | predicted).
+def _enu_to_pixel(
+    enu: "list[float]",
+    center: "list[float]",
+    width: float,
+    height: float,
+    bitmap_w: int = 256,
+    bitmap_h: int = 256,
+) -> "tuple[float, float]":
+    """Convert a planar-target ENU point to bitmap pixel (col, row).
 
-    Files are written to output_dir/flux_grids_all/{hid}.png.
+    Inverse of ARTIST's ``bitmap_coordinates_to_target_coordinates`` for planar areas:
+        ENU = center + (0.5 - e_norm) * width * [1,0,0]
+                     + (0.5 - u_norm) * height * [0,0,1]
+    so:
+        e_norm = 0.5 - (ENU[0] - center[0]) / width
+        u_norm = 0.5 - (ENU[2] - center[2]) / height
+        col    = e_norm * bitmap_w - 0.5
+        row    = u_norm * bitmap_h - 0.5
+    """
+    e_norm = 0.5 - (enu[0] - center[0]) / width
+    u_norm = 0.5 - (enu[2] - center[2]) / height
+    col    = e_norm * bitmap_w - 0.5
+    row    = u_norm * bitmap_h - 0.5
+    return col, row
+
+
+def plot_centroid_trail_grids(
+    trail_dir: pathlib.Path,
+    hid: str,
+    flux_images: "list[np.ndarray]",
+    gt_centroids_enu: "list[list[float]]",
+    trail_epochs: "list[int]",
+    trail_centroids_enu: "dict[int, list[list[float]]]",
+    target_centers: "list[list[float]]",
+    target_dims_list: "list[list[float]]",
+    dist_m: float = 1.0,
+    bitmap_res: int = 256,
+) -> None:
+    """Save a grid of training flux images with Stage-2 centroid trail overlaid.
+
+    Each subplot shows one training sample as background (inferno colormap).
+    Scatter dots show where the predicted centroid was at each captured epoch,
+    coloured by epoch (RdYlGn: red = early, green = late).
+    A white star marks the GT centroid position.
+    A small text label in the bottom-right shows the mrad FSE at the final epoch.
 
     Parameters
     ----------
-    hel_data   : dict  {hid: {"measured": list[H×W array], "predicted": list[H×W array],
-                               "mean_mrad": float}}
-    output_dir : experiment output directory
+    trail_dir          : directory to write ``{hid}_trail.png``
+    hid                : heliostat identifier (used in title and filename)
+    flux_images        : list of H×W float32 arrays in [0, 1]
+    gt_centroids_enu   : list of [E, N, U] GT centroid positions per sample
+    trail_epochs       : sorted list of epochs at which centroids were captured
+    trail_centroids_enu: {epoch: [[E,N,U], ...]} per captured epoch
+    target_centers     : per-sample list of [E, N, U] target area centres
+    target_dims_list   : per-sample list of [width_m, height_m]
+    dist_m             : heliostat-to-tower distance in metres (for mrad computation)
+    bitmap_res         : edge length of the square flux bitmap in pixels (default 256)
     """
-    grid_dir = output_dir / "flux_grids_all"
-    grid_dir.mkdir(parents=True, exist_ok=True)
+    n_samples = len(flux_images)
+    if n_samples == 0 or not trail_epochs:
+        return
 
-    for hid, data in hel_data.items():
-        measured  = data["measured"]
-        predicted = data["predicted"]
-        mean_mrad = data["mean_mrad"]
+    # Grid layout: up to 5 columns, enough rows to fit all samples
+    n_cols = min(5, n_samples)
+    n_rows = (n_samples + n_cols - 1) // n_cols
 
-        n = min(len(measured), len(predicted), 50)
-        if n == 0:
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(n_cols * 2.0, n_rows * 2.0 + 0.6),
+    )
+    fig.patch.set_facecolor("white")
+
+    # Normalise axes to always be 2-D array
+    if n_rows == 1 and n_cols == 1:
+        axes = np.array([[axes]])
+    elif n_rows == 1:
+        axes = axes[np.newaxis, :]
+    elif n_cols == 1:
+        axes = axes[:, np.newaxis]
+
+    # Colormap: red = epoch 0, green = last epoch
+    cmap      = plt.cm.RdYlGn
+    n_epochs  = len(trail_epochs)
+    epoch_min = trail_epochs[0]
+    epoch_max = trail_epochs[-1]
+    epoch_range = max(epoch_max - epoch_min, 1)
+
+    for i in range(n_rows * n_cols):
+        row = i // n_cols
+        col = i  % n_cols
+        ax  = axes[row, col]
+
+        if i >= n_samples:
+            ax.axis("off")
             continue
 
-        fig, axes = plt.subplots(n, 2, figsize=(3.0, n * 0.75))
-        fig.patch.set_facecolor("white")
-        if n == 1:
-            axes = axes[np.newaxis, :]
+        # Background: GT training flux image
+        ax.imshow(flux_images[i], cmap="inferno", vmin=0, vmax=1,
+                  extent=[0, bitmap_res, bitmap_res, 0])
 
-        for i in range(n):
-            axes[i, 0].imshow(measured[i],  cmap="inferno", vmin=0, vmax=1)
-            axes[i, 1].imshow(predicted[i], cmap="inferno", vmin=0, vmax=1)
-            for ax in axes[i]:
-                ax.set_xticks([])
-                ax.set_yticks([])
-            axes[i, 0].set_ylabel(f"{i+1}", fontsize=5, rotation=0,
-                                  labelpad=8, va="center", ha="right")
+        # Per-sample target area geometry
+        t_center = target_centers[i]
+        t_w, t_h = target_dims_list[i][0], target_dims_list[i][1]
 
-        axes[0, 0].set_title("Measured",  fontsize=8, fontweight="bold")
-        axes[0, 1].set_title("Predicted", fontsize=8, fontweight="bold")
+        # Trail dots: one per captured epoch
+        for t_idx, ep in enumerate(trail_epochs):
+            cents = trail_centroids_enu.get(ep, [])
+            if i >= len(cents):
+                continue
+            px_col, px_row = _enu_to_pixel(
+                cents[i], t_center, t_w, t_h, bitmap_res, bitmap_res
+            )
+            t_norm = (ep - epoch_min) / epoch_range
+            ax.scatter(
+                px_col, px_row,
+                c=[cmap(t_norm)],
+                s=12,
+                linewidths=0,
+                zorder=3,
+            )
 
-        mrad_str = f"{mean_mrad:.3f}" if not np.isnan(mean_mrad) else "NaN"
-        fig.suptitle(f"{hid}   |   FSE = {mrad_str} mrad", fontsize=8,
-                     fontweight="bold", y=1.002)
-        fig.tight_layout(h_pad=0.05, w_pad=0.05)
+        # GT centroid: white star
+        if i < len(gt_centroids_enu):
+            gt_col, gt_row = _enu_to_pixel(
+                gt_centroids_enu[i], t_center, t_w, t_h, bitmap_res, bitmap_res
+            )
+            ax.scatter(gt_col, gt_row, marker="*", c="white", s=40,
+                       linewidths=0.5, edgecolors="black", zorder=4)
 
-        fig.savefig(grid_dir / f"{hid}.png", dpi=120, bbox_inches="tight")
-        plt.close(fig)
+        # mrad label: FSE at the final captured epoch
+        final_ep = trail_epochs[-1]
+        final_cents = trail_centroids_enu.get(final_ep, [])
+        if i < len(final_cents) and i < len(gt_centroids_enu):
+            pred_c = np.array(final_cents[i][:3], dtype=np.float64)
+            gt_c   = np.array(gt_centroids_enu[i][:3], dtype=np.float64)
+            mrad_val = float(np.linalg.norm(pred_c - gt_c) / max(dist_m, 1e-6) * 1000)
+            ax.text(
+                bitmap_res - 2, bitmap_res - 2,
+                f"{mrad_val:.4f} mrad",
+                ha="right", va="bottom",
+                fontsize=4.5, color="white",
+                bbox=dict(facecolor="black", alpha=0.55, pad=1, edgecolor="none"),
+                zorder=5,
+            )
+
+        ax.set_xlim(0, bitmap_res)
+        ax.set_ylim(bitmap_res, 0)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_aspect("equal")
+
+    # Colorbar
+    sm = plt.cm.ScalarMappable(
+        cmap=cmap,
+        norm=plt.Normalize(vmin=epoch_min, vmax=epoch_max),
+    )
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=axes.ravel().tolist(), fraction=0.015, pad=0.02)
+    cbar.set_label("Stage-2 epoch", fontsize=8)
+    cbar.ax.tick_params(labelsize=7)
+
+    fig.suptitle(
+        f"Centroid trail — {hid}   "
+        f"(red = epoch {epoch_min}, green = epoch {epoch_max} | ★ = GT)",
+        fontsize=9, fontweight="bold",
+    )
+    fig.tight_layout(rect=[0, 0, 0.92, 0.96])
+
+    out_path = trail_dir / f"{hid}_trail.png"
+    fig.savefig(out_path, dpi=130, bbox_inches="tight")
+    plt.close(fig)

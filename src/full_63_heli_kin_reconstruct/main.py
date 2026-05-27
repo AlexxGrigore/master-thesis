@@ -37,12 +37,10 @@ _src  = _here.parent
 sys.path.insert(0, str(_src))
 
 import config as cfg
-from train import run
+from train import run, _filter_flux_map, _normalize_mapping, _apply_threshold_exclusion
 from utils.evaluation import build_heliostat_data_mapping
 from utils.synth_data import SyntheticDatasetParser, _equalize_mapping, perturbations_to_json
 from utils.synth_reporting import (
-    plot_convergence,
-    plot_param_recovery,
     plot_stage_convergence,
     plot_per_heliostat_accuracy_table,
     plot_per_heliostat_accuracy_histogram,
@@ -52,6 +50,8 @@ from artist.io.paint_calibration_parser import PaintCalibrationDataParser
 from reporting import (
     plot_field_accuracy_map,
     plot_contour_loss_components,
+    plot_filter_stats_table,
+    plot_unified_mrad,
     render_summary_table,
 )
 
@@ -79,20 +79,6 @@ def _split_complete(split: str, heliostat_ids: list, min_samples: int) -> bool:
 
 
 def _run_reporting(results: dict, perturbations_json: dict | None, heliostat_ids: list, output_dir: pathlib.Path) -> None:
-    history_file = output_dir / "convergence_history.json"
-    if history_file.exists():
-        with open(history_file) as f:
-            history = json.load(f)
-        plot_convergence(
-            history, output_dir,
-            pre_perturbation_m=results.get("pre_training",  {}).get("mean_m"),
-            post_perturbation_m=None,
-            post_training_m=results.get("post_training", {}).get("mean_m"),
-            pre_perturbation_mrad=results.get("pre_training",  {}).get("mean_mrad"),
-            post_perturbation_mrad=None,
-            post_training_mrad=results.get("post_training", {}).get("mean_mrad"),
-        )
-
     stage1_file = output_dir / "convergence_history_stage1.json"
     if stage1_file.exists():
         with open(stage1_file) as f:
@@ -125,13 +111,16 @@ def _run_reporting(results: dict, perturbations_json: dict | None, heliostat_ids
             plot_contour_loss_components(stage2_history, output_dir, split="train")
             plot_contour_loss_components(stage2_history, output_dir, split="val")
 
+    # Unified mrad convergence (both stages on the same axis)
+    plot_unified_mrad(
+        mrad_trajectory_path=output_dir / "mrad_trajectory.json",
+        output_dir=output_dir,
+    )
+
     plot_per_heliostat_accuracy_table(results, heliostat_ids, output_dir)
     with open(output_dir / "per_heliostat_accuracy.json") as _f:
         _rows = json.load(_f)
     plot_per_heliostat_accuracy_histogram(_rows, output_dir)
-
-    if results.get("param_recovery"):
-        plot_param_recovery(results["param_recovery"], output_dir)
 
     # Field accuracy map
     plot_field_accuracy_map(
@@ -292,7 +281,54 @@ def main() -> None:
     train_map = _equalized("train",      cfg.TRAIN_SAMPLES)
     val_map   = _equalized("validation", cfg.VAL_SAMPLES)
     test_map  = _equalized("test",       cfg.TEST_SAMPLES)
-    log.info(f"Mapping sizes — train: {len(train_map)}, val: {len(val_map)}, test: {len(test_map)}")
+
+    train_map = _filter_flux_map(
+        train_map, dataset_type, cfg.MIN_ACTIVE_PIXEL_PCT,
+        synth_data_dir=cfg.SYNTHETIC_DATA_DIR, split_name="train",
+    )
+    val_map = _filter_flux_map(
+        val_map, dataset_type, cfg.MIN_ACTIVE_PIXEL_PCT,
+        synth_data_dir=cfg.SYNTHETIC_DATA_DIR, split_name="val",
+    )
+    test_map = _filter_flux_map(
+        test_map, dataset_type, cfg.MIN_ACTIVE_PIXEL_PCT,
+        synth_data_dir=cfg.SYNTHETIC_DATA_DIR, split_name="test",
+    )
+    log.info(f"Mapping sizes (after filter) — train: {len(train_map)}, val: {len(val_map)}, test: {len(test_map)}")
+
+    _filter_counts = {
+        "train": {hid: len(cal) for hid, cal, _ in train_map},
+        "val":   {hid: len(cal) for hid, cal, _ in val_map},
+        "test":  {hid: len(cal) for hid, cal, _ in test_map},
+    }
+    plot_filter_stats_table(
+        _filter_counts,
+        max_train=cfg.TRAIN_SAMPLES,
+        max_val=cfg.VAL_SAMPLES,
+        max_test=cfg.TEST_SAMPLES,
+        output_dir=run_dir,
+    )
+    log.info(f"Filter stats table saved → {run_dir / 'filter_stats.png'}")
+
+    train_map, val_map, test_map = _apply_threshold_exclusion(
+        train_map, val_map, test_map,
+        min_train=cfg.MIN_TRAIN_SAMPLES,
+        min_val=cfg.MIN_VAL_SAMPLES,
+        min_test=cfg.MIN_TEST_SAMPLES,
+    )
+    log.info(
+        f"After threshold exclusion — train: {len(train_map)}, val: {len(val_map)}, test: {len(test_map)} heliostats"
+    )
+
+    train_map = _normalize_mapping(train_map, seed=cfg.PERTURBATION_SEED)
+    val_map   = _normalize_mapping(val_map,   seed=cfg.PERTURBATION_SEED)
+    test_map  = _normalize_mapping(test_map,  seed=cfg.PERTURBATION_SEED)
+    log.info(
+        f"After normalisation — "
+        f"train: {len(train_map)} hels × {len(train_map[0][1]) if train_map else 0} samples, "
+        f"val: {len(val_map)} hels × {len(val_map[0][1]) if val_map else 0} samples, "
+        f"test: {len(test_map)} hels × {len(test_map[0][1]) if test_map else 0} samples"
+    )
 
     n_groups = Scenario.get_number_of_heliostat_groups_from_hdf5(cfg.SCENARIO_PATH)
 
@@ -359,6 +395,8 @@ def main() -> None:
             stage1_epochs=stage1_epochs,
             stage2_epochs=stage2_epochs,
             contour_params=cfg.CONTOUR_PARAMS,
+            trail_stride=cfg.CENTROID_TRAIL_STRIDE,
+            trail_n_disp=cfg.CENTROID_TRAIL_N_DISP,
         )
 
         gc.collect()

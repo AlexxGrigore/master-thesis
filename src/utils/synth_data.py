@@ -467,8 +467,11 @@ class SyntheticDatasetParser:
                 dist = float(torch.norm(hel_pos - _tower_ref.float()).item())
 
             hel_dir = self._data_dir / hid
+            # Count actual sample directories on disk for cyclic-padding support:
+            # when the mapping count n > n_on_disk (padding), wrap the index.
+            n_on_disk = sum(1 for d in hel_dir.iterdir() if d.is_dir() and d.name.isdigit())
             for k in range(n):
-                meas_dir = hel_dir / f"{k:04d}"
+                meas_dir = hel_dir / f"{(k % n_on_disk):04d}"
                 with open(meas_dir / "calibration_properties.json") as fh:
                     cal = json.load(fh)
 

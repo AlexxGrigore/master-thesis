@@ -55,12 +55,31 @@ SURFACE_POINTS_PER_FACET = 25    # 25×25 = 625 pts/facet
 
 PERTURBATION_SEED = 42
 
+# ---------------------------------------------------------------------------
+# GT flux filtering  (applied to train / val splits before training)
+# ---------------------------------------------------------------------------
+
+MIN_ACTIVE_PIXEL_PCT = 0.25  # min % of pixels > 0.01  (rejects near-empty images)
+
+# Minimum sample counts after filtering — heliostats below these are excluded
+# from ALL splits (train + val + test) for consistency.
+MIN_TRAIN_SAMPLES = 10
+MIN_VAL_SAMPLES   = 5
+MIN_TEST_SAMPLES  = 5
+
+# ---------------------------------------------------------------------------
+# Centroid trail capture  (Stage 2 only)
+# ---------------------------------------------------------------------------
+
+CENTROID_TRAIL_STRIDE = 5    # capture every Nth epoch during Stage 2
+CENTROID_TRAIL_N_DISP = 25   # max training samples shown per heliostat in trail grid
+
 PERTURBATION_RANGES = {
-    "rotation_rad":        0.003,
-    "actuator_angle_rad":  0.003,
-    "actuator_stroke_m":   0.003,
-    "actuator_offset_m":   0.003,
-    "translation_m":       0.015,
+    "rotation_rad":        0.005,
+    "actuator_angle_rad":  0.005,
+    "actuator_stroke_m":   0.005,
+    "actuator_offset_m":   0.005,
+    "translation_m":       0.05,
     "base_position_m":     0.05,
 }
 

@@ -65,6 +65,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
         train_position_deviation: bool = True,
         eval_data: dict | None = None,
         sample_mini_batch_size: int | None = None,
+        epoch_callback=None,
         **kwargs,
     ) -> None:
         # Accept a flat optimization config dict (as used in the experiments) and
@@ -88,6 +89,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
         self.train_position_deviation = train_position_deviation
         self.eval_data = eval_data
         self.sample_mini_batch_size = sample_mini_batch_size
+        self.epoch_callback = epoch_callback
 
     # ------------------------------------------------------------------
     # Core training loop
@@ -161,7 +163,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
             log_step         = opt[constants.max_epoch] if opt[constants.log_step] == 0 else opt[constants.log_step]
             best_eval, best_snap = float("inf"), None
 
-            pbar = tqdm(total=opt[constants.max_epoch], desc="Training", unit="ep",
+            pbar = tqdm(total=opt[constants.max_epoch], desc="Stage 2 (training)", unit="ep",
                         dynamic_ncols=True, leave=True)
 
             while loss > float(opt[constants.tolerance]) and epoch <= opt[constants.max_epoch]:
@@ -266,6 +268,8 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                     eval=f"{eval_loss:.4f}" if eval_loss is not None else "-",
                     lr=f"{lr:.2e}",
                 )
+                if self.epoch_callback is not None:
+                    self.epoch_callback(epoch)
                 pbar.update(1)
                 epoch += 1
             else:
@@ -747,6 +751,9 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
             # Cache eval data once (motor positions + kinematics only, no PNG loading needed).
             eval_cache = self._cache_eval_alignment_data(group, device)
 
+            pbar = tqdm(total=opt[constants.max_epoch], desc="Stage 1 (alignment)", unit="ep",
+                        dynamic_ncols=True, leave=True)
+
             while loss > float(opt[constants.tolerance]) and epoch <= opt[constants.max_epoch]:
                 optimizer.zero_grad()
 
@@ -806,8 +813,21 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
 
                 if stopper.step(loss):
                     log.info(f"Rank {rank}: early stopping at epoch {epoch}.")
+                    pbar.close()
                     break
+
+                lr = optimizer.param_groups[indices.optimizer_param_group_0]["lr"]
+                pbar.set_postfix(
+                    loss=f"{loss.item():.4f}",
+                    eval=f"{eval_loss:.4f}" if eval_loss is not None else "-",
+                    lr=f"{lr:.2e}",
+                )
+                if self.epoch_callback is not None:
+                    self.epoch_callback(epoch)
+                pbar.update(1)
                 epoch += 1
+            else:
+                pbar.close()
 
             if best_snap is not None:
                 self._restore(kinematic, best_snap)
