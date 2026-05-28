@@ -18,6 +18,7 @@ import argparse
 import datetime
 import gc
 import json
+import time
 import logging
 import pathlib
 import sys
@@ -167,7 +168,7 @@ def main() -> None:
         cfg.PAINT_DIR  = pathlib.Path("/tudelft.net/staff-umbrella/StudentsCVlab/agrigore/datasets/paint")
         cfg.SCENARIO_PATH               = cfg.BASE_DIR / "scenarios" / "full_63_heli_kin_reconstruct" / "scenario.h5"
         cfg.ONE_HELIOSTAT_SCENARIOS_DIR = cfg.BASE_DIR / "scenarios" / "one_heliostat_scenarios"
-        cfg.SYNTHETIC_DATA_DIR          = cfg.BASE_DIR / "scenarios" / "full_63_heli_kin_reconstruct" / "synthetic_data"
+        cfg.SYNTHETIC_DATA_DIR          = pathlib.Path("/tudelft.net/staff-umbrella/StudentsCVlab/agrigore/datasets") / "full_63_heli_kin_reconstruct" / "synthetic_data"
         cfg.BENCHMARK_CSV               = cfg.PAINT_DIR / "splits" / f"{cfg.BENCHMARK_NAME}.csv"
         cfg.CALIBRATION_PROPERTIES_DIR  = cfg.PAINT_DIR / cfg.BENCHMARK_NAME / "calibration_properties"
         cfg.FLUX_IMAGE_DIR              = cfg.PAINT_DIR / cfg.BENCHMARK_NAME / "flux_image"
@@ -332,6 +333,7 @@ def main() -> None:
             smoke_test_n_hels = 3
             log.info(f"SMOKE TEST: stage1=2, stage2=3, 1 train ray, {smoke_test_n_hels} heliostats.")
 
+        experiment_start = time.time()
         hel_results: dict[str, dict] = {}
         skipped: list[str] = []
 
@@ -430,7 +432,11 @@ def main() -> None:
 
     log.info("Aggregating results …")
     combined = aggregate_results(hel_results, run_dir)
+    elapsed_s = time.time() - experiment_start
+    elapsed_h, rem = divmod(int(elapsed_s), 3600)
+    elapsed_m, elapsed_s2 = divmod(rem, 60)
     log.info(f"\nDone. Results in: {run_dir}")
+    log.info(f"Total experiment time: {elapsed_h}h {elapsed_m}m {elapsed_s2}s")
     if combined:
         pt = combined.get("post_training", {})
         ps = combined.get("post_stage1", {})
