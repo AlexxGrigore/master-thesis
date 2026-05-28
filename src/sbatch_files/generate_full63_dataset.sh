@@ -2,7 +2,7 @@
 #SBATCH --job-name=f63_gen_data
 #SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/f63_gen_data_out_%j.log
 #SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/f63_gen_data_err_%j.log
-#SBATCH --time=02:00:00
+#SBATCH --time=00:45:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:a40:1
