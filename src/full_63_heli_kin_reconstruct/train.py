@@ -562,58 +562,52 @@ def run(
     gc.collect()
     torch.cuda.empty_cache()
 
-    # Split heliostats: those with enough flux samples get FocalSpotLoss (Stage 2a);
-    # the rest get an additional AlignmentLoss pass (Stage 2b).
-    if min_focal_spot_samples > 0:
-        focal_hids          = {hid for hid, cal, _ in train_mapping if len(cal) >= min_focal_spot_samples}
-        train_map_focal     = [(h, c, f) for h, c, f in train_mapping if h in focal_hids]
-        val_map_focal       = [(h, c, f) for h, c, f in val_mapping   if h in focal_hids]
-        alignment_only_hids = [h for h, _, _ in train_mapping if h not in focal_hids]
-        if alignment_only_hids:
-            log.info(
-                f"{len(alignment_only_hids)} heliostats have < {min_focal_spot_samples} valid flux "
-                f"samples → kept at Stage-1 result, skipping Stage-2: {alignment_only_hids}"
-            )
-        else:
-            log.info("All heliostats have enough flux samples for Stage-2.")
-    else:
-        focal_hids          = {h for h, _, _ in train_mapping}
-        train_map_focal     = train_mapping
-        val_map_focal       = val_mapping
-        alignment_only_hids = []
+    # Per-heliostat training: check if this heliostat has enough valid train samples
+    # for Stage-2 FocalSpotLoss. If not, return early with the Stage-1 result.
+    n_train = len(train_mapping[0][1]) if train_mapping else 0
+    if min_focal_spot_samples > 0 and n_train < min_focal_spot_samples:
+        log.info(
+            f"Only {n_train} valid train samples (< {min_focal_spot_samples}) — skipping Stage 2."
+        )
+        train_time = time.time() - t0
+        early_results = {
+            "pre_training":      {
+                "mean_mrad":         pre_eval["mean_mrad"],
+                "median_mrad":       pre_eval["median_mrad"],
+                "mean_m":            pre_eval["mean_m"],
+                "mean_pixel_loss":   pre_eval["mean_pixel_loss"],
+                "median_pixel_loss": pre_eval["median_pixel_loss"],
+                "num_samples":       pre_eval["num_samples"],
+                "num_nan_samples":   pre_eval["num_nan_samples"],
+                "nan_heliostat_ids": pre_eval["nan_heliostat_ids"],
+                "per_heliostat":     pre_eval["per_heliostat"],
+            },
+            "post_stage1":       {
+                "mean_mrad":         post_stage1_eval["mean_mrad"],
+                "median_mrad":       post_stage1_eval["median_mrad"],
+                "mean_m":            post_stage1_eval["mean_m"],
+                "mean_pixel_loss":   post_stage1_eval["mean_pixel_loss"],
+                "median_pixel_loss": post_stage1_eval["median_pixel_loss"],
+                "num_samples":       post_stage1_eval["num_samples"],
+                "num_nan_samples":   post_stage1_eval["num_nan_samples"],
+                "nan_heliostat_ids": post_stage1_eval["nan_heliostat_ids"],
+                "per_heliostat":     post_stage1_eval["per_heliostat"],
+            },
+            "post_training":     None,
+            "post_training_val": None,
+            "train_time_min":    round(train_time / 60, 2),
+            "loss_type":         loss_type,
+            "stage2_skipped":    True,
+        }
+        with open(output_dir / "results.json", "w") as f:
+            json.dump(early_results, f, indent=2)
+        with open(output_dir / "convergence_history_stage1.json", "w") as f:
+            json.dump(stage1_history, f, indent=2)
+        _save_kinematic_parameters(scenario, output_dir / "kinematic_parameters.json")
+        return early_results
 
-    # The ARTIST HeliostatRayTracer sampler assumes uniform per-heliostat sample
-    # counts.  With heterogeneous counts after flux filtering, oversample the
-    # shorter lists by drawing uniformly with replacement from the ORIGINAL list
-    # so every slot has equal probability over the true sample set.
-    import random as _random
-    _rng = _random.Random(42)
-
-    def _oversample(lst, n):
-        if len(lst) >= n:
-            return lst
-        extra = _rng.choices(lst, k=n - len(lst))
-        return lst + extra
-
-    if train_map_focal:
-        max_train_n   = max(len(cal) for _, cal, _ in train_map_focal)
-        counts_before = [len(cal) for _, cal, _ in train_map_focal]
-        if any(c != max_train_n for c in counts_before):
-            log.info(
-                f"Stage 2 train: random oversampling to uniform {max_train_n} samples/heliostat "
-                f"(range was {min(counts_before)}–{max_train_n})"
-            )
-            train_map_focal = [
-                (h, _oversample(cal, max_train_n), _oversample(f, max_train_n))
-                for h, cal, f in train_map_focal
-            ]
-    if val_map_focal:
-        max_val_n = max(len(cal) for _, cal, _ in val_map_focal)
-        if any(len(cal) != max_val_n for _, cal, _ in val_map_focal):
-            val_map_focal = [
-                (h, _oversample(cal, max_val_n), _oversample(f, max_val_n))
-                for h, cal, f in val_map_focal
-            ]
+    train_map_focal = train_mapping
+    val_map_focal   = val_mapping
 
     log.info(f"Stage 2a — {loss_type} fine-tuning on {len(train_map_focal)} heliostats ({stage2_epochs} epochs) …")
     t1 = time.time()
@@ -833,9 +827,8 @@ def run(
         },
         "train_time_min":           round(train_time / 60, 2),
         "loss_type":                loss_type,
+        "stage2_skipped":           False,
         "param_recovery":           recovery,
-        "focal_spot_heliostats":    sorted(focal_hids),
-        "alignment_only_heliostats": alignment_only_hids,
     }
     with open(output_dir / "results.json", "w") as f:
         json.dump(results, f, indent=2)

@@ -274,9 +274,9 @@ def write_summary(results: dict, perturbations_json: dict, output_dir: pathlib.P
     with open(output_dir / "summary.json", "w") as f:
         json.dump({"results": results, "perturbations": perturbations_json}, f, indent=2)
 
-    st1  = results.get("post_stage1", {})
-    trn  = results.get("post_training", {})
-    pre  = results.get("pre_training",  {})
+    st1  = results.get("post_stage1")  or {}
+    trn  = results.get("post_training") or {}
+    pre  = results.get("pre_training")  or {}
 
     trn_ph_mean, trn_ph_median = _ph_mean_median(trn)
 
@@ -290,11 +290,14 @@ def write_summary(results: dict, perturbations_json: dict, output_dir: pathlib.P
     if st1:
         st1_ph_mean, st1_ph_median = _ph_mean_median(st1)
         print(f"  {'Post-stage1 (alignment, best-val)':<36} {st1_ph_mean:>9.3f}  {st1_ph_median:>9.3f}  {st1.get('num_samples', '?')}")
-    print(f"  {'Post-training (stage-2 best-val)':<36} {trn_ph_mean:>9.3f}  {trn_ph_median:>9.3f}  {trn.get('num_samples', '?')}")
-    print(f"  Min / Max (post-training)          : {trn.get('min_mrad', float('nan')):.3f} / {trn.get('max_mrad', float('nan')):.3f} mrad")
+    if trn:
+        print(f"  {'Post-training (stage-2 best-val)':<36} {trn_ph_mean:>9.3f}  {trn_ph_median:>9.3f}  {trn.get('num_samples', '?')}")
+        print(f"  Min / Max (post-training)          : {trn.get('min_mrad', float('nan')):.3f} / {trn.get('max_mrad', float('nan')):.3f} mrad")
+        if trn.get("num_nan_samples"):
+            print(f"  NaN samples (post-training)        : {trn['num_nan_samples']}  ids={trn.get('nan_heliostat_ids', [])}")
+    else:
+        print(f"  {'Post-training (stage-2 best-val)':<36} {'skipped':>9}  {'skipped':>9}  —")
     print(f"  Training time                      : {results.get('train_time_min', 0):.1f} min")
-    if trn.get("num_nan_samples"):
-        print(f"  NaN samples (post-training)        : {trn['num_nan_samples']}  ids={trn.get('nan_heliostat_ids', [])}")
     print(f"{'=' * W}\n")
 
 

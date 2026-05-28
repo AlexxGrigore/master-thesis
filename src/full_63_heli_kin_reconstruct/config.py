@@ -27,6 +27,7 @@ else:
     PAINT_DIR = BASE_DIR / "datasets" / "paint"
 
 SCENARIO_PATH              = BASE_DIR / "scenarios" / "full_63_heli_kin_reconstruct" / "scenario.h5"
+ONE_HELIOSTAT_SCENARIOS_DIR = BASE_DIR / "scenarios" / "one_heliostat_scenarios"
 BENCHMARK_CSV              = PAINT_DIR / "splits" / f"{BENCHMARK_NAME}.csv"
 CALIBRATION_PROPERTIES_DIR = PAINT_DIR / BENCHMARK_NAME / "calibration_properties"
 FLUX_IMAGE_DIR             = PAINT_DIR / BENCHMARK_NAME / "flux_image"
@@ -60,12 +61,14 @@ PERTURBATION_SEED = 42
 # GT flux filtering  (applied to train / val splits before training)
 # ---------------------------------------------------------------------------
 
-MIN_ACTIVE_PIXEL_PCT = 0.5  # min % of pixels > 0.01  (rejects near-empty images)
+MIN_ACTIVE_PIXEL_PCT = 1.0  # min % of pixels > 0.01  (rejects near-empty images)
 
 # Heliostats with fewer valid train flux samples than this skip Stage-2 FocalSpotLoss
 # and receive an additional Stage-2 AlignmentLoss pass instead.  AlignmentLoss does not
 # require the flux to land on the receiver, so it always has a valid signal.
-MIN_FOCAL_SPOT_TRAIN_SAMPLES = 20
+MIN_FOCAL_SPOT_TRAIN_SAMPLES = 10
+MIN_VAL_SAMPLES  = 2
+MIN_TEST_SAMPLES = 2
 
 BLUR_SIGMA = 1.0  # Gaussian blur σ applied to predicted flux (and to GT at generation time)
 

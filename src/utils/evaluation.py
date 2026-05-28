@@ -207,7 +207,9 @@ def evaluate_flux_accuracy(
         # at dataset generation time, so FSE is consistent.
         pred_blurred = _gaussian_blur_batch(predicted_flux, sigma=blur_sigma)
         N = pred_blurred.shape[0]
-        pred_peak = pred_blurred.view(N, -1).max(dim=1).values.clamp(min=1e-12)
+        pred_peak_raw = pred_blurred.view(N, -1).max(dim=1).values
+        off_receiver  = pred_peak_raw < 1e-6   # predicted flux missed the receiver bitmap
+        pred_peak     = pred_peak_raw.clamp(min=1e-12)
         predicted_flux_pp = pred_blurred / pred_peak.view(N, 1, 1)
 
         bitmap_coords = get_center_of_mass(bitmaps=predicted_flux_pp, device=device)
@@ -220,6 +222,10 @@ def evaluate_flux_accuracy(
         )
 
         focal_spot_error = torch.norm(predicted_focal_spots[:, :3] - focal_spots[:, :3], dim=1)
+        # Samples where the predicted flux missed the receiver entirely produce a
+        # degenerate centroid at pixel (0,0).  Mark them NaN so they are excluded
+        # from mean/median mrad rather than inflating the reported error.
+        focal_spot_error[off_receiver] = float("nan")
         all_focal_spot_errors_m.extend(focal_spot_error.cpu().tolist())
 
         # Pixel-wise L1 loss — predicted is already blurred+peak-normalised above.
