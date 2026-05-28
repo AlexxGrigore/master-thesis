@@ -45,9 +45,10 @@ TRAIN_SAMPLES = 100
 VAL_SAMPLES   = 50
 TEST_SAMPLES  = 50
 
-SYNTH_GEN_RAYS           = 100   # high ray count → clean centroids
+SYNTH_GEN_RAYS           = 100   # high ray count → clean reference flux images
+SYNTH_GEN_SURFACE_POINTS = 25    # surface resolution used during dataset generation
 TRAIN_RAYS               = 10
-SURFACE_POINTS_PER_FACET = 25    # 25×25 = 625 pts/facet
+TRAIN_SURFACE_POINTS     = 25    # 25×25 = 625 pts/facet during training
 
 # ---------------------------------------------------------------------------
 # Perturbation
@@ -59,7 +60,7 @@ PERTURBATION_SEED = 42
 # GT flux filtering  (applied to train / val splits before training)
 # ---------------------------------------------------------------------------
 
-MIN_ACTIVE_PIXEL_PCT = 0.25  # min % of pixels > 0.01  (rejects near-empty images)
+MIN_ACTIVE_PIXEL_PCT = 0.5  # min % of pixels > 0.01  (rejects near-empty images)
 
 # Minimum sample counts after filtering — heliostats below these are excluded
 # from ALL splits (train + val + test) for consistency.
@@ -71,7 +72,7 @@ MIN_TEST_SAMPLES  = 5
 # Centroid trail capture  (Stage 2 only)
 # ---------------------------------------------------------------------------
 
-CENTROID_TRAIL_STRIDE = 5    # capture every Nth epoch during Stage 2
+CENTROID_TRAIL_STRIDE = 1    # capture every epoch during Stage 2
 CENTROID_TRAIL_N_DISP = 25   # max training samples shown per heliostat in trail grid
 
 PERTURBATION_RANGES = {

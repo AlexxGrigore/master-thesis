@@ -116,42 +116,17 @@ def _filter_flux_map(
     return kept
 
 
-def _normalize_mapping(mapping: list, seed: int = 0) -> list:
-    """Pad all heliostats to the maximum post-filter sample count by cycling.
+def _normalize_mapping(mapping: list) -> list:
+    """Drop heliostats with zero samples after flux filtering.
 
-    The KR mini-batch logic requires every active heliostat to have the same
-    number of samples.  After flux filtering, counts can differ.  Rather than
-    truncating to the minimum (losing samples), this function pads short
-    heliostats up to the global maximum by cycling their existing samples in a
-    shuffled order.
-
-    For ``SyntheticDatasetParser``, the parser uses modular indexing on disk
-    (``k % n_on_disk``), so extra path entries in the mapping are handled
-    transparently.  For real data the path entries themselves are repeated.
-
-    Heliostats with zero remaining samples are dropped entirely.
+    Heliostats retain their individual sample counts — no padding or repetition.
+    The training loop handles heterogeneous per-heliostat counts directly.
     """
-    import random as _random
     valid = [(hid, cal, flux) for hid, cal, flux in mapping if cal]
-    if not valid:
-        return mapping
-    max_count = max(len(cal) for _, cal, _ in valid)
     n_dropped = len(mapping) - len(valid)
     if n_dropped:
         log.info(f"Mapping: {n_dropped} heliostats dropped (zero samples after filtering).")
-    rng = _random.Random(seed)
-    result = []
-    for hid, cal, flux in valid:
-        n = len(cal)
-        if n < max_count:
-            shuffled = list(range(n))
-            rng.shuffle(shuffled)
-            indices = [shuffled[k % n] for k in range(max_count)]
-            cal  = [cal[i]  for i in indices]
-            flux = [flux[i] for i in indices]
-        result.append((hid, cal, flux))
-    log.info(f"Mapping normalised to {max_count} samples/heliostat (cyclic padding, seed={seed}).")
-    return result
+    return valid
 
 
 def _apply_threshold_exclusion(
@@ -568,6 +543,18 @@ def run(
         stride=trail_stride,
         n_disp=trail_n_disp,
     )
+    val_trail_s1 = _CentroidTrailRecorder(
+        train_parser=val_parser,
+        train_mapping=val_mapping,
+        scenario=scenario,
+        device=device,
+        stride=trail_stride,
+        n_disp=trail_n_disp,
+    )
+
+    def _s1_callback(epoch):
+        trail_recorder_s1(epoch)
+        val_trail_s1(epoch)
 
     stage1_reconstructor, stage1_loss_fn = _build_reconstructor(
         loss_type="alignment",
@@ -577,8 +564,7 @@ def run(
         eval_data=eval_data,
         optimization_config=stage1_config,
         train_position_deviation=True,
-        sample_mini_batch_size=10,
-        epoch_callback=trail_recorder_s1,
+        epoch_callback=_s1_callback,
     )
     stage1_reconstructor.reconstruct_kinematics(loss_definition=stage1_loss_fn, device=device)
     stage1_history = stage1_reconstructor._convergence_history
@@ -613,6 +599,18 @@ def run(
         stride=trail_stride,
         n_disp=trail_n_disp,
     )
+    val_trail_s2 = _CentroidTrailRecorder(
+        train_parser=val_parser,
+        train_mapping=val_mapping,
+        scenario=scenario,
+        device=device,
+        stride=trail_stride,
+        n_disp=trail_n_disp,
+    )
+
+    def _s2_callback(epoch):
+        trail_recorder(epoch)
+        val_trail_s2(epoch)
 
     stage2_reconstructor, stage2_loss_fn = _build_reconstructor(
         loss_type=loss_type,
@@ -623,8 +621,7 @@ def run(
         optimization_config=stage2_config,
         contour_params=contour_params,
         train_position_deviation=True,
-        sample_mini_batch_size=10,
-        epoch_callback=trail_recorder,
+        epoch_callback=_s2_callback,
     )
     stage2_reconstructor.reconstruct_kinematics(loss_definition=stage2_loss_fn, device=device)
     stage2_history = stage2_reconstructor._convergence_history
@@ -713,6 +710,8 @@ def run(
     _save_mrad_trajectory(
         trail_s1=trail_recorder_s1,
         trail_s2=trail_recorder,
+        val_trail_s1=val_trail_s1,
+        val_trail_s2=val_trail_s2,
         stage1_last_epoch=stage1_history[-1]["epoch"] if stage1_history else 0,
         pre_mrad=pre_eval["mean_mrad"],
         post_s1_mrad=post_stage1_eval["mean_mrad"],
@@ -813,6 +812,8 @@ def run(
 def _save_mrad_trajectory(
     trail_s1: "_CentroidTrailRecorder",
     trail_s2: "_CentroidTrailRecorder",
+    val_trail_s1: "_CentroidTrailRecorder",
+    val_trail_s2: "_CentroidTrailRecorder",
     stage1_last_epoch: int,
     pre_mrad: float,
     post_s1_mrad: float,
@@ -828,12 +829,16 @@ def _save_mrad_trajectory(
     import pathlib
     output_dir = pathlib.Path(output_dir)
 
-    s1_mrad = trail_s1.compute_mean_mrad_per_epoch() if trail_s1.has_data() else {}
-    s2_mrad = trail_s2.compute_mean_mrad_per_epoch() if trail_s2.has_data() else {}
+    s1_mrad     = trail_s1.compute_mean_mrad_per_epoch()     if trail_s1.has_data()     else {}
+    s2_mrad     = trail_s2.compute_mean_mrad_per_epoch()     if trail_s2.has_data()     else {}
+    s1_val_mrad = val_trail_s1.compute_mean_mrad_per_epoch() if val_trail_s1.has_data() else {}
+    s2_val_mrad = val_trail_s2.compute_mean_mrad_per_epoch() if val_trail_s2.has_data() else {}
 
     payload = {
         "stage1":              {str(k): v for k, v in s1_mrad.items()},
         "stage2":              {str(k): v for k, v in s2_mrad.items()},
+        "stage1_val":          {str(k): v for k, v in s1_val_mrad.items()},
+        "stage2_val":          {str(k): v for k, v in s2_val_mrad.items()},
         "stage2_epoch_offset": stage1_last_epoch + 1,
         "pre_training_mrad":   pre_mrad,
         "post_stage1_mrad":    post_s1_mrad,
@@ -1149,8 +1154,8 @@ def _param_recovery(scenario, perturbations_by_id: dict, heliostat_ids: list, de
         ].detach().cpu().tolist()
         # Actuator angle: compare change from initial vs perturbation
         start_ang = (
-            kinematic._initial_actuator_initial_angle[i].cpu()
-            if hasattr(kinematic, "_initial_actuator_initial_angle")
+            kinematic._initial_actuator_angle[i].cpu()
+            if hasattr(kinematic, "_initial_actuator_angle")
             else kinematic.actuators.optimizable_parameters[i, index_mapping.actuator_initial_angle, :].detach().cpu()
         )
         moved_act = (kinematic.actuators.optimizable_parameters[
@@ -1171,8 +1176,8 @@ def _param_recovery(scenario, perturbations_by_id: dict, heliostat_ids: list, de
 
         perturbation_trans = pert["translation_m"]
         start_trans = (
-            kinematic._initial_translation_deviation[i].cpu()
-            if hasattr(kinematic, "_initial_translation_deviation")
+            kinematic._initial_translation[i].cpu()
+            if hasattr(kinematic, "_initial_translation")
             else kinematic.translation_deviation_parameters[i].detach().cpu()
         )
         moved_trans = (kinematic.translation_deviation_parameters[i].detach().cpu() - start_trans).tolist()

@@ -225,13 +225,19 @@ def plot_unified_mrad(
     post_s1    = data.get("post_stage1_mrad")
     post_train = data.get("post_training_mrad")
 
-    s1_items = sorted((int(k), v) for k, v in data["stage1"].items())
-    s2_items = sorted((int(k), v) for k, v in data["stage2"].items())
+    s1_items     = sorted((int(k), v) for k, v in data["stage1"].items())
+    s2_items     = sorted((int(k), v) for k, v in data["stage2"].items())
+    s1_val_items = sorted((int(k), v) for k, v in data.get("stage1_val", {}).items())
+    s2_val_items = sorted((int(k), v) for k, v in data.get("stage2_val", {}).items())
 
-    s1_x = [ep         for ep, _ in s1_items]
-    s1_y = [v          for _,  v in s1_items]
-    s2_x = [ep + offset for ep, _ in s2_items]
-    s2_y = [v           for _,  v in s2_items]
+    s1_x     = [ep          for ep, _ in s1_items]
+    s1_y     = [v           for _,  v in s1_items]
+    s2_x     = [ep + offset  for ep, _ in s2_items]
+    s2_y     = [v            for _,  v in s2_items]
+    s1_vx    = [ep          for ep, _ in s1_val_items]
+    s1_vy    = [v           for _,  v in s1_val_items]
+    s2_vx    = [ep + offset  for ep, _ in s2_val_items]
+    s2_vy    = [v            for _,  v in s2_val_items]
 
     fig, ax = plt.subplots(figsize=(12, 5))
     fig.patch.set_facecolor("white")
@@ -240,12 +246,18 @@ def plot_unified_mrad(
     _C2 = "#e67e22"   # Stage 2 — orange
 
     if s1_x:
-        ax.plot(s1_x, s1_y, color=_C1, linewidth=1.5, label="Stage 1 (AlignmentLoss)")
+        ax.plot(s1_x, s1_y, color=_C1, linewidth=1.5, label="Stage 1 train")
         ax.scatter(s1_x, s1_y, color=_C1, s=18, zorder=3)
+    if s1_vx:
+        ax.plot(s1_vx, s1_vy, color=_C1, linewidth=1.2, linestyle="--", alpha=0.7, label="Stage 1 val")
+        ax.scatter(s1_vx, s1_vy, color=_C1, s=10, alpha=0.7, zorder=3)
 
     if s2_x:
-        ax.plot(s2_x, s2_y, color=_C2, linewidth=1.5, label="Stage 2 (ray-tracing loss)")
+        ax.plot(s2_x, s2_y, color=_C2, linewidth=1.5, label="Stage 2 train")
         ax.scatter(s2_x, s2_y, color=_C2, s=18, zorder=3)
+    if s2_vx:
+        ax.plot(s2_vx, s2_vy, color=_C2, linewidth=1.2, linestyle="--", alpha=0.7, label="Stage 2 val")
+        ax.scatter(s2_vx, s2_vy, color=_C2, s=10, alpha=0.7, zorder=3)
 
     # Stage boundary
     if offset > 0:
@@ -269,8 +281,8 @@ def plot_unified_mrad(
                    edgecolors="black", linewidths=0.8)
 
     ax.set_xlabel("Training epoch (Stage 1 → Stage 2)", fontsize=11)
-    ax.set_ylabel("Mean mrad (train samples)", fontsize=11)
-    ax.set_title("Unified convergence — both stages in mrad", fontsize=12, fontweight="bold")
+    ax.set_ylabel("Mean mrad", fontsize=11)
+    ax.set_title("Unified convergence — train vs val mrad (both stages)", fontsize=12, fontweight="bold")
     ax.legend(fontsize=9, framealpha=0.9)
     ax.grid(alpha=0.25, linestyle="--", linewidth=0.6)
     fig.tight_layout()

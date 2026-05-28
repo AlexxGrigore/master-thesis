@@ -207,7 +207,8 @@ def main() -> None:
         "test_samples":             cfg.TEST_SAMPLES,
         "train_rays":               cfg.TRAIN_RAYS,
         "synth_gen_rays":           cfg.SYNTH_GEN_RAYS,
-        "surface_points_per_facet": cfg.SURFACE_POINTS_PER_FACET,
+        "train_surface_points":     cfg.TRAIN_SURFACE_POINTS,
+        "synth_gen_surface_points": cfg.SYNTH_GEN_SURFACE_POINTS,
         "perturbation_seed":        cfg.PERTURBATION_SEED,
         "perturbation_ranges":      cfg.PERTURBATION_RANGES,
         "optimization_config":      {str(k): v for k, v in cfg.OPTIMIZATION_CONFIG.items()},
@@ -248,7 +249,7 @@ def main() -> None:
         tmp = Scenario.load_scenario_from_hdf5(
             scenario_file=f, device=device,
             number_of_surface_points_per_facet=torch.tensor(
-                [cfg.SURFACE_POINTS_PER_FACET, cfg.SURFACE_POINTS_PER_FACET]
+                [cfg.TRAIN_SURFACE_POINTS, cfg.TRAIN_SURFACE_POINTS]
             ),
         )
     heliostat_ids = list(tmp.heliostat_field.heliostat_groups[0].names)
@@ -269,6 +270,11 @@ def main() -> None:
                 f"perturbations.json not found at {pert_path}. "
                 "Run generate_dataset.py first. Param recovery reporting will be skipped."
             )
+
+    # Copy perturbations into the run output so each folder is self-contained.
+    if perturbations_json is not None:
+        with open(run_dir / "perturbations.json", "w") as f:
+            json.dump(perturbations_json, f, indent=2)
 
     # Build data mappings
     log.info("Building data mappings …")
@@ -320,14 +326,19 @@ def main() -> None:
         f"After threshold exclusion — train: {len(train_map)}, val: {len(val_map)}, test: {len(test_map)} heliostats"
     )
 
-    train_map = _normalize_mapping(train_map, seed=cfg.PERTURBATION_SEED)
-    val_map   = _normalize_mapping(val_map,   seed=cfg.PERTURBATION_SEED)
-    test_map  = _normalize_mapping(test_map,  seed=cfg.PERTURBATION_SEED)
+    train_map = _normalize_mapping(train_map)
+    val_map   = _normalize_mapping(val_map)
+    test_map  = _normalize_mapping(test_map)
+
+    def _count_range(m):
+        counts = [len(cal) for _, cal, _ in m]
+        return f"{min(counts)}–{max(counts)}" if counts else "0"
+
     log.info(
-        f"After normalisation — "
-        f"train: {len(train_map)} hels × {len(train_map[0][1]) if train_map else 0} samples, "
-        f"val: {len(val_map)} hels × {len(val_map[0][1]) if val_map else 0} samples, "
-        f"test: {len(test_map)} hels × {len(test_map[0][1]) if test_map else 0} samples"
+        f"After filtering — "
+        f"train: {len(train_map)} hels × {_count_range(train_map)} samples, "
+        f"val: {len(val_map)} hels × {_count_range(val_map)} samples, "
+        f"test: {len(test_map)} hels × {_count_range(test_map)} samples"
     )
 
     n_groups = Scenario.get_number_of_heliostat_groups_from_hdf5(cfg.SCENARIO_PATH)
@@ -388,7 +399,7 @@ def main() -> None:
             output_dir=run_dir,
             loss_type=cfg.LOSS_TYPE,
             dataset_type=dataset_type,
-            n_surface_pts=cfg.SURFACE_POINTS_PER_FACET,
+            n_surface_pts=cfg.TRAIN_SURFACE_POINTS,
             train_rays=train_rays,
             perturbations=perturbations_json,
             heliostat_ids=heliostat_ids,

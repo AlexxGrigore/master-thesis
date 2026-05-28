@@ -145,19 +145,10 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
             stopper      = self._setup_early_stopper()
             eval_cache   = self._cache_eval_data(group, device)
 
-            # Mini-batch setup.
-            n_samples  = int(active_mask[active_mask > 0][0].item())
-            n_active   = int((active_mask > 0).sum().item())
-            mb_size    = self.sample_mini_batch_size or n_samples
-            n_mb       = (n_samples + mb_size - 1) // mb_size
-            h_offsets  = torch.arange(n_active, device=device) * n_samples
+            nonzero_counts = active_mask[active_mask > 0].tolist()
+            n_active = int((active_mask > 0).sum().item())
+            total_active = int(active_mask.sum().item())
 
-            if n_mb > 1:
-                log.info(f"Mini-batching: {n_samples} samples → {n_mb} batches of ≤{mb_size}.")
-
-            # Loop-scoped variables read after the while-loop.
-            sample_indices   = torch.arange(n_active * mb_size, device=device)
-            current_mb_size  = mb_size
             loss             = torch.inf
             epoch            = 0
             log_step         = opt[constants.max_epoch] if opt[constants.log_step] == 0 else opt[constants.log_step]
@@ -168,64 +159,54 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
 
             while loss > float(opt[constants.tolerance]) and epoch <= opt[constants.max_epoch]:
                 optimizer.zero_grad()
-                kinematic    = group.kinematics
-                loss_accum   = None
+                kinematic = group.kinematics
 
-                for mb in range(n_mb):
-                    s, e = mb * mb_size, min((mb + 1) * mb_size, n_samples)
-                    current_mb_size = e - s
-                    sample_range = torch.arange(s, e, device=device)
-                    idx = (h_offsets.unsqueeze(1) + sample_range.unsqueeze(0)).reshape(-1)
-                    sub_mask = (active_mask > 0).to(torch.long) * current_mb_size
+                group.activate_heliostats(active_heliostats_mask=active_mask, device=device)
+                self._inject_base_position(kinematic, active_mask, device)
 
-                    group.activate_heliostats(active_heliostats_mask=sub_mask, device=device)
-                    self._inject_base_position(kinematic, sub_mask, device)
+                group.align_surfaces_with_incident_ray_directions(
+                    aim_points=self.scenario.solar_tower.get_centers_of_target_areas(
+                        target_mask, device
+                    ),
+                    incident_ray_directions=ray_dirs,
+                    active_heliostats_mask=active_mask,
+                    device=device,
+                )
 
-                    group.align_surfaces_with_incident_ray_directions(
-                        aim_points=self.scenario.solar_tower.get_centers_of_target_areas(
-                            target_mask[idx], device
-                        ),
-                        incident_ray_directions=ray_dirs[idx],
-                        active_heliostats_mask=sub_mask,
-                        device=device,
-                    )
+                ray_tracer = HeliostatRayTracer(
+                    scenario=self.scenario,
+                    heliostat_group=group,
+                    blocking_active=False,
+                    world_size=self.ddp_setup[constants.heliostat_group_world_size],
+                    rank=self.ddp_setup[constants.heliostat_group_rank],
+                    batch_size=opt[constants.batch_size],
+                    random_seed=self.ddp_setup[constants.heliostat_group_rank],
+                    bitmap_resolution=self.bitmap_resolution,
+                )
+                flux, _, _, _ = ray_tracer.trace_rays(
+                    incident_ray_directions=ray_dirs,
+                    active_heliostats_mask=active_mask,
+                    target_area_indices=target_mask,
+                    device=device,
+                )
+                inv_perm = torch.argsort(ray_tracer.get_sampler_indices())
+                flux_nat = flux[inv_perm]
 
-                    ray_tracer = HeliostatRayTracer(
-                        scenario=self.scenario,
-                        heliostat_group=group,
-                        blocking_active=False,
-                        world_size=self.ddp_setup[constants.heliostat_group_world_size],
-                        rank=self.ddp_setup[constants.heliostat_group_rank],
-                        batch_size=opt[constants.batch_size],
-                        random_seed=self.ddp_setup[constants.heliostat_group_rank],
-                        bitmap_resolution=self.bitmap_resolution,
-                    )
-                    flux, _, _, _ = ray_tracer.trace_rays(
-                        incident_ray_directions=ray_dirs[idx],
-                        active_heliostats_mask=sub_mask,
-                        target_area_indices=target_mask[idx],
-                        device=device,
-                    )
-                    sample_indices  = ray_tracer.get_sampler_indices()
-                    current_mb_size = e - s
-
-                    lph = self._compute_epoch_loss(
-                        epoch=epoch,
-                        flux=flux,
-                        measured_flux=measured_flux[idx],
-                        focal_spots=focal_spots[idx],
-                        sample_indices=sample_indices,
-                        target_indices=target_mask[idx],
-                        loss_fn=loss_definition,
-                        ground_truth=gt[idx],
-                        reduction_dims=rdims,
-                        n_samples_per_heliostat=current_mb_size,
-                        device=device,
-                    )
-                    (lph.mean() / n_mb).backward()
-                    loss_accum = lph.detach() / n_mb if loss_accum is None else loss_accum + lph.detach() / n_mb
-
-                loss_per_heliostat = loss_accum
+                lph = self._compute_epoch_loss(
+                    epoch=epoch,
+                    flux=flux_nat,
+                    measured_flux=measured_flux,
+                    focal_spots=focal_spots,
+                    sample_indices=torch.arange(total_active, device=device),
+                    target_indices=target_mask,
+                    loss_fn=loss_definition,
+                    ground_truth=gt,
+                    reduction_dims=rdims,
+                    n_samples_per_heliostat=nonzero_counts,
+                    device=device,
+                )
+                lph.mean().backward()
+                loss_per_heliostat = lph.detach()
                 loss = loss_per_heliostat.mean()
 
                 if self.ddp_setup[constants.is_nested]:
@@ -279,9 +260,8 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                 self._restore(kinematic, best_snap)
                 log.info(f"Rank {rank}: restored best params (eval={best_eval:.6f}).")
 
-            local_idx = sample_indices[::current_mb_size] // current_mb_size
             global_active = torch.nonzero(active_mask != 0, as_tuple=True)[0]
-            final_loss[global_active[local_idx] + group_offsets[group_idx]] = loss_per_heliostat
+            final_loss[global_active + group_offsets[group_idx]] = loss_per_heliostat
             log.info(f"Rank {rank}: group {group_idx} reconstructed.")
 
         if self.ddp_setup[constants.is_distributed]:
@@ -318,6 +298,8 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
             reduction_dimensions=reduction_dims,
             device=device,
         )
+        if isinstance(n_samples_per_heliostat, (list, tuple)):
+            return torch.stack([c.mean() for c in torch.split(lps, n_samples_per_heliostat)])
         return mean_loss_per_heliostat(lps, n_samples_per_heliostat)
 
     # ------------------------------------------------------------------
@@ -473,19 +455,20 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
             target_area_indices=target_mask,
             device=device,
         )
-        sample_idx = ray_tracer.get_sampler_indices()
-        n = int(active_mask.sum() / (active_mask > 0).sum())
+        inv_perm = torch.argsort(ray_tracer.get_sampler_indices())
+        flux_nat = flux[inv_perm]
+        nonzero_counts = active_mask[active_mask > 0].tolist()
 
         gt, rdims = self._get_ground_truth_and_reduction_dims(measured_flux, focal_spots)
-        flux_pp, gt_pp = self._preprocess_eval_flux(flux, gt)
+        flux_pp, gt_pp = self._preprocess_eval_flux(flux_nat, gt)
         lps = loss_fn(
             prediction=flux_pp,
-            ground_truth=gt_pp[sample_idx],
-            target_area_indices=target_mask[sample_idx],
+            ground_truth=gt_pp,
+            target_area_indices=target_mask,
             reduction_dimensions=rdims,
             device=device,
         )
-        return mean_loss_per_heliostat(lps, n).mean().item()
+        return torch.stack([c.mean() for c in torch.split(lps, nonzero_counts)]).mean().item()
 
     # ------------------------------------------------------------------
     # Parameter helpers
@@ -658,6 +641,8 @@ class WortbergPixelReconstructor(WortbergKinematicReconstructor):
             reduction_dimensions=reduction_dims,
             device=device,
         )
+        if isinstance(n_samples_per_heliostat, (list, tuple)):
+            return torch.stack([c.mean() for c in torch.split(lps, n_samples_per_heliostat)])
         return mean_loss_per_heliostat(lps, n_samples_per_heliostat)
 
     def _blur(self, flux: torch.Tensor) -> torch.Tensor:
@@ -918,7 +903,10 @@ class WortbergContourReconstructor(WortbergKinematicReconstructor):
             reduction_dimensions=reduction_dims,
             device=device,
         )
-        lph = _mlph(total, n_samples_per_heliostat)
+        if isinstance(n_samples_per_heliostat, (list, tuple)):
+            lph = torch.stack([c.mean() for c in torch.split(total, n_samples_per_heliostat)])
+        else:
+            lph = _mlph(total, n_samples_per_heliostat)
 
         # Reset accumulators when a new epoch starts (called once per mini-batch).
         if epoch != getattr(self, "_comp_epoch", -1):
@@ -984,18 +972,18 @@ class WortbergContourReconstructor(WortbergKinematicReconstructor):
             target_area_indices=target_mask,
             device=device,
         )
-        sample_idx = ray_tracer.get_sampler_indices()
-        n = int(active_mask.sum() / (active_mask > 0).sum())
+        inv_perm = torch.argsort(ray_tracer.get_sampler_indices())
+        flux_nat = flux[inv_perm]
+        nonzero_counts = active_mask[active_mask > 0].tolist()
 
         gt, rdims = self._get_ground_truth_and_reduction_dims(measured_flux, focal_spots)
         total, coarse, fine, gravity = loss_fn.forward_with_components(
-            prediction=flux,
-            ground_truth=gt[sample_idx],
-            target_area_indices=target_mask[sample_idx],
+            prediction=flux_nat,
+            ground_truth=gt,
+            target_area_indices=target_mask,
             reduction_dimensions=rdims,
             device=device,
         )
-        from artist.optim import mean_loss_per_heliostat as _mlph
-        scalar = _mlph(total, n).mean().item()
+        scalar = torch.stack([c.mean() for c in torch.split(total, nonzero_counts)]).mean().item()
         self._last_eval_components = (coarse, fine, gravity)
         return scalar

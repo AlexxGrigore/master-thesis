@@ -308,7 +308,7 @@ def main() -> None:
             scenario = Scenario.load_scenario_from_hdf5(
                 scenario_file=f, device=device,
                 number_of_surface_points_per_facet=torch.tensor(
-                    [cfg.SURFACE_POINTS_PER_FACET, cfg.SURFACE_POINTS_PER_FACET]
+                    [cfg.SYNTH_GEN_SURFACE_POINTS, cfg.SYNTH_GEN_SURFACE_POINTS]
                 ),
             )
         heliostat_group = scenario.heliostat_field.heliostat_groups[0]
