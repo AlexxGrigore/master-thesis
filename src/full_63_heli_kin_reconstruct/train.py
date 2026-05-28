@@ -129,48 +129,6 @@ def _normalize_mapping(mapping: list) -> list:
     return valid
 
 
-def _apply_threshold_exclusion(
-    train_map: list,
-    val_map: list,
-    test_map: list,
-    min_train: int = 10,
-    min_val: int   = 5,
-    min_test: int  = 5,
-) -> tuple:
-    """Remove heliostats that fall below minimum sample thresholds from all splits.
-
-    A heliostat is excluded from train, val, AND test if it fails any single
-    threshold, ensuring a consistent heliostat set across all three splits.
-    """
-    train_counts = {hid: len(cal) for hid, cal, _ in train_map}
-    val_counts   = {hid: len(cal) for hid, cal, _ in val_map}
-    test_counts  = {hid: len(cal) for hid, cal, _ in test_map}
-    all_hids     = set(train_counts) | set(val_counts) | set(test_counts)
-
-    excluded = {}
-    for hid in all_hids:
-        n_tr = train_counts.get(hid, 0)
-        n_va = val_counts.get(hid, 0)
-        n_te = test_counts.get(hid, 0)
-        if n_tr < min_train:
-            excluded[hid] = f"train={n_tr} < {min_train}"
-        elif n_va < min_val:
-            excluded[hid] = f"val={n_va} < {min_val}"
-        elif n_te < min_test:
-            excluded[hid] = f"test={n_te} < {min_test}"
-
-    if excluded:
-        for hid, reason in sorted(excluded.items()):
-            log.info(f"  Excluding {hid}: {reason}")
-        log.info(f"Threshold exclusion: {len(excluded)} heliostats removed from all splits.")
-    else:
-        log.info("Threshold exclusion: all heliostats passed thresholds.")
-
-    keep = all_hids - set(excluded)
-    train_map = [(hid, cal, flux) for hid, cal, flux in train_map if hid in keep]
-    val_map   = [(hid, cal, flux) for hid, cal, flux in val_map   if hid in keep]
-    test_map  = [(hid, cal, flux) for hid, cal, flux in test_map  if hid in keep]
-    return train_map, val_map, test_map
 
 
 # ---------------------------------------------------------------------------
@@ -197,12 +155,14 @@ class _CentroidTrailRecorder:
         stride: int,
         n_disp: int,
         bitmap_res: int = 256,
+        blur_sigma: float = 0.0,
     ) -> None:
         self.stride      = stride
         self.n_disp      = n_disp
         self.scenario    = scenario
         self.device      = device
         self.bitmap_res  = torch.tensor([bitmap_res, bitmap_res])
+        self.blur_sigma  = blur_sigma
 
         # Populated in _preload: hid → dict of tensors / metadata
         self._hid_data: dict[str, dict] = {}
@@ -335,11 +295,19 @@ class _CentroidTrailRecorder:
                     target_area_indices=tgt_mask,
                     device=self.device,
                 )
-                inv_perm    = torch.argsort(ray_tracer.get_sampler_indices())
-                flux_nat    = flux[inv_perm]
-                tgt_nat     = tgt_mask  # targets are in natural order
+                sample_indices = ray_tracer.get_sampler_indices()
+                inv_perm       = torch.argsort(sample_indices)
+                flux_nat = flux[sample_indices][inv_perm]
+                tgt_nat  = tgt_mask[sample_indices][inv_perm]
 
-                bm_coords = get_center_of_mass(bitmaps=flux_nat, device=self.device)
+                # Apply the same blur+normalize as the training loop so the
+                # recorded centroid trajectory matches the optimised loss signal.
+                flux_pp  = _gaussian_blur_batch(flux_nat, sigma=self.blur_sigma)
+                N_pp     = flux_pp.shape[0]
+                peak_pp  = flux_pp.view(N_pp, -1).max(dim=1).values.clamp(min=1e-12)
+                flux_pp  = flux_pp / peak_pp.view(N_pp, 1, 1)
+
+                bm_coords = get_center_of_mass(bitmaps=flux_pp, device=self.device)
                 centroids  = bitmap_coordinates_to_target_coordinates(
                     bitmap_coordinates=bm_coords,
                     bitmap_resolution=bm_res,
@@ -413,11 +381,10 @@ _LOSS_CONFIGS: dict[str, tuple] = {
 
 
 def _build_reconstructor(loss_type, scenario, ddp_setup, data, eval_data, optimization_config,
-                          contour_params=None, **kwargs):
+                          contour_params=None, blur_sigma: float = 0.0, **kwargs):
     if loss_type not in _LOSS_CONFIGS:
         raise ValueError(f"Unknown loss_type {loss_type!r}. Choose from {list(_LOSS_CONFIGS)}.")
     cls, loss_fn_factory = _LOSS_CONFIGS[loss_type]
-    extra = {"blur_sigma": 1.0} if cls is WortbergPixelReconstructor else {}
     reconstructor = cls(
         ddp_setup=ddp_setup,
         scenario=scenario,
@@ -425,7 +392,7 @@ def _build_reconstructor(loss_type, scenario, ddp_setup, data, eval_data, optimi
         optimization_configuration=optimization_config,
         reconstruction_method=config_dictionary.kinematics_reconstruction_raytracing,
         eval_data=eval_data,
-        **extra,
+        blur_sigma=blur_sigma,
         **kwargs,
     )
     if loss_type == "contour":
@@ -458,6 +425,8 @@ def run(
     contour_params: dict | None = None,
     trail_stride: int = 5,
     trail_n_disp: int = 25,
+    min_focal_spot_samples: int = 0,
+    blur_sigma: float = 0.0,
 ) -> dict:
     """
     Train on perturbed synthetic data for 63 heliostats using a two-stage approach:
@@ -494,6 +463,7 @@ def run(
         heliostat_data_mapping=test_mapping,
         data_parser=test_parser,
         device=device,
+        blur_sigma=blur_sigma,
     )
     pre_eval_time_s = time.time() - pre_t0
     log.info(
@@ -542,6 +512,7 @@ def run(
         device=device,
         stride=trail_stride,
         n_disp=trail_n_disp,
+        blur_sigma=blur_sigma,
     )
     val_trail_s1 = _CentroidTrailRecorder(
         train_parser=val_parser,
@@ -550,6 +521,7 @@ def run(
         device=device,
         stride=trail_stride,
         n_disp=trail_n_disp,
+        blur_sigma=blur_sigma,
     )
 
     def _s1_callback(epoch):
@@ -565,6 +537,7 @@ def run(
         optimization_config=stage1_config,
         train_position_deviation=True,
         epoch_callback=_s1_callback,
+        blur_sigma=blur_sigma,
     )
     stage1_reconstructor.reconstruct_kinematics(loss_definition=stage1_loss_fn, device=device)
     stage1_history = stage1_reconstructor._convergence_history
@@ -578,6 +551,7 @@ def run(
         heliostat_data_mapping=test_mapping,
         data_parser=test_parser,
         device=device,
+        blur_sigma=blur_sigma,
     )
     log.info(
         f"  post-stage1 : mean={post_stage1_eval['mean_mrad']:.3f} mrad  "
@@ -588,47 +562,115 @@ def run(
     gc.collect()
     torch.cuda.empty_cache()
 
-    log.info(f"Stage 2 — {loss_type} fine-tuning ({stage2_epochs} epochs) …")
+    # Split heliostats: those with enough flux samples get FocalSpotLoss (Stage 2a);
+    # the rest get an additional AlignmentLoss pass (Stage 2b).
+    if min_focal_spot_samples > 0:
+        focal_hids          = {hid for hid, cal, _ in train_mapping if len(cal) >= min_focal_spot_samples}
+        train_map_focal     = [(h, c, f) for h, c, f in train_mapping if h in focal_hids]
+        val_map_focal       = [(h, c, f) for h, c, f in val_mapping   if h in focal_hids]
+        alignment_only_hids = [h for h, _, _ in train_mapping if h not in focal_hids]
+        if alignment_only_hids:
+            log.info(
+                f"{len(alignment_only_hids)} heliostats have < {min_focal_spot_samples} valid flux "
+                f"samples → kept at Stage-1 result, skipping Stage-2: {alignment_only_hids}"
+            )
+        else:
+            log.info("All heliostats have enough flux samples for Stage-2.")
+    else:
+        focal_hids          = {h for h, _, _ in train_mapping}
+        train_map_focal     = train_mapping
+        val_map_focal       = val_mapping
+        alignment_only_hids = []
+
+    # The ARTIST HeliostatRayTracer sampler assumes uniform per-heliostat sample
+    # counts.  With heterogeneous counts after flux filtering, oversample the
+    # shorter lists by drawing uniformly with replacement from the ORIGINAL list
+    # so every slot has equal probability over the true sample set.
+    import random as _random
+    _rng = _random.Random(42)
+
+    def _oversample(lst, n):
+        if len(lst) >= n:
+            return lst
+        extra = _rng.choices(lst, k=n - len(lst))
+        return lst + extra
+
+    if train_map_focal:
+        max_train_n   = max(len(cal) for _, cal, _ in train_map_focal)
+        counts_before = [len(cal) for _, cal, _ in train_map_focal]
+        if any(c != max_train_n for c in counts_before):
+            log.info(
+                f"Stage 2 train: random oversampling to uniform {max_train_n} samples/heliostat "
+                f"(range was {min(counts_before)}–{max_train_n})"
+            )
+            train_map_focal = [
+                (h, _oversample(cal, max_train_n), _oversample(f, max_train_n))
+                for h, cal, f in train_map_focal
+            ]
+    if val_map_focal:
+        max_val_n = max(len(cal) for _, cal, _ in val_map_focal)
+        if any(len(cal) != max_val_n for _, cal, _ in val_map_focal):
+            val_map_focal = [
+                (h, _oversample(cal, max_val_n), _oversample(f, max_val_n))
+                for h, cal, f in val_map_focal
+            ]
+
+    log.info(f"Stage 2a — {loss_type} fine-tuning on {len(train_map_focal)} heliostats ({stage2_epochs} epochs) …")
     t1 = time.time()
 
     trail_recorder = _CentroidTrailRecorder(
         train_parser=train_parser,
-        train_mapping=train_mapping,
+        train_mapping=train_map_focal,
         scenario=scenario,
         device=device,
         stride=trail_stride,
         n_disp=trail_n_disp,
+        blur_sigma=blur_sigma,
     )
     val_trail_s2 = _CentroidTrailRecorder(
         train_parser=val_parser,
-        train_mapping=val_mapping,
+        train_mapping=val_map_focal,
         scenario=scenario,
         device=device,
         stride=trail_stride,
         n_disp=trail_n_disp,
+        blur_sigma=blur_sigma,
     )
 
     def _s2_callback(epoch):
         trail_recorder(epoch)
         val_trail_s2(epoch)
 
+    data_focal    = {config_dictionary.data_parser: train_parser,
+                     config_dictionary.heliostat_data_mapping: train_map_focal}
+    eval_data_focal = {"data_parser": val_parser,
+                       "heliostat_data_mapping": val_map_focal}
+
     stage2_reconstructor, stage2_loss_fn = _build_reconstructor(
         loss_type=loss_type,
         scenario=scenario,
         ddp_setup=ddp_setup,
-        data=data,
-        eval_data=eval_data,
+        data=data_focal,
+        eval_data=eval_data_focal,
         optimization_config=stage2_config,
         contour_params=contour_params,
         train_position_deviation=True,
         epoch_callback=_s2_callback,
+        blur_sigma=blur_sigma,
     )
     stage2_reconstructor.reconstruct_kinematics(loss_definition=stage2_loss_fn, device=device)
-    stage2_history = stage2_reconstructor._convergence_history
+    stage2_history        = stage2_reconstructor._convergence_history
+    stage2_kinematic_hist = stage2_reconstructor._kinematic_history
     stage2_time_s = time.time() - t1
-    train_time = time.time() - t0
     _ram_after_stage2 = _ram_gb()
-    log.info(f"Stage 2 done in {stage2_time_s / 60:.1f} min  (total {train_time / 60:.1f} min)")
+    log.info(f"Stage 2a done in {stage2_time_s / 60:.1f} min")
+
+    del stage2_reconstructor
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    train_time = time.time() - t0
+    log.info(f"Total training time: {train_time / 60:.1f} min")
 
     if trail_recorder.has_data():
         trail_recorder.save_trail_plots(output_dir / "centroid_trails")
@@ -646,17 +688,10 @@ def run(
         json.dump(stage1_history, f, indent=2)
     with open(output_dir / "convergence_history_stage2.json", "w") as f:
         json.dump(stage2_history, f, indent=2)
-
     if heliostat_ids is not None:
-        kinematic_history = _build_kinematic_history(
-            stage2_reconstructor._kinematic_history, heliostat_ids
-        )
+        kinematic_history = _build_kinematic_history(stage2_kinematic_hist, heliostat_ids)
         with open(output_dir / "kinematic_history.json", "w") as f:
             json.dump(kinematic_history, f, indent=2)
-
-    del stage2_reconstructor
-    gc.collect()
-    torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------
     # Post-training eval: trained scenario vs perturbed test data → low mrad
@@ -668,6 +703,7 @@ def run(
         heliostat_data_mapping=test_mapping,
         data_parser=test_parser,
         device=device,
+        blur_sigma=blur_sigma,
     )
     post_train_eval_time_s = time.time() - post_t0
     log.info(
@@ -682,6 +718,7 @@ def run(
         test_mapping=test_mapping,
         device=device,
         dataset_type=dataset_type,
+        blur_sigma=blur_sigma,
     )
 
     if loss_type == "contour" and hel_data:
@@ -698,6 +735,7 @@ def run(
         heliostat_data_mapping=val_mapping,
         data_parser=val_parser,
         device=device,
+        blur_sigma=blur_sigma,
     )
     log.info(
         f"  post-training val: mean={post_train_val_eval['mean_mrad']:.3f} mrad  "
@@ -793,9 +831,11 @@ def run(
             "num_samples":       post_train_val_eval["num_samples"],
             "per_heliostat":     post_train_val_eval["per_heliostat"],
         },
-        "train_time_min": round(train_time / 60, 2),
-        "loss_type":      loss_type,
-        "param_recovery": recovery,
+        "train_time_min":           round(train_time / 60, 2),
+        "loss_type":                loss_type,
+        "param_recovery":           recovery,
+        "focal_spot_heliostats":    sorted(focal_hids),
+        "alignment_only_heliostats": alignment_only_hids,
     }
     with open(output_dir / "results.json", "w") as f:
         json.dump(results, f, indent=2)
@@ -908,7 +948,8 @@ def _collect_gt_images(
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def _collect_hel_data(scenario, test_parser, test_mapping, device, dataset_type="synthetic"):
+def _collect_hel_data(scenario, test_parser, test_mapping, device, dataset_type="synthetic",
+                      blur_sigma: float = 0.0):
     """
     Identify the best and worst heliostats by post-training FSE and save a
     10-row × 5-pair flux grid (measured | predicted) for each.
@@ -973,11 +1014,22 @@ def _collect_hel_data(scenario, test_parser, test_mapping, device, dataset_type=
             device=device,
         )
 
-        sample_indices    = ray_tracer.get_sampler_indices()
-        inv_perm          = torch.argsort(sample_indices)
-        predicted_natural = predicted_sampler[inv_perm]
+        sample_indices = ray_tracer.get_sampler_indices()
+        inv_perm       = torch.argsort(sample_indices)
 
-        bitmap_coords = get_center_of_mass(bitmaps=predicted_sampler, device=device)
+        # Subset to sampler-covered instances before preprocessing (mirrors evaluate_flux_accuracy).
+        # The ARTIST sampler may drop a few samples (rounding), so N_actual <= N_total.
+        predicted_sampler = predicted_sampler[sample_indices]  # [N_actual, H, W]
+        measured_natural  = measured_flux[sample_indices][inv_perm]  # [N_actual, H, W], natural order
+
+        # Blur + peak-normalise predicted flux to match the training loss preprocessing.
+        pred_blurred = _gaussian_blur_batch(predicted_sampler, sigma=blur_sigma)
+        N_pred = pred_blurred.shape[0]
+        pred_peak = pred_blurred.view(N_pred, -1).max(dim=1).values.clamp(min=1e-12)
+        predicted_sampler_pp = pred_blurred / pred_peak.view(N_pred, 1, 1)
+        predicted_natural = predicted_sampler_pp[inv_perm]
+
+        bitmap_coords = get_center_of_mass(bitmaps=predicted_sampler_pp, device=device)
         predicted_spots = bitmap_coordinates_to_target_coordinates(
             bitmap_coordinates=bitmap_coords,
             bitmap_resolution=ray_tracer.bitmap_resolution,
@@ -990,6 +1042,7 @@ def _collect_hel_data(scenario, test_parser, test_mapping, device, dataset_type=
         )
         fse_natural = fse_sampler[inv_perm]
 
+        # Compute actual per-heliostat counts from sample_indices (drops from sampler rounding).
         reference_target = scenario.solar_tower.target_areas[
             index_mapping.planar_target_areas
         ].centers[:, :3].mean(dim=0).to(device)
@@ -999,31 +1052,36 @@ def _collect_hel_data(scenario, test_parser, test_mapping, device, dataset_type=
         )
         samples_per_hel = active_heliostats_mask[active_indices].long()
 
-        offset = 0
+        sorted_natural_indices = sample_indices[inv_perm]  # ascending natural indices
+
+        hel_offsets = [0]
+        for cnt in samples_per_hel:
+            hel_offsets.append(hel_offsets[-1] + cnt.item())
+
+        actual_offset = 0
         for j, idx in enumerate(active_indices):
             hid = heliostat_group.names[idx.item()]
-            n   = samples_per_hel[j].item()
             dist_m = distances[j].item()
 
-            meas_slice = measured_flux[offset: offset + n].cpu()
-            pred_slice = predicted_natural[offset: offset + n].cpu()
-            fse_slice  = fse_natural[offset: offset + n]
+            hel_start = hel_offsets[j]
+            hel_end   = hel_offsets[j + 1]
+            n_actual  = int(
+                ((sorted_natural_indices >= hel_start) & (sorted_natural_indices < hel_end)).sum()
+            )
 
-            # Build peak-normalised image lists
+            meas_slice = measured_natural[actual_offset: actual_offset + n_actual].cpu()
+            pred_slice = predicted_natural[actual_offset: actual_offset + n_actual].cpu()
+            fse_slice  = fse_natural[actual_offset: actual_offset + n_actual]
+
+            # Build peak-normalised image lists.
+            # predicted_natural is already blurred+normalised; GT PNG is pre-blurred at
+            # generation time, so just peak-normalise when loading.
             meas_imgs, pred_imgs = [], []
-            for k in range(n):
+            for k in range(n_actual):
                 m = meas_slice[k]
-                p = pred_slice[k]
-
-                pb = _gaussian_blur_batch(p.unsqueeze(0), sigma=1.0).squeeze(0)
-                p_vis = (pb / pb.max().clamp(min=1e-12)).numpy()
-
-                if dataset_type == "synthetic":
-                    mb = _gaussian_blur_batch(m.unsqueeze(0), sigma=1.0).squeeze(0)
-                else:
-                    mb = m
-                m_vis = (mb / mb.max().clamp(min=1e-12)).numpy()
-
+                p = pred_slice[k]  # already blurred + peak-normalised
+                p_vis = p.numpy()
+                m_vis = (m / m.max().clamp(min=1e-12)).numpy()
                 meas_imgs.append(m_vis)
                 pred_imgs.append(p_vis)
 
@@ -1040,10 +1098,10 @@ def _collect_hel_data(scenario, test_parser, test_mapping, device, dataset_type=
                 "predicted":        pred_imgs,
                 "mean_mrad":        mean_mrad,
                 # Raw tensors kept for contour overlay / pipeline plots.
-                "measured_tensors":  [meas_slice[k].unsqueeze(0) for k in range(n)],
-                "predicted_tensors": [pred_slice[k].unsqueeze(0) for k in range(n)],
+                "measured_tensors":  [meas_slice[k].unsqueeze(0) for k in range(n_actual)],
+                "predicted_tensors": [pred_slice[k].unsqueeze(0) for k in range(n_actual)],
             }
-            offset += n
+            actual_offset += n_actual
 
     if not hel_data:
         log.warning("No heliostat data collected.")

@@ -62,11 +62,12 @@ PERTURBATION_SEED = 42
 
 MIN_ACTIVE_PIXEL_PCT = 0.5  # min % of pixels > 0.01  (rejects near-empty images)
 
-# Minimum sample counts after filtering — heliostats below these are excluded
-# from ALL splits (train + val + test) for consistency.
-MIN_TRAIN_SAMPLES = 10
-MIN_VAL_SAMPLES   = 5
-MIN_TEST_SAMPLES  = 5
+# Heliostats with fewer valid train flux samples than this skip Stage-2 FocalSpotLoss
+# and receive an additional Stage-2 AlignmentLoss pass instead.  AlignmentLoss does not
+# require the flux to land on the receiver, so it always has a valid signal.
+MIN_FOCAL_SPOT_TRAIN_SAMPLES = 20
+
+BLUR_SIGMA = 1.0  # Gaussian blur σ applied to predicted flux (and to GT at generation time)
 
 # ---------------------------------------------------------------------------
 # Centroid trail capture  (Stage 2 only)

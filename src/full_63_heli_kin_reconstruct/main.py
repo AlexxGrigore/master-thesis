@@ -37,7 +37,7 @@ _src  = _here.parent
 sys.path.insert(0, str(_src))
 
 import config as cfg
-from train import run, _filter_flux_map, _normalize_mapping, _apply_threshold_exclusion
+from train import run, _filter_flux_map, _normalize_mapping
 from utils.evaluation import build_heliostat_data_mapping
 from utils.synth_data import SyntheticDatasetParser, _equalize_mapping, perturbations_to_json
 from utils.synth_reporting import (
@@ -213,6 +213,8 @@ def main() -> None:
         "perturbation_ranges":      cfg.PERTURBATION_RANGES,
         "optimization_config":      {str(k): v for k, v in cfg.OPTIMIZATION_CONFIG.items()},
         "contour_params":           cfg.CONTOUR_PARAMS,
+        "min_focal_spot_train_samples": cfg.MIN_FOCAL_SPOT_TRAIN_SAMPLES,
+        "blur_sigma":                   cfg.BLUR_SIGMA,
         "smoke_test":               args.smoke_test,
         "output_dir":               str(run_dir),
         "pipeline":                 "corrected",
@@ -316,16 +318,6 @@ def main() -> None:
     )
     log.info(f"Filter stats table saved → {run_dir / 'filter_stats.png'}")
 
-    train_map, val_map, test_map = _apply_threshold_exclusion(
-        train_map, val_map, test_map,
-        min_train=cfg.MIN_TRAIN_SAMPLES,
-        min_val=cfg.MIN_VAL_SAMPLES,
-        min_test=cfg.MIN_TEST_SAMPLES,
-    )
-    log.info(
-        f"After threshold exclusion — train: {len(train_map)}, val: {len(val_map)}, test: {len(test_map)} heliostats"
-    )
-
     train_map = _normalize_mapping(train_map)
     val_map   = _normalize_mapping(val_map)
     test_map  = _normalize_mapping(test_map)
@@ -408,6 +400,8 @@ def main() -> None:
             contour_params=cfg.CONTOUR_PARAMS,
             trail_stride=cfg.CENTROID_TRAIL_STRIDE,
             trail_n_disp=cfg.CENTROID_TRAIL_N_DISP,
+            min_focal_spot_samples=cfg.MIN_FOCAL_SPOT_TRAIN_SAMPLES,
+            blur_sigma=cfg.BLUR_SIGMA,
         )
 
         gc.collect()

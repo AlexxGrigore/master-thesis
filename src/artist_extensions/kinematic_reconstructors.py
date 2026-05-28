@@ -66,6 +66,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
         eval_data: dict | None = None,
         sample_mini_batch_size: int | None = None,
         epoch_callback=None,
+        blur_sigma: float = 0.0,
         **kwargs,
     ) -> None:
         # Accept a flat optimization config dict (as used in the experiments) and
@@ -90,6 +91,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
         self.eval_data = eval_data
         self.sample_mini_batch_size = sample_mini_batch_size
         self.epoch_callback = epoch_callback
+        self.blur_sigma = blur_sigma
 
     # ------------------------------------------------------------------
     # Core training loop
@@ -190,7 +192,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
                     device=device,
                 )
                 inv_perm = torch.argsort(ray_tracer.get_sampler_indices())
-                flux_nat = flux[inv_perm]
+                flux_nat = self._preprocess_flux(flux[inv_perm])
 
                 lph = self._compute_epoch_loss(
                     epoch=epoch,
@@ -284,6 +286,32 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
         """Transform predicted flux and ground truth before eval loss.
         Default: identity. Override in WortbergPixelReconstructor."""
         return flux, ground_truth
+
+    # ------------------------------------------------------------------
+    # Flux preprocessing (blur + peak-normalise)
+    # ------------------------------------------------------------------
+
+    def _blur(self, flux: torch.Tensor) -> torch.Tensor:
+        """Separable Gaussian blur over a batch of flux images [N, H, W]."""
+        if self.blur_sigma <= 0:
+            return flux
+        ks = int(4 * self.blur_sigma + 0.5) * 2 + 1
+        coords = torch.arange(ks, device=flux.device, dtype=flux.dtype) - ks // 2
+        g = torch.exp(-0.5 * (coords / self.blur_sigma) ** 2)
+        g = g / g.sum()
+        kernel = (g[:, None] * g[None, :]).view(1, 1, ks, ks)
+        return F.conv2d(flux.unsqueeze(1), kernel, padding=ks // 2).squeeze(1)
+
+    @staticmethod
+    def _peak_normalize(flux: torch.Tensor) -> torch.Tensor:
+        """Peak-normalise each image in a batch to [0, 1] independently."""
+        N    = flux.shape[0]
+        peak = flux.view(N, -1).max(dim=1).values.clamp(min=1e-12)
+        return flux / peak.view(N, 1, 1)
+
+    def _preprocess_flux(self, flux: torch.Tensor) -> torch.Tensor:
+        """Blur then peak-normalise predicted flux. Applied uniformly in train and eval."""
+        return self._peak_normalize(self._blur(flux))
 
     def _compute_epoch_loss(
         self, epoch, flux, measured_flux, focal_spots, sample_indices,
@@ -456,7 +484,7 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
             device=device,
         )
         inv_perm = torch.argsort(ray_tracer.get_sampler_indices())
-        flux_nat = flux[inv_perm]
+        flux_nat = self._preprocess_flux(flux[inv_perm])
         nonzero_counts = active_mask[active_mask > 0].tolist()
 
         gt, rdims = self._get_ground_truth_and_reduction_dims(measured_flux, focal_spots)
@@ -610,32 +638,26 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
 # ---------------------------------------------------------------------------
 
 class WortbergPixelReconstructor(WortbergKinematicReconstructor):
-    """Pixel-loss variant: Gaussian-blurred, peak-normalised flux bitmaps as ground truth.
-
-    Before computing the loss each epoch the predicted flux is blurred
-    (to smooth ray-tracing sparsity) and both predicted and measured images
-    are peak-normalised to [0, 1] per image, making the loss scale-invariant.
+    """Pixel-loss variant: predicted flux is blurred+peak-normalised (via base _preprocess_flux);
+    GT comes from pre-blurred PNGs saved at dataset generation time, so only peak-normalised here.
     """
-
-    def __init__(self, *args, blur_sigma: float = 5.0, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.blur_sigma = blur_sigma
 
     def _get_ground_truth_and_reduction_dims(self, measured_flux, focal_spots):
         return measured_flux, (indices.batched_bitmap_e, indices.batched_bitmap_u)
 
     def _preprocess_eval_flux(self, flux, ground_truth):
-        return self._peak_normalize(self._blur(flux)), self._peak_normalize(ground_truth)
+        # flux is already blurred+normalised by _preprocess_flux in the base loop.
+        return flux, self._peak_normalize(ground_truth)
 
     def _compute_epoch_loss(
         self, epoch, flux, measured_flux, focal_spots, sample_indices,
         target_indices, loss_fn, ground_truth, reduction_dims,
         n_samples_per_heliostat, device,
     ) -> torch.Tensor:
-        pred = self._peak_normalize(self._blur(flux))
-        gt   = self._peak_normalize(ground_truth[sample_indices])
-        lps  = loss_fn(
-            prediction=pred,
+        # flux is already blurred+normalised by _preprocess_flux.
+        gt  = self._peak_normalize(ground_truth[sample_indices])
+        lps = loss_fn(
+            prediction=flux,
             ground_truth=gt,
             target_area_indices=target_indices[sample_indices],
             reduction_dimensions=reduction_dims,
@@ -644,24 +666,6 @@ class WortbergPixelReconstructor(WortbergKinematicReconstructor):
         if isinstance(n_samples_per_heliostat, (list, tuple)):
             return torch.stack([c.mean() for c in torch.split(lps, n_samples_per_heliostat)])
         return mean_loss_per_heliostat(lps, n_samples_per_heliostat)
-
-    def _blur(self, flux: torch.Tensor) -> torch.Tensor:
-        """Differentiable separable Gaussian blur over a batch of flux images [N, H, W]."""
-        if self.blur_sigma <= 0:
-            return flux
-        ks = int(4 * self.blur_sigma + 0.5) * 2 + 1
-        coords = torch.arange(ks, device=flux.device, dtype=flux.dtype) - ks // 2
-        g = torch.exp(-0.5 * (coords / self.blur_sigma) ** 2)
-        g = g / g.sum()
-        kernel = (g[:, None] * g[None, :]).view(1, 1, ks, ks)
-        return F.conv2d(flux.unsqueeze(1), kernel, padding=ks // 2).squeeze(1)
-
-    @staticmethod
-    def _peak_normalize(flux: torch.Tensor) -> torch.Tensor:
-        """Peak-normalise each image in a batch to [0, 1] independently."""
-        N    = flux.shape[0]
-        peak = flux.view(N, -1).max(dim=1).values.clamp(min=1e-12)
-        return flux / peak.view(N, 1, 1)
 
 
 # ---------------------------------------------------------------------------

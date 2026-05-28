@@ -53,7 +53,7 @@ from utils.synth_data import (
     perturbations_to_json,
     sample_perturbations,
 )
-from utils.evaluation import build_heliostat_data_mapping
+from utils.evaluation import build_heliostat_data_mapping, _gaussian_blur_batch
 
 import config as cfg
 
@@ -141,7 +141,15 @@ def _forward_pass_chunked(
     )
     sample_indices = ray_tracer.get_sampler_indices()
 
-    bitmap_coords     = get_center_of_mass(bitmaps=flux_sampler, device=device)
+    # Blur + peak-normalise flux before centroid computation, matching the preprocessing
+    # applied to predicted flux at training time.  The resulting images are also saved
+    # as the GT PNGs so the GT centroid and GT bitmap share the same representation.
+    flux_blurred = _gaussian_blur_batch(flux_sampler, sigma=cfg.BLUR_SIGMA)
+    N = flux_blurred.shape[0]
+    peak = flux_blurred.view(N, -1).max(dim=1).values.clamp(min=1e-12)
+    flux_pp = flux_blurred / peak.view(N, 1, 1)
+
+    bitmap_coords     = get_center_of_mass(bitmaps=flux_pp, device=device)
     centroids_sampler = bitmap_coordinates_to_target_coordinates(
         bitmap_coordinates=bitmap_coords,
         bitmap_resolution=ray_tracer.bitmap_resolution,
@@ -151,7 +159,7 @@ def _forward_pass_chunked(
     )
 
     inverse_perm = torch.argsort(sample_indices)
-    return centroids_sampler[inverse_perm], flux_sampler[inverse_perm], perturbed_motor_positions
+    return centroids_sampler[inverse_perm], flux_pp[inverse_perm], perturbed_motor_positions
 
 
 # ---------------------------------------------------------------------------
@@ -240,12 +248,8 @@ def _generate_split(
                 with open(meas_dir / "calibration_properties.json", "w") as fh:
                     json.dump(cal, fh, indent=2)
 
-                flux_i    = flux[i]
-                fmax      = flux_i.max().item()
-                if fmax > 1e-12:
-                    flux_uint8 = (flux_i / fmax * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
-                else:
-                    flux_uint8 = np.zeros(flux_i.shape, dtype=np.uint8)
+                flux_i     = flux[i]   # already blurred + peak-normalised to [0, 1]
+                flux_uint8 = (flux_i * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
                 Image.fromarray(flux_uint8, mode="L").save(meas_dir / "flux_image.png")
                 chunk_saved += 1
 

@@ -112,6 +112,7 @@ def evaluate_flux_accuracy(
     device: torch.device,
     bitmap_resolution: torch.Tensor = torch.tensor([256, 256]),
     ray_tracing_batch_size: int = 32,
+    blur_sigma: float = 0.0,
 ) -> dict:
     """
     Evaluate flux image prediction accuracy after kinematic reconstruction.
@@ -201,7 +202,15 @@ def evaluate_flux_accuracy(
         # all downstream tensors have consistent length.
         predicted_flux = predicted_flux[sample_indices]
 
-        bitmap_coords = get_center_of_mass(bitmaps=predicted_flux, device=device)
+        # Blur + peak-normalise predicted flux to match the preprocessing applied
+        # during training.  GT centroids were computed from the same representation
+        # at dataset generation time, so FSE is consistent.
+        pred_blurred = _gaussian_blur_batch(predicted_flux, sigma=blur_sigma)
+        N = pred_blurred.shape[0]
+        pred_peak = pred_blurred.view(N, -1).max(dim=1).values.clamp(min=1e-12)
+        predicted_flux_pp = pred_blurred / pred_peak.view(N, 1, 1)
+
+        bitmap_coords = get_center_of_mass(bitmaps=predicted_flux_pp, device=device)
         predicted_focal_spots = bitmap_coordinates_to_target_coordinates(
             bitmap_coordinates=bitmap_coords,
             bitmap_resolution=ray_tracer.bitmap_resolution,
@@ -213,19 +222,12 @@ def evaluate_flux_accuracy(
         focal_spot_error = torch.norm(predicted_focal_spots[:, :3] - focal_spots[:, :3], dim=1)
         all_focal_spot_errors_m.extend(focal_spot_error.cpu().tolist())
 
-        # Pixel-wise L1 loss — blur both images (sigma=1) to smooth out ray-tracing
-        # noise, then peak-normalise so the comparison is scale-invariant
-        # (predicted flux is in physical units, measured is in [0,1]).
-        # measured_flux is in natural order; align it to sampler order first.
+        # Pixel-wise L1 loss — predicted is already blurred+peak-normalised above.
+        # GT comes from PNGs that were pre-blurred at generation time; just peak-normalise.
         measured_flux_sampler = measured_flux[sample_indices]
-        pred_blurred = _gaussian_blur_batch(predicted_flux,       sigma=1.0)
-        meas_blurred = _gaussian_blur_batch(measured_flux_sampler, sigma=1.0)
-        N = pred_blurred.shape[0]
-        pred_peak = pred_blurred.view(N, -1).max(dim=1).values.clamp(min=1e-12)
-        meas_peak = meas_blurred.view(N, -1).max(dim=1).values.clamp(min=1e-12)
-        pred_pnorm = pred_blurred / pred_peak.view(N, 1, 1)
-        meas_pnorm = meas_blurred / meas_peak.view(N, 1, 1)
-        pixel_loss_sampler = (pred_pnorm - meas_pnorm).abs().sum(dim=(1, 2))  # [N], sampler order
+        meas_peak = measured_flux_sampler.view(N, -1).max(dim=1).values.clamp(min=1e-12)
+        meas_pnorm = measured_flux_sampler / meas_peak.view(N, 1, 1)
+        pixel_loss_sampler = (predicted_flux_pp - meas_pnorm).abs().sum(dim=(1, 2))  # [N], sampler order
 
         # Compute per-heliostat distances to the reference target for mrad conversion.
         active_indices = torch.where(active_heliostats_mask.bool())[0]
