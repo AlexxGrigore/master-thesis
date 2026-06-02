@@ -124,6 +124,10 @@ def _parse_args() -> argparse.Namespace:
         "--skip-aggregation", action="store_true",
         help="Skip calling aggregate_results after training",
     )
+    p.add_argument(
+        "--daic", action="store_true",
+        help="Use DAIC cluster paths instead of local paths.",
+    )
     return p.parse_args()
 
 
@@ -181,6 +185,14 @@ def _print_table(
 
 def main() -> None:
     args = _parse_args()
+
+    if args.daic:
+        cfg.BASE_DIR = pathlib.Path("/home/nfs/agrigore/projects/githubProjects/master-thesis")
+        cfg.PAINT_DIR = pathlib.Path("/tudelft.net/staff-umbrella/StudentsCVlab/agrigore/datasets/paint")
+        cfg.SCENARIO_PATH_TEMPLATE = str(
+            cfg.BASE_DIR / "scenarios" / "one_heliostat_scenarios" / "{heliostat_id}" / "scenario.h5"
+        )
+        cfg.SYNTHETIC_DATASET_DIR = cfg.PAINT_DIR / "synthetic" / "balanced_dataset" / "dataset"
 
     heliostat_ids = args.heliostat_ids or ALL_HELIOSTAT_IDS
     if args.smoke_test:
