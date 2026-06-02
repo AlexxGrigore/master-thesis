@@ -81,6 +81,14 @@ ALL_HELIOSTAT_IDS = [
 ]
 
 
+_SPLIT_BENCHMARK = {
+    "balanced":      "benchmark_split-balanced_train-100_validation-50_deflectometry",
+    "azimuth":       "benchmark_split-azimuth_train-100_validation-50_deflectometry",
+    "solstice":      "benchmark_split-solstice_train-100_validation-50_deflectometry",
+    "high_variance": "benchmark_split-high_variance_train-100_validation-50_deflectometry",
+}
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Generate perturbed synthetic datasets for all (or a subset of) heliostats."
@@ -91,17 +99,43 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--output-dir", type=pathlib.Path, default=None,
-        help="Output root (default: outputs/one_hel_demo_dataset_all_<timestamp>/)",
+        help=(
+            "Output root. Defaults to datasets/synthetic/{split_type}_dataset/ "
+            "so the generated data lands at datasets/synthetic/{split_type}_dataset/dataset/."
+        ),
+    )
+    p.add_argument(
+        "--split-type",
+        choices=list(_SPLIT_BENCHMARK),
+        default="balanced",
+        help="Which PAINT benchmark split to use for ray directions (default: balanced).",
     )
     p.add_argument(
         "--smoke-test", action="store_true",
         help="Quick test: first 3 heliostats, low ray counts, minimal sample counts",
+    )
+    p.add_argument(
+        "--daic", action="store_true",
+        help="Use DAIC cluster paths instead of local paths.",
     )
     return p.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
+
+    _daic_paint_dir = pathlib.Path(
+        "/tudelft.net/staff-umbrella/StudentsCVlab/agrigore/datasets/paint"
+    )
+    if args.daic:
+        cfg.BASE_DIR = pathlib.Path("/home/nfs/agrigore/projects/githubProjects/master-thesis")
+        cfg.PAINT_DIR = _daic_paint_dir
+        cfg.SCENARIO_PATH_TEMPLATE = str(
+            cfg.BASE_DIR / "scenarios" / "one_heliostat_scenarios" / "{heliostat_id}" / "scenario.h5"
+        )
+        _synth_root = _daic_paint_dir / "synthetic"
+    else:
+        _synth_root = cfg.BASE_DIR / "datasets" / "synthetic"
 
     heliostat_ids = args.heliostat_ids or ALL_HELIOSTAT_IDS
     if args.smoke_test:
@@ -112,11 +146,14 @@ def main() -> None:
         cfg.MIN_TEST_SAMPLES       = 3
         cfg.MAX_RESAMPLE_ATTEMPTS  = 3
 
+    # Override PAINT paths for the selected split type.
+    benchmark_name      = _SPLIT_BENCHMARK[args.split_type]
+    cfg.BENCHMARK_CSV   = cfg.PAINT_DIR / "splits" / f"{benchmark_name}.csv"
+    cfg.CALIBRATION_DIR = cfg.PAINT_DIR / benchmark_name / "calibration_properties"
+    cfg.REAL_FLUX_DIR   = cfg.PAINT_DIR / benchmark_name / "flux_image"
+
     timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = (
-        args.output_dir
-        or cfg.BASE_DIR / "outputs" / f"one_hel_demo_dataset_all_{timestamp}"
-    )
+    output_dir = args.output_dir or _synth_root / f"{args.split_type}_dataset"
     output_dir = pathlib.Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -127,6 +164,7 @@ def main() -> None:
     logging.getLogger().addHandler(fh)
 
     log.info(f"Output dir    : {output_dir}")
+    log.info(f"Split type    : {args.split_type}  ({benchmark_name})")
     log.info(f"Heliostats    : {len(heliostat_ids)}")
     log.info(f"Smoke test    : {args.smoke_test}")
     log.info(f"GENERATE_RAYS : {cfg.GENERATE_RAYS}")

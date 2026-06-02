@@ -488,6 +488,53 @@ def _plot_centroid_trails(trail_checkpoints: list, train_flux: torch.Tensor,
         plt.close(fig)
 
 
+def _plot_sun_positions_split(
+    train_rays: torch.Tensor,
+    val_rays: torch.Tensor | None,
+    test_rays: torch.Tensor,
+    plots_dir: pathlib.Path,
+    heliostat_id: str,
+) -> None:
+    """Polar sun-path diagram coloured by dataset split (South=top, East=left)."""
+    fig = plt.figure(figsize=(6, 6))
+    ax  = fig.add_subplot(111, projection="polar")
+
+    for rays, color, label in [
+        (train_rays, "steelblue",  "train"),
+        (val_rays,   "darkorange", "val"),
+        (test_rays,  "green",      "test"),
+    ]:
+        if rays is None or rays.shape[0] == 0:
+            continue
+        r_np = rays.cpu().float().numpy()
+        el   = np.degrees(np.arcsin(np.clip(-r_np[:, 2], -1.0, 1.0)))
+        az   = np.degrees(np.arctan2(-r_np[:, 0], -r_np[:, 1])) % 360.0
+        # South=top, East=left mapping onto standard matplotlib polar (0=right, CCW):
+        #   theta = 270° - compass_az
+        #   r     = zenith angle = 90° - elevation (0=zenith/centre, 90=horizon/edge)
+        theta = np.radians(270.0 - az)
+        r     = 90.0 - el
+        ax.scatter(theta, r, c=color, s=15, alpha=0.75, label=f"{label} (n={len(r)})", zorder=3)
+
+    # Cardinal direction labels: at polar angles 0°(right)=W, 90°(top)=S, 180°(left)=E, 270°(bottom)=N
+    ax.set_thetagrids([0, 90, 180, 270], labels=["W", "S", "E", "N"], fontsize=10)
+
+    # Radial ticks are zenith angle; annotate as elevation
+    ax.set_rticks([30, 60, 90])
+    ax.set_yticklabels(["el 60°", "el 30°", "horizon"], fontsize=8)
+    ax.set_rlim(0, 90)
+
+    ax.set_title(f"{heliostat_id} — sun positions by split", pad=15, fontsize=12)
+    ax.legend(loc="upper right", bbox_to_anchor=(1.35, 1.1), fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    out = plots_dir / "sun_positions_split.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    log.info(f"Sun positions plot → {out}")
+
+
 def _plot_test_flux(test_eval: dict, test_flux: torch.Tensor, test_rays: torch.Tensor,
                     hel_dist_m: float, plots_dir: pathlib.Path, heliostat_id: str) -> None:
     test_flux_dir = plots_dir / "test_flux"
@@ -594,6 +641,8 @@ def run(
     output_dir: pathlib.Path | str,
     cfg,
     device: torch.device,
+    train_size: int | None = None,
+    sampling_seed: int = 42,
 ) -> dict:
     """
     Run the two-stage training pipeline and save all outputs.
@@ -659,6 +708,21 @@ def run(
         train_motor_pos, train_active_mask, train_target_mask, "train", cfg,
     )
     N_TRAIN = train_flux.shape[0]
+    full_train_rays = train_rays  # keep pre-subsampled rays for the split coverage plot
+
+    if train_size is not None:
+        gen  = torch.Generator().manual_seed(sampling_seed)
+        perm = torch.randperm(N_TRAIN, generator=gen)
+        idx  = perm[:min(train_size, N_TRAIN)].to(train_flux.device)
+        train_flux        = train_flux[idx]
+        train_centroids   = train_centroids[idx]
+        train_rays        = train_rays[idx]
+        train_motor_pos   = train_motor_pos[idx]
+        train_target_mask = train_target_mask[idx]
+        n = idx.shape[0]
+        train_active_mask = torch.tensor([n], device=device, dtype=torch.long)
+        N_TRAIN = n
+        log.info(f"  train sampled: {N_TRAIN}/{len(perm)} (train_size={train_size}, seed={sampling_seed})")
 
     N_VAL = 0
     if val_flux is not None:
@@ -1212,6 +1276,7 @@ def run(
         cfg.STAGE1_EPOCHS, N_TRAIN, plots_dir, heliostat_id,
     )
     _plot_test_flux(s2_eval, test_flux, test_rays, hel_dist_m, plots_dir, heliostat_id)
+    _plot_sun_positions_split(full_train_rays, val_rays, test_rays, plots_dir, heliostat_id)
 
     log.info(f"All plots saved to {plots_dir}")
     log.info(f"Total time: {total_min:.1f} min")

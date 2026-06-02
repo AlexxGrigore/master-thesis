@@ -20,7 +20,7 @@ SCENARIO_PATH_TEMPLATE = str(
 
 # Pre-generated synthetic dataset (all heliostats combined).
 # Copy the contents of outputs/one_hel_demo_dataset_all_<timestamp>/dataset/ here.
-SYNTHETIC_DATASET_DIR = BASE_DIR / "datasets" / "synthetic" / "dataset"
+SYNTHETIC_DATASET_DIR = BASE_DIR / "datasets" / "synthetic" / "balanced_dataset" / "dataset"
 
 # PAINT benchmark dataset — used by generate_dataset.py to supply sun ray directions.
 # Only incident_ray_direction, active_mask, and target_mask are read from here;
