@@ -121,7 +121,26 @@ def _parse_args() -> argparse.Namespace:
         "--split-type",
         choices=["balanced", "azimuth", "solstice", "high_variance"],
         default="balanced",
-        help="Which synthetic dataset to use (default: balanced).",
+        help="Which synthetic dataset pool to read from (default: balanced).",
+    )
+    p.add_argument(
+        "--splitter-type",
+        choices=["balanced", "azimuth"],
+        default=None,
+        help=(
+            "Split strategy applied to the pooled data (default: cfg.SPLITTER_TYPE = 'balanced'). "
+            "Pass 'azimuth' to train on morning samples and test on noon regardless of which "
+            "dataset pool is used."
+        ),
+    )
+    p.add_argument(
+        "--data-mode",
+        choices=["synthetic", "real"],
+        default="synthetic",
+        help=(
+            "Data source: 'synthetic' reads pre-generated perturbed datasets; "
+            "'real' loads actual PAINT calibration images (default: synthetic)."
+        ),
     )
     p.add_argument(
         "--daic", action="store_true",
@@ -163,10 +182,31 @@ def main() -> None:
         cfg.MINI_BATCH_SIZE   = 5
         cfg.PLOT_EVERY        = 1
 
-    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Resolve effective splitter type and override cfg if explicitly set.
+    if args.splitter_type is not None:
+        cfg.SPLITTER_TYPE = args.splitter_type
+    splitter_type = getattr(cfg, "SPLITTER_TYPE", "balanced")
+
+    # Always update PAINT paths to match the chosen split type.
+    _SPLIT_BENCHMARK = {
+        "balanced":      "benchmark_split-balanced_train-100_validation-50_deflectometry",
+        "azimuth":       "benchmark_split-azimuth_train-100_validation-50_deflectometry",
+        "solstice":      "benchmark_split-solstice_train-100_validation-50_deflectometry",
+        "high_variance": "benchmark_split-high_variance_train-100_validation-50_deflectometry",
+    }
+    benchmark_name      = _SPLIT_BENCHMARK[args.split_type]
+    cfg.BENCHMARK_CSV   = cfg.PAINT_DIR / "splits" / f"{benchmark_name}.csv"
+    cfg.CALIBRATION_DIR = cfg.PAINT_DIR / benchmark_name / "calibration_properties"
+    cfg.REAL_FLUX_DIR   = cfg.PAINT_DIR / benchmark_name / "flux_image"
+    cfg.DATA_MODE       = args.data_mode
+
+    timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _dir_suffix = ("real_" if args.data_mode == "real" else "") + args.split_type
+    if splitter_type != args.split_type:
+        _dir_suffix += f"_{splitter_type}"
     output_dir = (
         args.output_dir
-        or cfg.BASE_DIR / "outputs" / f"one_hel_demo_train_sizes_{args.split_type}_{timestamp}"
+        or cfg.BASE_DIR / "outputs" / f"one_hel_demo_train_sizes_{_dir_suffix}_{timestamp}"
     )
     output_dir = pathlib.Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -178,22 +218,31 @@ def main() -> None:
     logging.getLogger().addHandler(fh)
 
     log.info(f"Output dir    : {output_dir}")
-    log.info(f"Split type    : {args.split_type}")
+    log.info(f"Data mode     : {args.data_mode}")
+    log.info(f"Split type    : {args.split_type}  (dataset pool)")
+    log.info(f"Splitter type : {splitter_type}  (train/val/test assignment)")
     log.info(f"Heliostats    : {heliostats}")
     log.info(f"Train sizes   : {train_sizes}")
     log.info(f"Sampling seed : {args.sampling_seed}")
     log.info(f"Smoke test    : {args.smoke_test}")
 
-    cfg.SYNTHETIC_DATASET_DIR = _synth_root / f"{args.split_type}_dataset" / "dataset"
-    dataset_dir = pathlib.Path(cfg.SYNTHETIC_DATASET_DIR)
-    if not dataset_dir.exists():
-        log.error(
-            f"Synthetic dataset not found at {dataset_dir}.\n"
-            "Run generate_all.py or run_all.py first to create it, "
-            "then point cfg.SYNTHETIC_DATASET_DIR at the dataset/ folder."
-        )
-        sys.exit(1)
-    log.info(f"Dataset       : {dataset_dir}")
+    if args.data_mode == "synthetic":
+        cfg.SYNTHETIC_DATASET_DIR = _synth_root / f"{args.split_type}_dataset" / "dataset"
+        dataset_dir = pathlib.Path(cfg.SYNTHETIC_DATASET_DIR)
+        if not dataset_dir.exists():
+            log.error(
+                f"Synthetic dataset not found at {dataset_dir}.\n"
+                "Run generate_all.py or run_all.py first to create it, "
+                "then point cfg.SYNTHETIC_DATASET_DIR at the dataset/ folder."
+            )
+            sys.exit(1)
+        log.info(f"Dataset       : {dataset_dir}")
+    else:
+        dataset_dir = cfg.CALIBRATION_DIR  # not used by tr.run() in real mode
+        log.info(f"PAINT benchmark: {benchmark_name}")
+        if not pathlib.Path(cfg.CALIBRATION_DIR).exists():
+            log.error(f"PAINT calibration dir not found: {cfg.CALIBRATION_DIR}")
+            sys.exit(1)
 
     valid_ids:   list[str] = []
     skipped_ids: list[str] = []
@@ -260,9 +309,11 @@ def main() -> None:
                     torch.cuda.empty_cache()
 
             summary = {
-                "heliostat_id": hid,
-                "split_type":   args.split_type,
-                "train_sizes":  train_sizes,
+                "heliostat_id":  hid,
+                "data_mode":     args.data_mode,
+                "split_type":    args.split_type,
+                "splitter_type": splitter_type,
+                "train_sizes":   train_sizes,
                 "sampling_seed": args.sampling_seed,
                 "results": {str(n): r for n, r in hid_results.items()},
             }
