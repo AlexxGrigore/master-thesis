@@ -38,10 +38,13 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-_here = pathlib.Path(__file__).resolve().parent   # single_heliostat/
-_src  = _here.parent.parent                         # src/
+_here     = pathlib.Path(__file__).resolve().parent   # single_heliostat/
+_src      = _here.parent.parent                       # src/
+_paint    = _src.parent.parent / "PAINT"              # Master Thesis/PAINT/
 sys.path.insert(0, str(_src))
 sys.path.insert(0, str(_here))
+if _paint.exists():
+    sys.path.insert(0, str(_paint))
 
 from artist.optim.loss import FocalSpotLoss
 from artist.raytracing.heliostat_ray_tracer import HeliostatRayTracer
@@ -112,27 +115,162 @@ def _load_split(
     )
 
 
-def _filter_flux(flux, centroids, rays, motor_pos, active_mask, target_mask, split_label, cfg):
-    """Remove samples where the GT flux image is too sparse."""
+
+def _load_split_real(
+    heliostat_id: str,
+    cfg,
+    paint_split: str,
+    hg,
+    scenario,
+    device: torch.device,
+):
+    """Load one PAINT benchmark split for a single heliostat using real flux images.
+
+    paint_split is the PAINT convention name: "train", "validation", or "test".
+    Returns the same 6-tuple as _load_split, or None if the heliostat is absent.
+    """
+    from utils.evaluation import build_heliostat_data_mapping
+    from artist.io.paint_calibration_parser import PaintCalibrationDataParser
+
+    full_mapping = build_heliostat_data_mapping(
+        pathlib.Path(cfg.BENCHMARK_CSV),
+        pathlib.Path(cfg.CALIBRATION_DIR),
+        pathlib.Path(cfg.REAL_FLUX_DIR),
+        paint_split,
+    )
+    hel_mapping = [(h, c, f) for h, c, f in full_mapping if h == heliostat_id]
+    if not hel_mapping:
+        log.warning(f"  {heliostat_id} not found in PAINT {paint_split} split")
+        return None
+
+    log.info(f"  PAINT {paint_split}: {len(hel_mapping[0][1])} samples for {heliostat_id}")
+    parser = PaintCalibrationDataParser(
+        centroid_extraction_method=getattr(cfg, "CENTROID_METHOD", "UTIS"),
+    )
+    return parser.parse_data_for_reconstruction(
+        heliostat_data_mapping=hel_mapping,
+        heliostat_group=hg,
+        scenario=scenario,
+        device=device,
+    )
+
+
+def _pool_and_split(
+    heliostat_id: str,
+    train_data, val_data, test_data,
+    train_size: int,
+    cfg,
+    device: torch.device,
+    swap_val_test: bool = True,
+):
+    """
+    Aggregate train+val+test into one pool, filter for active pixels, then
+    re-split with the PAINT DatasetSplitter (azimuth or balanced strategy).
+
+    Returns
+    -------
+    train_tuple, val_tuple, test_tuple, pool_rays
+        Each tuple is (flux, centroids, rays, motor_pos, active_mask, target_mask).
+        pool_rays [N_pool, *] contains rays for every kept sample — used for the
+        split-coverage polar plot in run().
+    """
+    try:
+        import pandas as pd
+        from paint.data.dataset_splits import DatasetSplitter
+        import paint.util.paint_mappings as paint_mappings
+    except ImportError as exc:
+        raise ImportError(
+            "PAINT library not found. Ensure Master Thesis/PAINT/ is on sys.path."
+        ) from exc
+
+    val_size   = getattr(cfg, "SPLITTER_VAL_SIZE", 50)
+    split_type = getattr(cfg, "SPLITTER_TYPE", "balanced")
+
+    # Aggregate all available splits (val may be None)
+    parts = [d for d in (train_data, val_data, test_data) if d is not None]
+    pool_flux        = torch.cat([p[0] for p in parts], dim=0)
+    pool_centroids   = torch.cat([p[1] for p in parts], dim=0)
+    pool_rays        = torch.cat([p[2] for p in parts], dim=0)
+    pool_motor_pos   = torch.cat([p[3] for p in parts], dim=0)
+    pool_target_mask = torch.cat([p[5] for p in parts], dim=0)   # skip active_mask (index 4)
+
+    # Filter pool for active pixels (single pass, same threshold as per-split filter)
     min_pct = getattr(cfg, "MIN_ACTIVE_PIXEL_PERCENT", 2.0)
-    n = len(flux)
+    n_raw   = pool_flux.shape[0]
     active_pct = torch.tensor(
-        [float((flux[i] > 0).sum().item()) / float(flux[i].numel()) * 100.0 for i in range(n)],
+        [float((pool_flux[i] > 0.01).sum()) / float(pool_flux[i].numel()) * 100.0
+         for i in range(n_raw)],
         dtype=torch.float32,
     )
-    ok     = active_pct >= min_pct
-    kept   = int(ok.sum().item())
-    ok_dev = ok.to(flux.device)
+    keep             = active_pct >= min_pct
+    pool_flux        = pool_flux[keep]
+    pool_centroids   = pool_centroids[keep]
+    pool_rays        = pool_rays[keep]
+    pool_motor_pos   = pool_motor_pos[keep]
+    pool_target_mask = pool_target_mask[keep]
+    n_pool = int(keep.sum().item())
+    log.info(f"  pool after filter: {n_pool}/{n_raw}  (rejected {n_raw - n_pool})")
 
-    flux        = flux[ok_dev]
-    centroids   = centroids[ok_dev]
-    rays        = rays[ok_dev]
-    motor_pos   = motor_pos[ok_dev]
-    target_mask = target_mask[ok_dev]
-    active_mask = torch.tensor([kept], device=active_mask.device, dtype=torch.long)
+    if n_pool < train_size + 2 * val_size:
+        effective_train = n_pool - 2 * val_size
+        if effective_train < 10:
+            raise RuntimeError(
+                f"Pool too small: capped train_size would be {effective_train} "
+                f"(pool={n_pool}, 2×val_size={2*val_size}), minimum is 10."
+            )
+        log.warning(
+            f"  Pool too small for train_size={train_size}: "
+            f"only {n_pool} samples, need {train_size + 2 * val_size}. "
+            f"Capping train_size to {effective_train}."
+        )
+        train_size = effective_train
 
-    log.info(f"  {split_label:6s}: {kept}/{n} kept (sparse filter {min_pct:.1f}%)")
-    return flux, centroids, rays, motor_pos, active_mask, target_mask
+    # Azimuth / elevation from incident_ray_direction
+    # The ray points FROM the sun TO the heliostat (downward), so negate for sun direction.
+    _sun       = -pool_rays.cpu().numpy()
+    azimuths   = np.degrees(np.arctan2(_sun[:, 0], _sun[:, 1])) % 360.0
+    elevations = np.degrees(np.arcsin(np.clip(_sun[:, 2], -1.0, 1.0)))
+
+    heliostat_df = pd.DataFrame({
+        paint_mappings.HELIOSTAT_ID: heliostat_id,
+        paint_mappings.AZIMUTH:     azimuths,
+        paint_mappings.ELEVATION:   elevations,
+        paint_mappings.DATETIME:    pd.Timestamp("2020-06-15 12:00:00"),  # dummy tiebreaker
+        paint_mappings.SPLIT_KEY:   "",
+    }, index=range(n_pool))
+
+    if split_type == "azimuth":
+        split_df = DatasetSplitter._get_azimuth_splits(heliostat_df, train_size, val_size)
+    elif split_type == "balanced":
+        split_df = DatasetSplitter._get_balanced_splits(heliostat_df, train_size, val_size)
+    else:
+        raise ValueError(
+            f"Unsupported SPLITTER_TYPE {split_type!r}. Use 'azimuth' or 'balanced'."
+        )
+
+    train_idx = split_df[split_df[paint_mappings.SPLIT_KEY] == paint_mappings.TRAIN_INDEX].index.tolist()
+    val_idx   = split_df[split_df[paint_mappings.SPLIT_KEY] == paint_mappings.VALIDATION_INDEX].index.tolist()
+    test_idx  = split_df[split_df[paint_mappings.SPLIT_KEY] == paint_mappings.TEST_INDEX].index.tolist()
+    log.info(
+        f"  DatasetSplitter ({split_type}): "
+        f"train={len(train_idx)}  val={len(val_idx)}  test={len(test_idx)}"
+    )
+    if swap_val_test:
+        val_idx, test_idx = test_idx, val_idx
+        log.info("  val↔test swapped (SWAP_VAL_TEST=True)")
+
+    def _slice(idx):
+        t = torch.tensor(idx, device=device)
+        return (
+            pool_flux[t],
+            pool_centroids[t],
+            pool_rays[t],
+            pool_motor_pos[t],
+            torch.tensor([len(idx)], device=device, dtype=torch.long),
+            pool_target_mask[t],
+        )
+
+    return _slice(train_idx), _slice(val_idx), _slice(test_idx), pool_rays
 
 
 def _load_perturbations(dataset_dir: pathlib.Path, heliostat_id: str, device: torch.device):
@@ -676,69 +814,53 @@ def run(
     # ------------------------------------------------------------------ #
     # 2. Load data                                                         #
     # ------------------------------------------------------------------ #
-    train_data = _load_split(heliostat_id, dataset_dir, "train", hg, scenario, device)
-    val_data   = _load_split(heliostat_id, dataset_dir, "val",   hg, scenario, device)
-    test_data  = _load_split(heliostat_id, dataset_dir, "test",  hg, scenario, device)
+    _data_mode = getattr(cfg, "DATA_MODE", "synthetic")
+
+    if _data_mode == "real":
+        log.info("Data mode: real (PAINT benchmark)")
+        train_data = _load_split_real(heliostat_id, cfg, "train",      hg, scenario, device)
+        val_data   = _load_split_real(heliostat_id, cfg, "validation", hg, scenario, device)
+        test_data  = _load_split_real(heliostat_id, cfg, "test",       hg, scenario, device)
+        pert_tensors = None
+    else:
+        log.info(f"Data mode: {_data_mode} (synthetic dataset)")
+        train_data = _load_split(heliostat_id, dataset_dir, "train", hg, scenario, device)
+        val_data   = _load_split(heliostat_id, dataset_dir, "val",   hg, scenario, device)
+        test_data  = _load_split(heliostat_id, dataset_dir, "test",  hg, scenario, device)
+        pert_tensors = _load_perturbations(dataset_dir, heliostat_id, device)
 
     if train_data is None:
-        raise RuntimeError(f"No training data found in {dataset_dir}")
+        raise RuntimeError(
+            f"No training data found for {heliostat_id} "
+            f"({'PAINT benchmark' if _data_mode == 'real' else dataset_dir})"
+        )
     if test_data is None:
-        raise RuntimeError(f"No test data found in {dataset_dir}")
+        raise RuntimeError(
+            f"No test data found for {heliostat_id} "
+            f"({'PAINT benchmark' if _data_mode == 'real' else dataset_dir})"
+        )
 
+    # ------------------------------------------------------------------ #
+    # 3. Pool all splits, re-split with DatasetSplitter                    #
+    # ------------------------------------------------------------------ #
+    if train_size is None:
+        train_size = getattr(cfg, "SPLITTER_TRAIN_SIZE", 100)
+
+    swap = getattr(cfg, "SWAP_VAL_TEST", True)
+    (train_data, val_data, test_data, full_train_rays) = _pool_and_split(
+        heliostat_id, train_data, val_data, test_data,
+        train_size, cfg, device, swap_val_test=swap,
+    )
     (train_flux, train_centroids, train_rays,
      train_motor_pos, train_active_mask, train_target_mask) = train_data
-
-    if val_data is not None:
-        (val_flux, val_centroids, val_rays,
-         val_motor_pos, val_active_mask, val_target_mask) = val_data
-    else:
-        val_flux = val_centroids = val_rays = val_motor_pos = val_active_mask = val_target_mask = None
-
+    (val_flux, val_centroids, val_rays,
+     val_motor_pos, val_active_mask, val_target_mask) = val_data
     (test_flux, test_centroids, test_rays,
      test_motor_pos, test_active_mask, test_target_mask) = test_data
 
-    pert_tensors = _load_perturbations(dataset_dir, heliostat_id, device)
-
-    # ------------------------------------------------------------------ #
-    # 3. Filter flux                                                       #
-    # ------------------------------------------------------------------ #
-    (train_flux, train_centroids, train_rays,
-     train_motor_pos, train_active_mask, train_target_mask) = _filter_flux(
-        train_flux, train_centroids, train_rays,
-        train_motor_pos, train_active_mask, train_target_mask, "train", cfg,
-    )
     N_TRAIN = train_flux.shape[0]
-    full_train_rays = train_rays  # keep pre-subsampled rays for the split coverage plot
-
-    if train_size is not None:
-        gen  = torch.Generator().manual_seed(sampling_seed)
-        perm = torch.randperm(N_TRAIN, generator=gen)
-        idx  = perm[:min(train_size, N_TRAIN)].to(train_flux.device)
-        train_flux        = train_flux[idx]
-        train_centroids   = train_centroids[idx]
-        train_rays        = train_rays[idx]
-        train_motor_pos   = train_motor_pos[idx]
-        train_target_mask = train_target_mask[idx]
-        n = idx.shape[0]
-        train_active_mask = torch.tensor([n], device=device, dtype=torch.long)
-        N_TRAIN = n
-        log.info(f"  train sampled: {N_TRAIN}/{len(perm)} (train_size={train_size}, seed={sampling_seed})")
-
-    N_VAL = 0
-    if val_flux is not None:
-        (val_flux, val_centroids, val_rays,
-         val_motor_pos, val_active_mask, val_target_mask) = _filter_flux(
-            val_flux, val_centroids, val_rays,
-            val_motor_pos, val_active_mask, val_target_mask, "val", cfg,
-        )
-        N_VAL = val_flux.shape[0]
-
-    (test_flux, test_centroids, test_rays,
-     test_motor_pos, test_active_mask, test_target_mask) = _filter_flux(
-        test_flux, test_centroids, test_rays,
-        test_motor_pos, test_active_mask, test_target_mask, "test", cfg,
-    )
-    N_TEST = test_flux.shape[0]
+    N_VAL   = val_flux.shape[0] if val_flux is not None else 0
+    N_TEST  = test_flux.shape[0]
     log.info(f"Final counts: train={N_TRAIN}  val={N_VAL}  test={N_TEST}")
 
     # ------------------------------------------------------------------ #
@@ -1109,7 +1231,7 @@ def run(
                         reduction_dimensions=(indices.focal_spots,),
                         device=device,
                     )
-                    val_accum += lps_v.mean().item() / n_mb_v
+                    val_accum += lps_v.mean().item() * (msv / N_VAL)
             s2_val_loss = val_accum
             stage2_val_history.append(s2_val_loss)
 
@@ -1276,7 +1398,7 @@ def run(
         cfg.STAGE1_EPOCHS, N_TRAIN, plots_dir, heliostat_id,
     )
     _plot_test_flux(s2_eval, test_flux, test_rays, hel_dist_m, plots_dir, heliostat_id)
-    _plot_sun_positions_split(full_train_rays, val_rays, test_rays, plots_dir, heliostat_id)
+    _plot_sun_positions_split(train_rays, val_rays, test_rays, plots_dir, heliostat_id)
 
     log.info(f"All plots saved to {plots_dir}")
     log.info(f"Total time: {total_min:.1f} min")

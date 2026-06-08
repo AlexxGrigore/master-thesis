@@ -146,6 +146,9 @@ def main() -> None:
         cfg.MIN_TEST_SAMPLES       = 3
         cfg.MAX_RESAMPLE_ATTEMPTS  = 3
 
+    # Bulk generation always uses random perturbations, one per heliostat.
+    cfg.DATA_MODE = "random_synthetic"
+
     # Override PAINT paths for the selected split type.
     benchmark_name      = _SPLIT_BENCHMARK[args.split_type]
     cfg.BENCHMARK_CSV   = cfg.PAINT_DIR / "splits" / f"{benchmark_name}.csv"
@@ -215,6 +218,17 @@ def main() -> None:
                 )
                 elapsed_min = (time.time() - t_hel) / 60.0
 
+                if not result.get("succeeded", True):
+                    log.warning(f"  {hid} no valid seed found — skipped.")
+                    summary.append({
+                        "heliostat_id": hid,
+                        "status":       "no_valid_seed",
+                        "attempt_used": result["attempt_used"],
+                        "elapsed_min":  round(elapsed_min, 2),
+                        "split_counts": {},
+                    })
+                    continue
+
                 # Read per-split sample counts from the saved dataset.
                 split_counts: dict[str, int] = {}
                 for split in ("train", "val", "test"):
@@ -254,6 +268,7 @@ def main() -> None:
                     "status":       "error",
                     "error":        str(exc),
                     "elapsed_min":  round(elapsed_min, 2),
+                    "split_counts": {},
                 })
 
     # Write the combined perturbations.json (all heliostats in one file).
@@ -264,15 +279,17 @@ def main() -> None:
     log.info(f"Combined perturbations.json → {combined_pfile} ({len(combined_perturbations)} heliostats)")
 
     # Write summary.json
-    n_ok     = sum(1 for s in summary if s["status"] == "ok")
-    n_failed = sum(1 for s in summary if s["status"] == "error")
-    total_min = (time.time() - t_total_start) / 60.0
+    n_ok           = sum(1 for s in summary if s["status"] == "ok")
+    n_no_seed      = sum(1 for s in summary if s["status"] == "no_valid_seed")
+    n_error        = sum(1 for s in summary if s["status"] == "error")
+    total_min      = (time.time() - t_total_start) / 60.0
 
     summary_doc = {
         "timestamp":   timestamp,
         "output_dir":  str(output_dir),
         "n_ok":        n_ok,
-        "n_failed":    n_failed,
+        "n_no_seed":   n_no_seed,
+        "n_error":     n_error,
         "n_skipped":   len(skipped_ids),
         "total_min":   round(total_min, 2),
         "heliostats":  summary,
@@ -284,22 +301,39 @@ def main() -> None:
     # Print final table.
     print()
     print("=" * 70)
-    print(f"  Dataset generation complete  |  {n_ok}/{len(valid_ids)} succeeded  |  {total_min:.1f} min")
+    print(
+        f"  Dataset generation complete  |  {n_ok}/{len(valid_ids)} succeeded  "
+        f"|  {total_min:.1f} min"
+    )
     print("=" * 70)
-    print(f"  {'Heliostat':<10} {'Status':<8} {'Attempt':>7} {'Train':>6} {'Val':>5} {'Test':>5} {'Min':>6}")
-    print("  " + "-" * 55)
+    print(f"  {'Heliostat':<10} {'Status':<14} {'Attempt':>7} {'Train':>6} {'Val':>5} {'Test':>5} {'Min':>6}")
+    print("  " + "-" * 62)
     for s in summary:
+        sc = s.get("split_counts", {})
         if s["status"] == "ok":
-            sc = s.get("split_counts", {})
             print(
-                f"  {s['heliostat_id']:<10} {'ok':<8} {s['attempt_used']:>7} "
+                f"  {s['heliostat_id']:<10} {'ok':<14} {s['attempt_used']:>7} "
                 f"{sc.get('train', 0):>6} {sc.get('val', 0):>5} {sc.get('test', 0):>5} "
                 f"{s['elapsed_min']:>6.1f}"
             )
+        elif s["status"] == "no_valid_seed":
+            print(
+                f"  {s['heliostat_id']:<10} {'no valid seed':<14} {s['attempt_used']:>7} "
+                f"{'—':>6} {'—':>5} {'—':>5} {s['elapsed_min']:>6.1f}"
+            )
         else:
-            print(f"  {s['heliostat_id']:<10} {'FAILED':<8}  {s.get('error', '')[:40]}")
+            print(
+                f"  {s['heliostat_id']:<10} {'error':<14} {'—':>7}  "
+                f"{s.get('error', '')[:35]}"
+            )
+
+    failed_ids = [
+        s["heliostat_id"] for s in summary if s["status"] in ("no_valid_seed", "error")
+    ]
+    if failed_ids:
+        print(f"\n  Failed ({len(failed_ids)}): {', '.join(failed_ids)}")
     if skipped_ids:
-        print(f"\n  Skipped (no scenario): {', '.join(skipped_ids)}")
+        print(f"  Skipped — no scenario ({len(skipped_ids)}): {', '.join(skipped_ids)}")
     print("=" * 70)
     print(f"\n  Output: {output_dir}")
     print()

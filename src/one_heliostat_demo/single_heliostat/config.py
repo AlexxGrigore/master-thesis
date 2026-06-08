@@ -1,81 +1,127 @@
 """
 Configuration for the one_heliostat_demo experiment.
 
-Edit HELIOSTAT_ID and DATA_MODE before running main.py.
-All other parameters are documented inline.
+Quick-start
+-----------
+The most commonly changed settings are at the top of each section.
+CLI flags on main.py / run_all.py override any value set here.
 """
 import pathlib
 
-# ---------------------------------------------------------------------------
+# ============================================================================
 # Paths
-# ---------------------------------------------------------------------------
+# ============================================================================
 
 BASE_DIR = pathlib.Path(__file__).resolve().parents[3]  # master-thesis/
 
 # Single-heliostat scenario (one per heliostat, created by create_scenarios.py).
-# The literal "{heliostat_id}" placeholder is filled in at runtime.
+# The "{heliostat_id}" placeholder is filled at runtime.
 SCENARIO_PATH_TEMPLATE = str(
     BASE_DIR / "scenarios" / "one_heliostat_scenarios" / "{heliostat_id}" / "scenario.h5"
 )
 
-# Pre-generated synthetic dataset (all heliostats combined).
-# Copy the contents of outputs/one_hel_demo_dataset_all_<timestamp>/dataset/ here.
+# Pre-generated synthetic dataset used when --skip-dataset-gen is set.
+# Each sub-folder (train / val / test / {heliostat_id} / {idx:04d}/) contains
+# calibration_properties.json and flux_image.png.
+# Switch between "balanced_dataset" and "azimuth_dataset" to change the pool.
 SYNTHETIC_DATASET_DIR = BASE_DIR / "datasets" / "synthetic" / "balanced_dataset" / "dataset"
 
-# PAINT benchmark dataset — used by generate_dataset.py to supply sun ray directions.
-# Only incident_ray_direction, active_mask, and target_mask are read from here;
-# flux and centroids are re-generated from the perturbed kinematics.
+# PAINT benchmark — used only by generate_dataset.py to supply sun ray directions.
+# Flux and centroids are re-synthesised from the perturbed kinematics, not read here.
 BENCHMARK_NAME  = "benchmark_split-balanced_train-100_validation-50_deflectometry"
 PAINT_DIR       = BASE_DIR / "datasets" / "paint"
 BENCHMARK_CSV   = PAINT_DIR / "splits" / f"{BENCHMARK_NAME}.csv"
 CALIBRATION_DIR = PAINT_DIR / BENCHMARK_NAME / "calibration_properties"
 REAL_FLUX_DIR   = PAINT_DIR / BENCHMARK_NAME / "flux_image"
 
-# ---------------------------------------------------------------------------
-# Heliostat & data mode
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Dataset — splitter & split sizes
+# ============================================================================
 
+# Split strategy applied to the pooled data.
+#   "balanced" — KMeans on (azimuth, elevation); val and test are fixed
+#                across all training sizes (candidates selected first).
+#   "azimuth"  — sort by azimuth; train=morning, val=late-afternoon (fixed),
+#                test=noon (shrinks slightly as training size grows).
+SPLITTER_TYPE = "balanced"
+
+# Training samples drawn from the pool.
+# Overridden by --train-size on the CLI.
+SPLITTER_TRAIN_SIZE = 100
+
+# Samples reserved for val and test (each gets this many).
+# Pool must contain at least SPLITTER_TRAIN_SIZE + 2 × SPLITTER_VAL_SIZE samples
+# after the active-pixel filter.
+SPLITTER_VAL_SIZE = 50
+
+# PAINT's DatasetSplitter assigns VALIDATION_INDEX as the intended final-evaluation set.
+#   True  (recommended): test_flux = VALIDATION_INDEX (final eval)
+#                        val_flux  = TEST_INDEX        (scheduler / early-stopping)
+#   False: keep the splitter's original assignment.
+SWAP_VAL_TEST = True
+
+# ============================================================================
+# Data generation mode  (only relevant when NOT using --skip-dataset-gen)
+# ============================================================================
+
+# Heliostat to process in single-heliostat runs (overridden by --heliostat-id).
 HELIOSTAT_ID = "AC33"
 
-# "random_synthetic" : sample random perturbations (seed RANDOM_SEED, ±RANDOM_PERT_BOUNDS)
-# "synthetic"        : use CUSTOM_PERTURBATIONS_SPEC below (fully reproducible)
-DATA_MODE = "random_synthetic"
+# Data source used during training:
+#   "synthetic"        — load from SYNTHETIC_DATASET_DIR (pre-generated, GT perturbations known)
+#   "random_synthetic" — same as "synthetic" when --skip-dataset-gen is set; otherwise
+#                        generates a new dataset with random perturbations before training
+#   "real"             — load actual PAINT calibration images from CALIBRATION_DIR / REAL_FLUX_DIR;
+#                        GT perturbations are unknown, parameter trajectory plots are skipped;
+#                        use with --skip-dataset-gen (no generation step needed)
+DATA_MODE = "synthetic"
 
-# ---------------------------------------------------------------------------
-# Surface resolution & ray counts
-# ---------------------------------------------------------------------------
+# Centroid extraction method used by PaintCalibrationDataParser (real data only).
+CENTROID_METHOD = "UTIS"
+
+# ============================================================================
+# Ray counts & surface resolution
+# ============================================================================
 
 SURFACE_POINTS_PER_FACET = 25    # 25×25 = 625 pts/facet
 TRAIN_RAYS   = 10                # rays per surface point during Stage 2 training
 DISPLAY_RAYS = 50                # rays for pre/post-training evaluation plots
 GENERATE_RAYS = 100              # rays for synthetic GT data generation
 
-# ---------------------------------------------------------------------------
+# ============================================================================
 # Training schedule
-# ---------------------------------------------------------------------------
+# ============================================================================
 
 STAGE1_EPOCHS   = 20
 STAGE2_EPOCHS   = 100
-MINI_BATCH_SIZE = 25             # Stage 2 samples per mini-batch
+MINI_BATCH_SIZE = 25             # Stage 2: samples per mini-batch
 BASE_LR         = 1e-4
-PLOT_EVERY      = 1              # capture trail snapshot every N epochs (1 = max detail)
+PLOT_EVERY      = 1              # capture trail snapshot every N epochs (1 = all epochs)
 
-# ---------------------------------------------------------------------------
-# Data filtering
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Data quality filter
+# ============================================================================
 
-MIN_ACTIVE_PIXEL_PERCENT = 2.0   # discard samples with < 2% active pixels
+# Discard samples whose GT flux image has fewer than this percentage of active pixels.
+MIN_ACTIVE_PIXEL_PERCENT = 2.0
 
-# Minimum filtered sample counts per split — generate_dataset.py resamples
-# the perturbations (up to MAX_RESAMPLE_ATTEMPTS) until these are satisfied.
+# ============================================================================
+# Dataset generation — resampling limits  (generate_dataset.py)
+# ============================================================================
+
 MIN_TRAIN_SAMPLES     = 50
-MIN_VAL_SAMPLES       = 20
-MIN_TEST_SAMPLES      = 20
-MAX_RESAMPLE_ATTEMPTS = 10
+MIN_VAL_SAMPLES       = 50
+MIN_TEST_SAMPLES      = 50
+MAX_RESAMPLE_ATTEMPTS = 25
 
-# ---------------------------------------------------------------------------
-# Perturbation bounds (Wortberg 2025)
-# ---------------------------------------------------------------------------
+# Rays used for the fast pre-scan (pool-level active-pixel check before the
+# full GENERATE_RAYS pass). Low count keeps the scan cheap; flux presence
+# correlates well enough with the full-quality result.
+SCAN_RAYS = 10
+
+# ============================================================================
+# Perturbation bounds  (Wortberg 2025, Table 5.3)
+# ============================================================================
 
 _BOUND_TRANSLATION_M      = 0.05
 _BOUND_ROTATION_RAD       = 0.005
@@ -95,7 +141,7 @@ RANDOM_PERT_BOUNDS = {
 
 RANDOM_SEED = 42
 
-# Used when DATA_MODE == "synthetic" (or as fallback reference values).
+# Used when DATA_MODE == "synthetic".
 CUSTOM_PERTURBATIONS_SPEC = {
     "rotation":        [ 0.0028902976773679256, -0.002185862511396408,
                          0.002886323258280754,   0.0008946311427280307],

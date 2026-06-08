@@ -50,6 +50,26 @@ def _parse_args() -> argparse.Namespace:
                    help="Tiny run: 2 Stage-1 epochs, 5 Stage-2 epochs, 10 rays")
     p.add_argument("--daic",             action="store_true",
                    help="Adjust paths for DAIC cluster (not yet implemented)")
+
+    # Dataset splitter
+    p.add_argument("--split-type", choices=["azimuth", "balanced"], default=None,
+                   help="DatasetSplitter strategy (overrides config.SPLITTER_TYPE)")
+    p.add_argument("--train-size", type=int, default=None,
+                   help="Training samples drawn from the pool (overrides config.SPLITTER_TRAIN_SIZE)")
+    p.add_argument("--val-size",   type=int, default=None,
+                   help="Val/test samples reserved by the splitter (overrides config.SPLITTER_VAL_SIZE)")
+    swap_grp = p.add_mutually_exclusive_group()
+    swap_grp.add_argument("--swap-val-test",    dest="swap_val_test", action="store_true",  default=None,
+                          help="test_flux = VALIDATION_INDEX, val_flux = TEST_INDEX (overrides config)")
+    swap_grp.add_argument("--no-swap-val-test", dest="swap_val_test", action="store_false",
+                          help="Keep DatasetSplitter assignment as-is")
+
+    # Data generation mode
+    p.add_argument("--data-mode", choices=["random_synthetic", "synthetic"], default=None,
+                   help="'random_synthetic': random perturbations each run; "
+                        "'synthetic': use CUSTOM_PERTURBATIONS_SPEC from config "
+                        "(overrides config.DATA_MODE)")
+
     return p.parse_args()
 
 
@@ -84,6 +104,21 @@ def main() -> None:
     # Apply overrides                                                      #
     # ------------------------------------------------------------------ #
     heliostat_id = args.heliostat_id or cfg.HELIOSTAT_ID
+
+    if args.split_type is not None:
+        cfg.SPLITTER_TYPE = args.split_type
+    if args.train_size is not None:
+        cfg.SPLITTER_TRAIN_SIZE = args.train_size
+    if args.val_size is not None:
+        cfg.SPLITTER_VAL_SIZE = args.val_size
+    if args.swap_val_test is not None:
+        cfg.SWAP_VAL_TEST = args.swap_val_test
+    if args.data_mode is not None:
+        cfg.DATA_MODE = args.data_mode
+
+    # Real-data mode never needs a generation step.
+    if cfg.DATA_MODE == "real":
+        args.skip_dataset_gen = True
 
     timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = (
@@ -155,13 +190,18 @@ def main() -> None:
         # Step 1: generate dataset                                          #
         # ---------------------------------------------------------------- #
         if args.skip_dataset_gen:
-            dataset_dir = output_dir / "dataset"
-            if not dataset_dir.exists():
-                sys.exit(
-                    f"--skip-dataset-gen was set but {dataset_dir} does not exist.\n"
-                    "Run without --skip-dataset-gen first."
-                )
-            log.info(f"Skipping dataset generation. Using: {dataset_dir}")
+            if cfg.DATA_MODE == "real":
+                dataset_dir = pathlib.Path(cfg.SYNTHETIC_DATASET_DIR)  # unused by train.py in real mode
+                log.info("Data mode: real — skipping dataset generation (loading PAINT benchmark directly)")
+            else:
+                dataset_dir = pathlib.Path(cfg.SYNTHETIC_DATASET_DIR)
+                if not dataset_dir.exists():
+                    sys.exit(
+                        f"--skip-dataset-gen was set but SYNTHETIC_DATASET_DIR does not exist:\n"
+                        f"  {dataset_dir}\n"
+                        "Set cfg.SYNTHETIC_DATASET_DIR or generate the dataset first."
+                    )
+                log.info(f"Skipping dataset generation. Using: {dataset_dir}")
         else:
             log.info("Generating dataset...")
             t0 = time.time()

@@ -220,7 +220,7 @@ def _forward_pass(
         world_size=1,
         rank=0,
         batch_size=max(8, int(active_mask.sum().item())),
-        random_seed=42,
+        random_seed=0,
     )
     flux_sampler, _, _, _ = ray_tracer.trace_rays(
         incident_ray_directions=incident_rays,

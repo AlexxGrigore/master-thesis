@@ -118,7 +118,7 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--skip-dataset-gen", action="store_true",
-        help="Reuse dataset already in {output_dir}/{hid}/dataset/",
+        help="Skip generation; use the shared SYNTHETIC_DATASET_DIR from config",
     )
     p.add_argument(
         "--skip-aggregation", action="store_true",
@@ -128,6 +128,25 @@ def _parse_args() -> argparse.Namespace:
         "--daic", action="store_true",
         help="Use DAIC cluster paths instead of local paths.",
     )
+
+    # Dataset splitter
+    p.add_argument("--split-type", choices=["azimuth", "balanced"], default=None,
+                   help="DatasetSplitter strategy (overrides config.SPLITTER_TYPE)")
+    p.add_argument("--train-size", type=int, default=None,
+                   help="Training samples drawn from the pool (overrides config.SPLITTER_TRAIN_SIZE)")
+    p.add_argument("--val-size",   type=int, default=None,
+                   help="Val/test samples reserved by the splitter (overrides config.SPLITTER_VAL_SIZE)")
+    swap_grp = p.add_mutually_exclusive_group()
+    swap_grp.add_argument("--swap-val-test",    dest="swap_val_test", action="store_true",  default=None,
+                          help="test_flux = VALIDATION_INDEX, val_flux = TEST_INDEX (overrides config)")
+    swap_grp.add_argument("--no-swap-val-test", dest="swap_val_test", action="store_false",
+                          help="Keep DatasetSplitter assignment as-is")
+
+    # Data mode
+    p.add_argument("--data-mode", choices=["synthetic", "random_synthetic", "real"], default=None,
+                   help="'synthetic'/'random_synthetic': load from SYNTHETIC_DATASET_DIR; "
+                        "'real': load actual PAINT calibration images (implies --skip-dataset-gen)")
+
     return p.parse_args()
 
 
@@ -194,6 +213,21 @@ def main() -> None:
         )
         cfg.SYNTHETIC_DATASET_DIR = cfg.PAINT_DIR / "synthetic" / "balanced_dataset" / "dataset"
 
+    if args.split_type is not None:
+        cfg.SPLITTER_TYPE = args.split_type
+    if args.train_size is not None:
+        cfg.SPLITTER_TRAIN_SIZE = args.train_size
+    if args.val_size is not None:
+        cfg.SPLITTER_VAL_SIZE = args.val_size
+    if args.swap_val_test is not None:
+        cfg.SWAP_VAL_TEST = args.swap_val_test
+    if args.data_mode is not None:
+        cfg.DATA_MODE = args.data_mode
+
+    # Real-data mode never needs a generation step.
+    if cfg.DATA_MODE == "real":
+        args.skip_dataset_gen = True
+
     heliostat_ids = args.heliostat_ids or ALL_HELIOSTAT_IDS
     if args.smoke_test:
         heliostat_ids             = heliostat_ids[:5]
@@ -227,6 +261,12 @@ def main() -> None:
     log.info(f"Smoke test       : {args.smoke_test}")
     log.info(f"Skip dataset gen : {args.skip_dataset_gen}")
     log.info(f"Skip aggregation : {args.skip_aggregation}")
+    log.info(f"Splitter type    : {cfg.SPLITTER_TYPE}")
+    log.info(f"Train size       : {cfg.SPLITTER_TRAIN_SIZE}")
+    log.info(f"Val/test size    : {cfg.SPLITTER_VAL_SIZE}")
+    log.info(f"Swap val/test    : {cfg.SWAP_VAL_TEST}")
+    if args.skip_dataset_gen:
+        log.info(f"Dataset dir      : {cfg.SYNTHETIC_DATASET_DIR}")
 
     valid_ids: list[str]   = []
     skipped_ids: list[str] = []

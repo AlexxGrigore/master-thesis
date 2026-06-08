@@ -1,20 +1,28 @@
 """
 Generate a perturbed synthetic dataset for a single heliostat.
 
-For each split (train / val / test) this script:
-  1. Loads ray directions from the PAINT benchmark calibration dataset.
+For each heliostat this script:
+  1. Loads ray directions from the PAINT benchmark calibration dataset (all
+     three PAINT splits are pooled into a single geometry pool).
   2. Samples random kinematic perturbations (or uses CUSTOM_PERTURBATIONS_SPEC).
-  3. Ray-traces under the perturbed kinematics to produce synthetic flux and centroids.
-  4. Saves samples to output_dir/dataset/{split}/{HELIOSTAT_ID}/{idx:04d}/:
+  3. Fast scan: ray-traces the full pool with SCAN_RAYS to check whether
+     enough samples pass the active-pixel filter (MIN_POOL = MIN_TRAIN +
+     MIN_VAL + MIN_TEST).  Bad seeds are rejected cheaply before the
+     expensive full-quality pass.
+  4. Full generation: re-traces with GENERATE_RAYS for the accepted seed.
+  5. Saves samples to output_dir/dataset/{split}/{HELIOSTAT_ID}/{idx:04d}/:
        calibration_properties.json  (incident_ray_direction, focal_spot_enu, motor_position, target_area_index)
        flux_image.png               (uint8 peak-normalised flux bitmap)
-  5. Saves output_dir/dataset/perturbations.json with GT perturbation values.
+     The on-disk split folders mirror the originating PAINT splits (train /
+     val / test) so that existing notebooks can pool them at read time.
+  6. Saves output_dir/dataset/perturbations.json with GT perturbation values.
 
 Resampling logic
 ----------------
-If, after applying the perturbations, fewer than MIN_{TRAIN,VAL,TEST}_SAMPLES pass
-the active-pixel filter (MIN_ACTIVE_PIXEL_PERCENT), the perturbations are resampled
-with seed = RANDOM_SEED + attempt (up to MAX_RESAMPLE_ATTEMPTS tries).
+If fewer than MIN_POOL pool samples survive the active-pixel filter after the
+fast scan, the perturbation is resampled with seed = RANDOM_SEED + attempt
+(up to MAX_RESAMPLE_ATTEMPTS tries).  The full generation pass is only run
+for seeds that survive the fast scan.
 
 Usage
 -----
@@ -55,6 +63,8 @@ log = logging.getLogger(__name__)
 
 
 def _active_pixel_percent(flux_img: torch.Tensor) -> float:
+    # Raw ray-tracer output is in physical intensity units (~1e-4 at 100m).
+    # Unhit pixels are exactly 0, so > 0 is the correct threshold here.
     return float((flux_img > 0).sum().item()) / float(flux_img.numel()) * 100.0
 
 
@@ -75,7 +85,7 @@ def generate(
         "dataset_dir"   : pathlib.Path to the saved dataset root
         "attempt_used"  : int — which attempt succeeded (0-based)
     """
-    output_dir  = pathlib.Path(output_dir)
+    output_dir    = pathlib.Path(output_dir)
     scenario_path = pathlib.Path(cfg.SCENARIO_PATH_TEMPLATE.format(heliostat_id=heliostat_id))
     if not scenario_path.exists():
         raise FileNotFoundError(f"Scenario not found: {scenario_path}")
@@ -95,24 +105,29 @@ def generate(
 
     min_per_split = {
         "train": getattr(cfg, "MIN_TRAIN_SAMPLES",     50),
-        "val":   getattr(cfg, "MIN_VAL_SAMPLES",        20),
-        "test":  getattr(cfg, "MIN_TEST_SAMPLES",       20),
+        "val":   getattr(cfg, "MIN_VAL_SAMPLES",       50),
+        "test":  getattr(cfg, "MIN_TEST_SAMPLES",      50),
     }
     min_active_pct = getattr(cfg, "MIN_ACTIVE_PIXEL_PERCENT", 2.0)
     max_attempts   = getattr(cfg, "MAX_RESAMPLE_ATTEMPTS",    10)
+    scan_rays      = getattr(cfg, "SCAN_RAYS",                10)
+    min_pool       = sum(min_per_split.values())
 
-    # Pre-load ray directions from the PAINT benchmark dataset.
-    # Only incident_ray_direction, active_mask, and target_mask are used;
-    # flux and centroids will be re-generated from the perturbed kinematics.
+    # -------------------------------------------------------------------------
+    # Pool all PAINT splits into one geometry pool.
+    # The split boundaries are recorded so results can be saved back to the
+    # correct on-disk folders (train / val / test).
+    # -------------------------------------------------------------------------
     old_n_rays = scenario.light_sources.light_source_list[0].number_of_rays
-    scenario.set_number_of_rays(cfg.GENERATE_RAYS)
 
-    # PAINT splits use "validation"; our internal names use "val".
     _PAINT_SPLITS = {"train": "train", "validation": "val", "test": "test"}
+    paint_parser  = PaintCalibrationDataParser()
 
-    paint_parser = PaintCalibrationDataParser()
-    splits_info: list[tuple[str, int]] = []
-    split_rays: dict[str, tuple] = {}
+    pool_rays_list        = []
+    pool_target_mask_list = []
+    split_boundaries: dict[str, tuple[int, int]] = {}  # our_split -> (start, end)
+    offset = 0
+
     for paint_split, our_split in _PAINT_SPLITS.items():
         full_mapping = build_heliostat_data_mapping(
             benchmark_csv=cfg.BENCHMARK_CSV,
@@ -131,28 +146,46 @@ def generate(
             )
             continue
         n_samples = len(hel_mapping[0][1])
-        _, _, rays, _, active_mask, target_mask = paint_parser.parse_data_for_reconstruction(
+        _, _, rays, _, _, target_mask = paint_parser.parse_data_for_reconstruction(
             heliostat_data_mapping=hel_mapping,
             heliostat_group=heliostat_group,
             scenario=scenario,
             device=device,
         )
-        splits_info.append((our_split, n_samples))
-        split_rays[our_split] = (rays, active_mask, target_mask, n_samples)
+        pool_rays_list.append(rays)
+        pool_target_mask_list.append(target_mask)
+        split_boundaries[our_split] = (offset, offset + n_samples)
+        offset += n_samples
         log.info(f"  Loaded {n_samples} ray directions for {our_split} from PAINT {paint_split}")
 
-    if not splits_info:
+    if not split_boundaries:
         raise RuntimeError(
             f"No PAINT data found for {heliostat_id} in {cfg.BENCHMARK_CSV}"
         )
 
-    # Resample loop: try different seeds until filtered counts meet minimums.
-    chosen_pert   = None
-    chosen_results = None
-    attempt_used  = 0
+    N_POOL           = offset
+    pool_rays        = torch.cat(pool_rays_list,        dim=0)  # [N_POOL, 4]
+    pool_target_mask = torch.cat(pool_target_mask_list, dim=0)  # [N_POOL]
+    pool_active_mask = torch.tensor([N_POOL], device=device, dtype=torch.long)
+
+    log.info(
+        f"Pool: {N_POOL} rays total  |  splits: "
+        + ", ".join(f"{sp}={e-s}" for sp, (s, e) in split_boundaries.items())
+        + f"  |  min_pool={min_pool}"
+    )
+
+    # -------------------------------------------------------------------------
+    # Resample loop: fast scan first, then full-quality generation.
+    # -------------------------------------------------------------------------
+    chosen_pert      = None
+    chosen_flux      = None
+    chosen_centroids = None
+    chosen_motor_pos = None
+    attempt_used     = 0
+    succeeded        = False
 
     for attempt in range(max_attempts):
-        seed = cfg.RANDOM_SEED + seed_offset * 20 + attempt
+        seed = cfg.RANDOM_SEED + seed_offset * (max_attempts + 1) + attempt
 
         if cfg.DATA_MODE == "random_synthetic":
             pert_tensors = sample_perturbations(
@@ -167,83 +200,111 @@ def generate(
         snap    = apply_perturbations(kinematic, pert_tensors, device)
         pert_bpd = kinematic._base_position_deviation.detach().clone()  # [1, 3]
 
-        split_results: dict[str, dict] = {}
-        for split, (rays, active_mask, target_mask, n_samples) in split_rays.items():
-            centroids, flux = _forward_pass(
+        # -- Fast scan --------------------------------------------------------
+        scenario.set_number_of_rays(scan_rays)
+        with torch.no_grad():
+            _, flux_scan = _forward_pass(
                 scenario, heliostat_group,
-                rays, active_mask, target_mask, pert_bpd, device,
+                pool_rays, pool_active_mask, pool_target_mask, pert_bpd, device,
             )
-            motor_pos = heliostat_group.kinematics.active_motor_positions.detach().clone()
 
-            n_ok = sum(
-                1 for i in range(n_samples)
-                if _active_pixel_percent(flux[i]) >= min_active_pct
-            )
-            split_results[split] = {
-                "rays": rays, "active_mask": active_mask, "target_mask": target_mask,
-                "centroids": centroids, "flux": flux, "motor_pos": motor_pos,
-                "n_samples": n_samples, "n_ok": n_ok,
-            }
-
-        reset_perturbations(kinematic, snap)
-
-        counts = {sp: split_results[sp]["n_ok"] for sp in split_results}
-        ok     = all(
-            counts.get(sp, 0) >= min_per_split.get(sp, 0)
-            for sp, _ in splits_info
+        n_ok_scan = sum(
+            1 for i in range(N_POOL)
+            if _active_pixel_percent(flux_scan[i]) >= min_active_pct
         )
+        scan_pass = n_ok_scan >= min_pool
+        log.info(
+            f"Attempt {attempt + 1}/{max_attempts}: "
+            f"fast scan {n_ok_scan}/{N_POOL} >= {min_pool}  "
+            f"{'[pass]' if scan_pass else '[fail — skip]'}"
+        )
+
+        if not scan_pass and cfg.DATA_MODE == "random_synthetic":
+            reset_perturbations(kinematic, snap)
+            continue
+
+        # -- Full-quality generation ------------------------------------------
+        scenario.set_number_of_rays(cfg.GENERATE_RAYS)
+        centroids, flux = _forward_pass(
+            scenario, heliostat_group,
+            pool_rays, pool_active_mask, pool_target_mask, pert_bpd, device,
+        )
+        motor_pos = heliostat_group.kinematics.active_motor_positions.detach().clone()
+
+        n_ok_total = sum(
+            1 for i in range(N_POOL)
+            if _active_pixel_percent(flux[i]) >= min_active_pct
+        )
+        ok     = n_ok_total >= min_pool
         status = "[OK]" if ok else "[FAIL]"
         log.info(
             f"Attempt {attempt + 1}/{max_attempts}: "
-            + "  ".join(f"{sp}={counts.get(sp, 0)}/{min_per_split.get(sp, 0)}" for sp, _ in splits_info)
-            + f"  {status}"
+            f"full gen  {n_ok_total}/{N_POOL} >= {min_pool}  {status}"
         )
 
-        chosen_pert    = pert_tensors
-        chosen_results = split_results
-        attempt_used   = attempt
+        reset_perturbations(kinematic, snap)
 
         if ok:
+            chosen_pert      = pert_tensors
+            chosen_flux      = flux
+            chosen_centroids = centroids
+            chosen_motor_pos = motor_pos
+            attempt_used     = attempt
+            succeeded        = True
             break
+
         if cfg.DATA_MODE != "random_synthetic":
             log.warning("DATA_MODE='synthetic' — cannot resample. Proceeding as-is.")
             break
-    else:
-        log.warning(
-            f"Could not meet sample minimums after {max_attempts} attempts. "
-            "Using last attempt."
-        )
 
     scenario.set_number_of_rays(old_n_rays)
 
-    # Save dataset to disk.
+    if not succeeded:
+        log.warning(
+            f"{heliostat_id}: no seed produced >= {min_pool} valid pool samples "
+            f"after {max_attempts} attempts — skipping save."
+        )
+        return {
+            "succeeded":    False,
+            "pert_tensors": None,
+            "dataset_dir":  output_dir / "dataset",
+            "attempt_used": max_attempts,
+        }
+
+    # -------------------------------------------------------------------------
+    # Save dataset to disk, split back along PAINT split boundaries.
+    # -------------------------------------------------------------------------
     dataset_dir = output_dir / "dataset"
 
-    for split, sdata in chosen_results.items():
-        out_split = dataset_dir / split / heliostat_id
+    for our_split, (start, end) in split_boundaries.items():
+        out_split = dataset_dir / our_split / heliostat_id
         out_split.mkdir(parents=True, exist_ok=True)
 
-        n           = sdata["n_samples"]
-        rays        = sdata["rays"]
-        centroids   = sdata["centroids"]
-        motor_pos   = sdata["motor_pos"]
-        target_mask = sdata["target_mask"]
-        flux        = sdata["flux"]
+        n                 = end - start
+        split_rays        = pool_rays[start:end]
+        split_flux        = chosen_flux[start:end]
+        split_centroids   = chosen_centroids[start:end]
+        split_motor_pos   = chosen_motor_pos[start:end]
+        split_target_mask = pool_target_mask[start:end]
 
+        saved_idx = 0
         for i in range(n):
-            sample_dir = out_split / f"{i:04d}"
+            if _active_pixel_percent(split_flux[i]) < min_active_pct:
+                continue
+
+            sample_dir = out_split / f"{saved_idx:04d}"
             sample_dir.mkdir(exist_ok=True)
 
             cal = {
-                "target_area_index":      int(target_mask[i].item()),
-                "incident_ray_direction": rays[i].cpu().tolist(),
-                "focal_spot_enu":         centroids[i].cpu().tolist(),
-                "motor_position":         motor_pos[i].cpu().tolist(),
+                "target_area_index":      int(split_target_mask[i].item()),
+                "incident_ray_direction": split_rays[i].cpu().tolist(),
+                "focal_spot_enu":         split_centroids[i].cpu().tolist(),
+                "motor_position":         split_motor_pos[i].cpu().tolist(),
             }
             with open(sample_dir / "calibration_properties.json", "w") as fh:
                 json.dump(cal, fh, indent=2)
 
-            fl    = flux[i].cpu().float().numpy()
+            fl    = split_flux[i].cpu().float().numpy()
             fmax  = fl.max()
             if fmax > 1e-12:
                 fl_uint8 = (fl / fmax * 255).clip(0, 255).astype(np.uint8)
@@ -251,8 +312,10 @@ def generate(
                 fl_uint8 = np.zeros_like(fl, dtype=np.uint8)
             Image.fromarray(fl_uint8, mode="L").save(sample_dir / "flux_image.png")
 
+            saved_idx += 1
+
         log.info(
-            f"Saved {n} samples ({sdata['n_ok']} pass filter) → {out_split}"
+            f"Saved {saved_idx}/{n} samples (passed filter) → {out_split}"
         )
 
     # Save perturbations.json alongside the dataset.
@@ -271,6 +334,7 @@ def generate(
     log.info(f"Saved perturbations.json → {dataset_dir / 'perturbations.json'}")
 
     return {
+        "succeeded":    True,
         "pert_tensors": chosen_pert,
         "dataset_dir":  dataset_dir,
         "attempt_used": attempt_used,
