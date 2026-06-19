@@ -7,19 +7,75 @@ import torch
 import torch.nn.functional as F
 
 
-class AlignmentLoss:
-    """Motor-position MSE in angle space.
+class NormalAlignmentLoss:
+    """Stage-1 loss expressed directly in milliradians.
 
-    Converts both predicted and measured motor positions to joint angles via
-    the actuator model, then computes the per-sample squared difference.
-    This makes the loss invariant to the motor-position scaling of individual
-    actuator families.
+    Both the predicted and measured motor positions are run through the full
+    kinematic chain (_compute_orientations_from_motor_positions) to obtain the
+    concentrator normal vector for each calibration sample.  The loss is the
+    geodesic angle between the two normals in mrad.
+
+    Unlike the motor-position MSE (AlignmentLoss), this accounts for the
+    non-isotropic Jacobian of the kinematics: an actuator error that barely
+    moves the beam at noon counts less than the same error at a sun angle
+    where that actuator has high leverage.
+
+    The measured-side normal is detached from the autograd graph so that
+    gradients only flow through the predicted side, mirroring the behaviour
+    of AlignmentLoss.
 
     Returns
     -------
     torch.Tensor
-        Shape ``[N_active_samples]`` — squared angle error summed over
-        the two actuators, one value per calibration sample.
+        Shape ``[N_active_samples]`` — angular error in **mrad**, one value
+        per calibration sample.
+    """
+
+    # Concentrator normal direction in ARTIST's homogeneous frame.
+    # From kinematics_rigid_body.py line 386-388:
+    #   concentrator_normals = orientations @ [0, -1, 0, 0]
+    _NORMAL_VEC = torch.tensor([0.0, -1.0, 0.0, 0.0])
+
+    def __call__(
+        self,
+        predicted_motor_positions: torch.Tensor,
+        measured_motor_positions: torch.Tensor,
+        kinematic,
+        device: torch.device,
+    ) -> torch.Tensor:
+        nv = self._NORMAL_VEC.to(device=device, dtype=torch.float32)
+
+        def _normal(motor_pos: torch.Tensor) -> torch.Tensor:
+            O = kinematic._compute_orientations_from_motor_positions(
+                motor_pos.to(device=device, dtype=torch.float32), device
+            )
+            return torch.nn.functional.normalize((O @ nv)[:, :3], dim=-1)
+
+        n_pred = _normal(predicted_motor_positions)
+        with torch.no_grad():
+            n_meas = _normal(measured_motor_positions)
+
+        cos_sim = (n_pred * n_meas).sum(dim=-1).clamp(-1.0 + 1e-7, 1.0 - 1e-7)
+        return torch.acos(cos_sim) * 1000.0  # mrad
+
+
+class AlignmentLoss:
+    """Motor-position alignment loss in milliradians.
+
+    Converts both predicted and measured motor positions to joint angles via
+    the actuator model, then returns the Euclidean distance between the two
+    angle vectors scaled to mrad:
+
+        loss = ||pred_angles - meas_angles||₂ × 1000   [mrad]
+
+    This is an isotropic approximation of the true normal-vector angular
+    error (see NormalAlignmentLoss for the exact version).
+
+    Returns
+    -------
+    torch.Tensor
+        Shape ``[N_active_samples]`` — alignment error in **mrad**, one
+        value per calibration sample.
     """
 
     def __call__(
@@ -35,7 +91,7 @@ class AlignmentLoss:
         meas_angles = actuators.motor_positions_to_angles(
             motor_positions=measured_motor_positions.to(device), device=device
         )
-        return ((pred_angles - meas_angles) ** 2).sum(dim=-1)
+        return (pred_angles - meas_angles).norm(dim=-1) * 1000.0
 
 
 class ContourLoss:

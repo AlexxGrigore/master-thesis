@@ -185,10 +185,18 @@ def _forward_pass(
     target_mask: torch.Tensor,
     base_pos_delta: torch.Tensor,   # [N_heliostats, 3]
     device: torch.device,
+    motor_positions: torch.Tensor | None = None,   # [N_active, 2]
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Activate heliostats, inject base-position offset, align surfaces, trace rays,
     and return (centroids, flux) both in natural (incident_rays) order.
+
+    Orientation source:
+      * motor_positions is None  → aim at the receiver centre (used during data
+        GENERATION, where the aim-at-centre motors m_c are what we want to record).
+      * motor_positions given     → orient directly from those recorded motors m_c
+        (the centre-free forward map raytrace(theta, sun, m_c); used for evaluation
+        and training diagnostics). See CALIBRATION_FORMULATION.md.
 
     centroids : [N_instances, 4]
     flux      : [N_instances, H, W]  — physical intensity units
@@ -204,14 +212,21 @@ def _forward_pass(
         kinematic.active_heliostat_positions + torch.cat([repeated, pad], dim=1)
     )
 
-    heliostat_group.align_surfaces_with_incident_ray_directions(
-        aim_points=scenario.solar_tower.get_centers_of_target_areas(
-            target_mask, device=device
-        ),
-        incident_ray_directions=incident_rays,
-        active_heliostats_mask=active_mask,
-        device=device,
-    )
+    if motor_positions is not None:
+        heliostat_group.align_surfaces_with_motor_positions(
+            motor_positions=motor_positions,
+            active_heliostats_mask=active_mask,
+            device=device,
+        )
+    else:
+        heliostat_group.align_surfaces_with_incident_ray_directions(
+            aim_points=scenario.solar_tower.get_centers_of_target_areas(
+                target_mask, device=device
+            ),
+            incident_ray_directions=incident_rays,
+            active_heliostats_mask=active_mask,
+            device=device,
+        )
 
     ray_tracer = HeliostatRayTracer(
         scenario=scenario,

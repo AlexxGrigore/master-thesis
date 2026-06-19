@@ -212,7 +212,7 @@ def _plot_loss_curves(conv_data: dict, agg_dir: pathlib.Path) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
     stage_meta = [
-        ("stage1", "Stage 1 — AlignmentLoss",   axes[0]),
+        ("stage1", "Stage 1 — AlignmentLoss [mrad]",   axes[0]),
         ("stage2", "Stage 2 — FocalSpotLoss",    axes[1]),
     ]
     for stage, title, ax in stage_meta:
@@ -417,6 +417,110 @@ def _plot_field_view(results: dict, agg_dir: pathlib.Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Plot 4b: field view — finer accuracy bands
+# ---------------------------------------------------------------------------
+
+_ACCURACY_BANDS = [
+    (0.10, "#08519c", "≤ 0.10 mrad"),
+    (0.50, "#238b45", "0.10 – 0.50 mrad"),
+    (1.00, "#fec44f", "0.50 – 1.00 mrad"),
+    (1.50, "#f16913", "1.00 – 1.50 mrad"),
+    (2.00, "#cb181d", "1.50 – 2.00 mrad"),
+    (float("inf"), "#67000d", "> 2.00 mrad"),
+]
+
+
+def _band_color(v: float) -> str:
+    for threshold, color, _ in _ACCURACY_BANDS:
+        if v <= threshold:
+            return color
+    return _ACCURACY_BANDS[-1][1]
+
+
+def _plot_field_view_detailed(results: dict, agg_dir: pathlib.Path) -> None:
+    if not _SCENARIO_H5.exists():
+        log.warning(f"Field view (detailed) skipped — scenario not found: {_SCENARIO_H5}")
+        return
+
+    field_E: dict[str, float] = {}
+    field_N: dict[str, float] = {}
+    tower_E = tower_N = None
+
+    try:
+        with h5py.File(_SCENARIO_H5, "r") as f:
+            for hid, hgrp in f["heliostats"].items():
+                pos = hgrp["position"][:]
+                field_E[hid] = float(pos[0])
+                field_N[hid] = float(pos[1])
+            ta_centers = []
+            if "target_areas_planar" in f:
+                for name, grp in f["target_areas_planar"].items():
+                    if "solar_tower" in name.lower() and "position_center" in grp:
+                        pc = grp["position_center"][()]
+                        ta_centers.append((float(pc[0]), float(pc[1])))
+            if ta_centers:
+                tower_E = float(np.mean([c[0] for c in ta_centers]))
+                tower_N = float(np.mean([c[1] for c in ta_centers]))
+    except Exception as exc:
+        log.warning(f"Field view (detailed): failed to read scenario: {exc}")
+        return
+
+    all_hids = sorted(field_E.keys())
+    colors   = [
+        _band_color(results[h]["after_stage2"]["mrad_mean"]) if h in results else "#aaaaaa"
+        for h in all_hids
+    ]
+    xs = [field_E[h] for h in all_hids]
+    ys = [field_N[h] for h in all_hids]
+
+    fig, ax = plt.subplots(figsize=(9, 9))
+
+    # Draw "no result" heliostats first (bottom layer).
+    gray_mask = [c == "#aaaaaa" for c in colors]
+    ax.scatter(
+        [x for x, m in zip(xs, gray_mask) if m],
+        [y for y, m in zip(ys, gray_mask) if m],
+        c="#aaaaaa", s=70, zorder=2, label="No result",
+    )
+
+    # Draw each accuracy band separately so the legend is ordered correctly.
+    for z, (_, band_color, band_label) in enumerate(_ACCURACY_BANDS, start=3):
+        mask = [c == band_color for c in colors]
+        bx = [x for x, m in zip(xs, mask) if m]
+        by = [y for y, m in zip(ys, mask) if m]
+        if bx:
+            ax.scatter(bx, by, c=band_color, s=70, zorder=z, label=band_label)
+
+    if tower_E is not None:
+        ax.scatter([tower_E], [tower_N], marker="^", c="red", s=200, zorder=10, label="Tower")
+
+    # Label each evaluated heliostat with its mrad value.
+    for hid, x, y in zip(all_hids, xs, ys):
+        if hid in results:
+            v = results[hid]["after_stage2"]["mrad_mean"]
+            ax.annotate(
+                f"{v:.2f}",
+                (x, y),
+                textcoords="offset points", xytext=(4, 4),
+                fontsize=5.5, color="#333333",
+            )
+
+    ax.set_xlabel("East (m)")
+    ax.set_ylabel("North (m)")
+    ax.set_title(
+        f"Heliostat field — Stage-2 accuracy  ({len(results)} heliostats evaluated)"
+    )
+    ax.legend(fontsize=9, loc="best")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+
+    out = agg_dir / "field_view_detailed.png"
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    log.info(f"  → {out}")
+
+
+# ---------------------------------------------------------------------------
 # Summary table
 # ---------------------------------------------------------------------------
 
@@ -550,6 +654,7 @@ def aggregate(
     _plot_accuracy_sorted(results, agg_dir)
     _plot_accuracy_distribution(results, agg_dir)
     _plot_field_view(results, agg_dir)
+    _plot_field_view_detailed(results, agg_dir)
     _write_summary_table(results, agg_dir)
 
     log.info("Aggregation complete.")

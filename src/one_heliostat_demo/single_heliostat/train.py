@@ -52,7 +52,7 @@ from artist.scenario.scenario import Scenario
 from artist.util import constants as _const, get_device, indices, set_logger_config
 from artist.util import setup_distributed_environment
 
-from artist_extensions.loss_functions_ext import AlignmentLoss
+from artist_extensions.loss_functions_ext import AlignmentLoss, NormalAlignmentLoss
 from utils.synth_data import _forward_pass, SyntheticDatasetParser
 
 log = logging.getLogger(__name__)
@@ -320,8 +320,14 @@ def _to_norm(flux: torch.Tensor) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def _eval_test(scenario, hg, test_rays, test_active_mask, test_target_mask,
-               test_centroids, hel_dist_m: float, cfg, device, label: str):
-    """Forward-pass test set, return eval dict with flux, per-sample errs, label."""
+               test_centroids, test_motor_pos, hel_dist_m: float, cfg, device, label: str):
+    """Forward-pass test set, return eval dict with flux, per-sample errs, label.
+
+    Centre-free evaluation: orient the heliostat from the recorded GT motors
+    ``test_motor_pos`` (m_c) and measure where the beam lands vs the observed
+    centroid ``test_centroids`` (c_gt). The original aim point is never used.
+    Falls back to the legacy centre-aim pass when EVAL_ALIGN == "center".
+    """
     old_n_rays = scenario.light_sources.light_source_list[0].number_of_rays
     scenario.set_number_of_rays(cfg.DISPLAY_RAYS)
 
@@ -329,9 +335,12 @@ def _eval_test(scenario, hg, test_rays, test_active_mask, test_target_mask,
     bpd = kinematic._base_position_deviation.detach() if hasattr(kinematic, "_base_position_deviation") \
           else torch.zeros(1, 3, device=device)
 
+    _eval_motors = test_motor_pos if getattr(cfg, "EVAL_ALIGN", "motor_positions") != "center" else None
+
     with torch.no_grad():
         pred_cents, pred_flux = _forward_pass(
             scenario, hg, test_rays, test_active_mask, test_target_mask, bpd, device,
+            motor_positions=_eval_motors,
         )
 
     scenario.set_number_of_rays(old_n_rays)
@@ -476,7 +485,7 @@ def _plot_loss_curves(s1_hist, s1_val, s2_hist, s2_val, plots_dir: pathlib.Path)
     axes[0].plot(ep1, s1_hist, lw=1.5, color="steelblue",  label="train")
     if s1_val:
         axes[0].plot(ep1, s1_val, lw=1.5, color="darkorange", ls="--", label="val")
-    axes[0].set(title="Stage 1 — AlignmentLoss [rad²]", xlabel="Epoch", ylabel="Loss [rad²]")
+    axes[0].set(title="Stage 1 — AlignmentLoss [mrad]", xlabel="Epoch", ylabel="Loss [mrad]")
     axes[0].legend(fontsize=8); axes[0].grid(alpha=0.3)
 
     axes[1].plot(ep2, s2_hist, lw=1.5, color="steelblue",  label="train")
@@ -615,7 +624,7 @@ def _plot_centroid_trails(trail_checkpoints: list, train_flux: torch.Tensor,
             if gt_cx is not None:
                 ax.plot(gt_cx, gt_cy, "x", color="limegreen", ms=6, mew=1.5, zorder=8)
 
-            ax.set_title(f"el={el_deg[idx]:.0f}°  {final_mrad[idx]:.1f}mrad", fontsize=5, pad=1)
+            ax.set_title(f"az={compass_az[idx]:.0f}° el={el_deg[idx]:.0f}°\n{final_mrad[idx]:.1f}mrad", fontsize=5, pad=1)
             ax.axis("off")
 
         for j in range(n_in, n_rows * n_cols):
@@ -781,6 +790,7 @@ def run(
     device: torch.device,
     train_size: int | None = None,
     sampling_seed: int = 42,
+    skip_stage2: bool = False,
 ) -> dict:
     """
     Run the two-stage training pipeline and save all outputs.
@@ -804,6 +814,32 @@ def run(
     plots_dir.mkdir(exist_ok=True)
 
     t_start = time.time()
+
+    # ------------------------------------------------------------------ #
+    # 0. Formulation banner — confirm the calibration is centre-free.     #
+    #    Stage 1 / Stage 2 / eval must use only the real observables       #
+    #    (motors m_c, centroid c_gt), never the receiver centre.           #
+    #    See CALIBRATION_FORMULATION.md.                                    #
+    # ------------------------------------------------------------------ #
+    _s1_aim   = getattr(cfg, "STAGE1_AIM",   "centroid")
+    _s2_align = getattr(cfg, "STAGE2_ALIGN", "motor_positions")
+    _eval_al  = getattr(cfg, "EVAL_ALIGN",   "motor_positions")
+    log.info(
+        f"Formulation — Stage 1 aim: {_s1_aim} | Stage 2 align: {_s2_align} | "
+        f"eval align: {_eval_al}"
+    )
+    _legacy = []
+    if _s1_aim   == "center":        _legacy.append("STAGE1_AIM=center")
+    if _s2_align == "incident_rays": _legacy.append("STAGE2_ALIGN=incident_rays")
+    if _eval_al  == "center":        _legacy.append("EVAL_ALIGN=center")
+    if _legacy:
+        log.warning(
+            "LEGACY CENTRE-AIM MODE ACTIVE: " + ", ".join(_legacy)
+            + " — this calibration aims at the receiver centre (mis-specified on "
+            "real data). Unset these flags to use the centre-free formulation."
+        )
+    else:
+        log.info("Centre-free formulation confirmed: no aim-at-centre in training or eval.")
 
     # ------------------------------------------------------------------ #
     # 1. Load scenario                                                     #
@@ -834,10 +870,10 @@ def run(
             f"No training data found for {heliostat_id} "
             f"({'PAINT benchmark' if _data_mode == 'real' else dataset_dir})"
         )
-    if test_data is None:
-        raise RuntimeError(
-            f"No test data found for {heliostat_id} "
-            f"({'PAINT benchmark' if _data_mode == 'real' else dataset_dir})"
+    if test_data is None and val_data is None:
+        log.info(
+            f"  No val/test splits found for {heliostat_id} — "
+            "pooling from train only; DatasetSplitter will create val and test."
         )
 
     # ------------------------------------------------------------------ #
@@ -868,7 +904,7 @@ def run(
     # ------------------------------------------------------------------ #
     pre_eval = _eval_test(
         scenario, hg,
-        test_rays, test_active_mask, test_target_mask, test_centroids,
+        test_rays, test_active_mask, test_target_mask, test_centroids, test_motor_pos,
         hel_dist_m, cfg, device, "Pre-training",
     )
 
@@ -928,12 +964,17 @@ def run(
     param_history:     list[dict] = []
     PLOT_EVERY = getattr(cfg, "PLOT_EVERY", 1)
 
+    # Centre-free diagnostics: orient from the recorded GT motors so the
+    # training-progress mrad matches the final evaluation convention.
+    _diag_motors = getattr(cfg, "EVAL_ALIGN", "motor_positions") != "center"
+
     def capture_trails(label: str, epoch: int) -> None:
         with torch.no_grad():
             pred_cents, pred_flux = _forward_pass(
                 scenario, hg,
                 train_rays, train_active_mask, train_target_mask,
                 _current_base_pos(), device,
+                motor_positions=train_motor_pos if _diag_motors else None,
             )
         errs = (
             torch.norm(pred_cents[:, :3] - train_centroids[:, :3], dim=1)
@@ -947,6 +988,7 @@ def run(
                     scenario, hg,
                     val_rays, val_active_mask, val_target_mask,
                     _current_base_pos(), device,
+                    motor_positions=val_motor_pos if _diag_motors else None,
                 )
             mrad_val_mean = float(
                 (torch.norm(val_cents[:, :3] - val_centroids[:, :3], dim=1)
@@ -1001,7 +1043,30 @@ def run(
     # ------------------------------------------------------------------ #
     capture_trails("pre", 0)
 
-    alignment_loss_fn = AlignmentLoss()
+    _s1_loss_type = getattr(cfg, "STAGE1_LOSS", "motor_mse")
+    if _s1_loss_type == "normal_mrad":
+        _s1_fn = NormalAlignmentLoss()
+        def _s1_loss(pred_motor, meas_motor):
+            return _s1_fn(pred_motor, meas_motor, kinematic, device)
+        log.info("Stage 1 loss: NormalAlignmentLoss [mrad]")
+    else:
+        _s1_fn = AlignmentLoss()
+        def _s1_loss(pred_motor, meas_motor):
+            return _s1_fn(pred_motor, meas_motor, kinematic.actuators, device)
+        log.info("Stage 1 loss: AlignmentLoss [mrad]")
+
+    # Aim point fed to the inverse map align(theta, sun, aim) -> motors.
+    # Correct formulation aims at the observed centroid c_gt (the point m_c truly
+    # produced); "center" reproduces the legacy, real-data-invalid behaviour.
+    # See CALIBRATION_FORMULATION.md.
+    _s1_aim_mode = getattr(cfg, "STAGE1_AIM", "centroid")
+
+    def _s1_aim_points(target_mask, centroids):
+        if _s1_aim_mode == "center":
+            return scenario.solar_tower.get_centers_of_target_areas(target_mask, device)
+        return centroids
+    log.info(f"Stage 1 aim point: {_s1_aim_mode}")
+
     stage1_history:     list[float] = []
     stage1_val_history: list[float] = []
     best_s1_mrad   = float("inf")
@@ -1022,20 +1087,13 @@ def run(
         )
 
         hg.align_surfaces_with_incident_ray_directions(
-            aim_points=scenario.solar_tower.get_centers_of_target_areas(
-                train_target_mask, device
-            ),
+            aim_points=_s1_aim_points(train_target_mask, train_centroids),
             incident_ray_directions=train_rays,
             active_heliostats_mask=train_active_mask,
             device=device,
         )
 
-        lps  = alignment_loss_fn(
-            predicted_motor_positions=kinematic.active_motor_positions,
-            measured_motor_positions=train_motor_pos,
-            actuators=kinematic.actuators,
-            device=device,
-        )
+        lps  = _s1_loss(kinematic.active_motor_positions, train_motor_pos)
         loss = lps.mean()
         loss.backward()
 
@@ -1056,19 +1114,12 @@ def run(
                     kinematic.active_heliostat_positions + torch.cat([_rep_v, _pad_v], dim=1)
                 )
                 hg.align_surfaces_with_incident_ray_directions(
-                    aim_points=scenario.solar_tower.get_centers_of_target_areas(
-                        val_target_mask, device
-                    ),
+                    aim_points=_s1_aim_points(val_target_mask, val_centroids),
                     incident_ray_directions=val_rays,
                     active_heliostats_mask=val_active_mask,
                     device=device,
                 )
-                _val_lps = alignment_loss_fn(
-                    predicted_motor_positions=kinematic.active_motor_positions,
-                    measured_motor_positions=val_motor_pos,
-                    actuators=kinematic.actuators,
-                    device=device,
-                )
+                _val_lps = _s1_loss(kinematic.active_motor_positions, val_motor_pos)
             s1_val_loss = _val_lps.mean().item()
             stage1_val_history.append(s1_val_loss)
 
@@ -1101,172 +1152,194 @@ def run(
 
     s1_eval = _eval_test(
         scenario, hg,
-        test_rays, test_active_mask, test_target_mask, test_centroids,
+        test_rays, test_active_mask, test_target_mask, test_centroids, test_motor_pos,
         hel_dist_m, cfg, device, "After Stage 1",
     )
 
     # ------------------------------------------------------------------ #
     # 8. Stage 2 — FocalSpotLoss                                          #
     # ------------------------------------------------------------------ #
-    optimizer_s2, scheduler_s2 = _build_s2_optimizer(kinematic, cfg)
-    focal_spot_loss_fn = FocalSpotLoss(scenario=scenario)
-    scenario.set_number_of_rays(cfg.TRAIN_RAYS)
-
-    n_mb = (N_TRAIN + cfg.MINI_BATCH_SIZE - 1) // cfg.MINI_BATCH_SIZE
     stage2_history:     list[float] = []
     stage2_val_history: list[float] = []
-    best_s2_loss   = float("inf")
-    best_s2_params = None
 
-    log.info(
-        f"Stage 2: FocalSpotLoss  |  {cfg.STAGE2_EPOCHS} epochs  |  "
-        f"{n_mb} mini-batches of ≤{cfg.MINI_BATCH_SIZE} samples"
-    )
-    t_s2 = time.time()
+    if skip_stage2:
+        log.info("--skip-stage2 set — skipping Stage 2 (FocalSpotLoss).")
+        s2_eval = s1_eval
+    else:
+        optimizer_s2, scheduler_s2 = _build_s2_optimizer(kinematic, cfg)
+        focal_spot_loss_fn = FocalSpotLoss(scenario=scenario)
+        scenario.set_number_of_rays(cfg.TRAIN_RAYS)
 
-    for epoch in tqdm(range(1, cfg.STAGE2_EPOCHS + 1), desc="Stage 2"):
-        optimizer_s2.zero_grad()
-        loss_accum = None
+        # Forward map for Stage 2. Correct formulation orients the heliostat from
+        # the recorded motor positions m_c and lets the optics decide where the
+        # beam lands (compared against c_gt). "incident_rays" reproduces the
+        # legacy behaviour that re-derives motors by aiming at the centre.
+        # See CALIBRATION_FORMULATION.md.
+        _s2_align_mode = getattr(cfg, "STAGE2_ALIGN", "motor_positions")
 
-        for mb in range(n_mb):
-            s  = mb * cfg.MINI_BATCH_SIZE
-            e  = min(s + cfg.MINI_BATCH_SIZE, N_TRAIN)
-            mb_size = e - s
+        def _s2_align(mb_active, mb_motor_pos, mb_rays, mb_target):
+            if _s2_align_mode == "incident_rays":
+                hg.align_surfaces_with_incident_ray_directions(
+                    aim_points=scenario.solar_tower.get_centers_of_target_areas(
+                        mb_target, device
+                    ),
+                    incident_ray_directions=mb_rays,
+                    active_heliostats_mask=mb_active,
+                    device=device,
+                )
+            else:
+                hg.align_surfaces_with_motor_positions(
+                    motor_positions=mb_motor_pos,
+                    active_heliostats_mask=mb_active,
+                    device=device,
+                )
+        log.info(f"Stage 2 alignment: {_s2_align_mode}")
 
-            mb_rays    = train_rays[s:e]
-            mb_target  = train_target_mask[s:e]
-            mb_gt      = train_centroids[s:e]
-            mb_active  = torch.tensor([mb_size], device=device, dtype=torch.long)
+        n_mb = (N_TRAIN + cfg.MINI_BATCH_SIZE - 1) // cfg.MINI_BATCH_SIZE
+        best_s2_loss   = float("inf")
+        best_s2_params = None
 
-            hg.activate_heliostats(active_heliostats_mask=mb_active, device=device)
-            _bpd = kinematic._base_position_deviation
-            _rep = _bpd.repeat_interleave(mb_active, dim=0)
-            _pad = torch.zeros(_rep.shape[0], 1, device=device)
-            kinematic.active_heliostat_positions = (
-                kinematic.active_heliostat_positions + torch.cat([_rep, _pad], dim=1)
-            )
+        log.info(
+            f"Stage 2: FocalSpotLoss  |  {cfg.STAGE2_EPOCHS} epochs  |  "
+            f"{n_mb} mini-batches of ≤{cfg.MINI_BATCH_SIZE} samples"
+        )
+        t_s2 = time.time()
 
-            hg.align_surfaces_with_incident_ray_directions(
-                aim_points=scenario.solar_tower.get_centers_of_target_areas(mb_target, device),
-                incident_ray_directions=mb_rays,
-                active_heliostats_mask=mb_active,
-                device=device,
-            )
+        for epoch in tqdm(range(1, cfg.STAGE2_EPOCHS + 1), desc="Stage 2"):
+            optimizer_s2.zero_grad()
+            loss_accum = None
 
-            ray_tracer = HeliostatRayTracer(
-                scenario=scenario,
-                heliostat_group=hg,
-                blocking_active=False,
-                world_size=1, rank=0,
-                batch_size=max(8, mb_size),
-                random_seed=epoch * 1000 + mb,
-            )
-            flux, _, _, _ = ray_tracer.trace_rays(
-                incident_ray_directions=mb_rays,
-                active_heliostats_mask=mb_active,
-                target_area_indices=mb_target,
-                device=device,
-            )
-            sample_idx = ray_tracer.get_sampler_indices()
+            for mb in range(n_mb):
+                s  = mb * cfg.MINI_BATCH_SIZE
+                e  = min(s + cfg.MINI_BATCH_SIZE, N_TRAIN)
+                mb_size = e - s
 
-            lps = focal_spot_loss_fn(
-                prediction=flux,
-                ground_truth=mb_gt[sample_idx],
-                target_area_indices=mb_target[sample_idx],
-                reduction_dimensions=(indices.focal_spots,),
-                device=device,
-            )
-            weight = mb_size / N_TRAIN
-            (lps.mean() * weight).backward()
-            mb_loss   = lps.detach().mean() * weight
-            loss_accum = mb_loss if loss_accum is None else loss_accum + mb_loss
+                mb_rays    = train_rays[s:e]
+                mb_target  = train_target_mask[s:e]
+                mb_gt      = train_centroids[s:e]
+                mb_motor   = train_motor_pos[s:e]
+                mb_active  = torch.tensor([mb_size], device=device, dtype=torch.long)
 
-        torch.nn.utils.clip_grad_norm_(_all_params(), max_norm=1.0)
-        optimizer_s2.step()
-        _apply_bounds()
-        capture_grad_and_params(cfg.STAGE1_EPOCHS + epoch)
-        stage2_history.append(loss_accum.item())
+                hg.activate_heliostats(active_heliostats_mask=mb_active, device=device)
+                _bpd = kinematic._base_position_deviation
+                _rep = _bpd.repeat_interleave(mb_active, dim=0)
+                _pad = torch.zeros(_rep.shape[0], 1, device=device)
+                kinematic.active_heliostat_positions = (
+                    kinematic.active_heliostat_positions + torch.cat([_rep, _pad], dim=1)
+                )
 
-        s2_val_loss = None
-        if val_flux is not None:
-            n_mb_v   = (N_VAL + cfg.MINI_BATCH_SIZE - 1) // cfg.MINI_BATCH_SIZE
-            val_accum = 0.0
-            with torch.no_grad():
-                for mbv in range(n_mb_v):
-                    sv  = mbv * cfg.MINI_BATCH_SIZE
-                    ev  = min(sv + cfg.MINI_BATCH_SIZE, N_VAL)
-                    msv = ev - sv
-                    mbr_v = val_rays[sv:ev];    mbt_v = val_target_mask[sv:ev]
-                    mbg_v = val_centroids[sv:ev]; mba_v = torch.tensor([msv], device=device, dtype=torch.long)
+                _s2_align(mb_active, mb_motor, mb_rays, mb_target)
 
-                    hg.activate_heliostats(active_heliostats_mask=mba_v, device=device)
-                    _bpd_v = kinematic._base_position_deviation
-                    _rep_v = _bpd_v.repeat_interleave(mba_v, dim=0)
-                    _pad_v = torch.zeros(_rep_v.shape[0], 1, device=device)
-                    kinematic.active_heliostat_positions = (
-                        kinematic.active_heliostat_positions + torch.cat([_rep_v, _pad_v], dim=1)
-                    )
-                    hg.align_surfaces_with_incident_ray_directions(
-                        aim_points=scenario.solar_tower.get_centers_of_target_areas(mbt_v, device),
-                        incident_ray_directions=mbr_v,
-                        active_heliostats_mask=mba_v,
-                        device=device,
-                    )
-                    rt_v = HeliostatRayTracer(
-                        scenario=scenario, heliostat_group=hg,
-                        blocking_active=False, world_size=1, rank=0,
-                        batch_size=max(8, msv), random_seed=42,
-                    )
-                    fl_v, _, _, _ = rt_v.trace_rays(
-                        incident_ray_directions=mbr_v,
-                        active_heliostats_mask=mba_v,
-                        target_area_indices=mbt_v,
-                        device=device,
-                    )
-                    sidx_v = rt_v.get_sampler_indices()
-                    lps_v  = focal_spot_loss_fn(
-                        prediction=fl_v,
-                        ground_truth=mbg_v[sidx_v],
-                        target_area_indices=mbt_v[sidx_v],
-                        reduction_dimensions=(indices.focal_spots,),
-                        device=device,
-                    )
-                    val_accum += lps_v.mean().item() * (msv / N_VAL)
-            s2_val_loss = val_accum
-            stage2_val_history.append(s2_val_loss)
+                ray_tracer = HeliostatRayTracer(
+                    scenario=scenario,
+                    heliostat_group=hg,
+                    blocking_active=False,
+                    world_size=1, rank=0,
+                    batch_size=max(8, mb_size),
+                    random_seed=epoch * 1000 + mb,
+                )
+                flux, _, _, _ = ray_tracer.trace_rays(
+                    incident_ray_directions=mb_rays,
+                    active_heliostats_mask=mb_active,
+                    target_area_indices=mb_target,
+                    device=device,
+                )
+                sample_idx = ray_tracer.get_sampler_indices()
 
-        scheduler_s2.step(s2_val_loss if s2_val_loss is not None else loss_accum.item())
+                lps = focal_spot_loss_fn(
+                    prediction=flux,
+                    ground_truth=mb_gt[sample_idx],
+                    target_area_indices=mb_target[sample_idx],
+                    reduction_dimensions=(indices.focal_spots,),
+                    device=device,
+                )
+                weight = mb_size / N_TRAIN
+                (lps.mean() * weight).backward()
+                mb_loss   = lps.detach().mean() * weight
+                loss_accum = mb_loss if loss_accum is None else loss_accum + mb_loss
 
-        monitor = s2_val_loss if s2_val_loss is not None else loss_accum.item()
-        if monitor < best_s2_loss:
-            best_s2_loss = monitor
-            best_s2_params = {
-                "translation": kinematic.translation_deviation_parameters.clone().detach(),
-                "rotation":    kinematic.rotation_deviation_parameters.clone().detach(),
-                "act_angle":   kinematic.actuators.optimizable_parameters.clone().detach(),
-                "act_offset":  kinematic.actuators.non_optimizable_parameters.clone().detach(),
-                "base_pos":    kinematic._base_position_deviation.clone().detach(),
-            }
+            torch.nn.utils.clip_grad_norm_(_all_params(), max_norm=1.0)
+            optimizer_s2.step()
+            _apply_bounds()
+            capture_grad_and_params(cfg.STAGE1_EPOCHS + epoch)
+            stage2_history.append(loss_accum.item())
 
-        if epoch % PLOT_EVERY == 0:
-            capture_trails(f"S2/{epoch}", cfg.STAGE1_EPOCHS + epoch)
+            s2_val_loss = None
+            if val_flux is not None:
+                n_mb_v   = (N_VAL + cfg.MINI_BATCH_SIZE - 1) // cfg.MINI_BATCH_SIZE
+                val_accum = 0.0
+                with torch.no_grad():
+                    for mbv in range(n_mb_v):
+                        sv  = mbv * cfg.MINI_BATCH_SIZE
+                        ev  = min(sv + cfg.MINI_BATCH_SIZE, N_VAL)
+                        msv = ev - sv
+                        mbr_v = val_rays[sv:ev];    mbt_v = val_target_mask[sv:ev]
+                        mbg_v = val_centroids[sv:ev]; mba_v = torch.tensor([msv], device=device, dtype=torch.long)
+                        mbm_v = val_motor_pos[sv:ev]
 
-    if best_s2_params is not None:
-        kinematic.translation_deviation_parameters.data.copy_(best_s2_params["translation"])
-        kinematic.rotation_deviation_parameters.data.copy_(best_s2_params["rotation"])
-        kinematic.actuators.optimizable_parameters.data.copy_(best_s2_params["act_angle"])
-        kinematic.actuators.non_optimizable_parameters.data.copy_(best_s2_params["act_offset"])
-        kinematic._base_position_deviation = best_s2_params["base_pos"].clone().requires_grad_(True)
-        log.info(f"Restored best Stage 2 params (loss={best_s2_loss:.6f})")
+                        hg.activate_heliostats(active_heliostats_mask=mba_v, device=device)
+                        _bpd_v = kinematic._base_position_deviation
+                        _rep_v = _bpd_v.repeat_interleave(mba_v, dim=0)
+                        _pad_v = torch.zeros(_rep_v.shape[0], 1, device=device)
+                        kinematic.active_heliostat_positions = (
+                            kinematic.active_heliostat_positions + torch.cat([_rep_v, _pad_v], dim=1)
+                        )
+                        _s2_align(mba_v, mbm_v, mbr_v, mbt_v)
+                        rt_v = HeliostatRayTracer(
+                            scenario=scenario, heliostat_group=hg,
+                            blocking_active=False, world_size=1, rank=0,
+                            batch_size=max(8, msv), random_seed=42,
+                        )
+                        fl_v, _, _, _ = rt_v.trace_rays(
+                            incident_ray_directions=mbr_v,
+                            active_heliostats_mask=mba_v,
+                            target_area_indices=mbt_v,
+                            device=device,
+                        )
+                        sidx_v = rt_v.get_sampler_indices()
+                        lps_v  = focal_spot_loss_fn(
+                            prediction=fl_v,
+                            ground_truth=mbg_v[sidx_v],
+                            target_area_indices=mbt_v[sidx_v],
+                            reduction_dimensions=(indices.focal_spots,),
+                            device=device,
+                        )
+                        val_accum += lps_v.mean().item() * (msv / N_VAL)
+                s2_val_loss = val_accum
+                stage2_val_history.append(s2_val_loss)
 
-    t_s2_min = (time.time() - t_s2) / 60.0
-    log.info(f"Stage 2 done in {t_s2_min:.1f} min. Final loss={stage2_history[-1]:.6f}")
+            scheduler_s2.step(s2_val_loss if s2_val_loss is not None else loss_accum.item())
 
-    s2_eval = _eval_test(
-        scenario, hg,
-        test_rays, test_active_mask, test_target_mask, test_centroids,
-        hel_dist_m, cfg, device, "After Stage 2",
-    )
+            monitor = s2_val_loss if s2_val_loss is not None else loss_accum.item()
+            if monitor < best_s2_loss:
+                best_s2_loss = monitor
+                best_s2_params = {
+                    "translation": kinematic.translation_deviation_parameters.clone().detach(),
+                    "rotation":    kinematic.rotation_deviation_parameters.clone().detach(),
+                    "act_angle":   kinematic.actuators.optimizable_parameters.clone().detach(),
+                    "act_offset":  kinematic.actuators.non_optimizable_parameters.clone().detach(),
+                    "base_pos":    kinematic._base_position_deviation.clone().detach(),
+                }
+
+            if epoch % PLOT_EVERY == 0:
+                capture_trails(f"S2/{epoch}", cfg.STAGE1_EPOCHS + epoch)
+
+        if best_s2_params is not None:
+            kinematic.translation_deviation_parameters.data.copy_(best_s2_params["translation"])
+            kinematic.rotation_deviation_parameters.data.copy_(best_s2_params["rotation"])
+            kinematic.actuators.optimizable_parameters.data.copy_(best_s2_params["act_angle"])
+            kinematic.actuators.non_optimizable_parameters.data.copy_(best_s2_params["act_offset"])
+            kinematic._base_position_deviation = best_s2_params["base_pos"].clone().requires_grad_(True)
+            log.info(f"Restored best Stage 2 params (loss={best_s2_loss:.6f})")
+
+        t_s2_min = (time.time() - t_s2) / 60.0
+        log.info(f"Stage 2 done in {t_s2_min:.1f} min. Final loss={stage2_history[-1]:.6f}")
+
+        s2_eval = _eval_test(
+            scenario, hg,
+            test_rays, test_active_mask, test_target_mask, test_centroids, test_motor_pos,
+            hel_dist_m, cfg, device, "After Stage 2",
+        )
 
     total_min = (time.time() - t_start) / 60.0
 

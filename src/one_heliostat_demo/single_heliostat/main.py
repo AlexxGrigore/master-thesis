@@ -70,6 +70,12 @@ def _parse_args() -> argparse.Namespace:
                         "'synthetic': use CUSTOM_PERTURBATIONS_SPEC from config "
                         "(overrides config.DATA_MODE)")
 
+    # Stage control
+    p.add_argument("--skip-stage2", action="store_true",
+                   help="Run only Stage 1 (AlignmentLoss); skip Stage 2 (FocalSpotLoss)")
+    p.add_argument("--stage1-epochs", type=int, default=None,
+                   help="Override cfg.STAGE1_EPOCHS (default: 20)")
+
     return p.parse_args()
 
 
@@ -115,6 +121,8 @@ def main() -> None:
         cfg.SWAP_VAL_TEST = args.swap_val_test
     if args.data_mode is not None:
         cfg.DATA_MODE = args.data_mode
+    if args.stage1_epochs is not None:
+        cfg.STAGE1_EPOCHS = args.stage1_epochs
 
     # Real-data mode never needs a generation step.
     if cfg.DATA_MODE == "real":
@@ -222,6 +230,7 @@ def main() -> None:
             output_dir=output_dir,
             cfg=cfg,
             device=device,
+            skip_stage2=args.skip_stage2,
         )
 
     _print_summary(results)

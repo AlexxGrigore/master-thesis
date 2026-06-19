@@ -119,7 +119,7 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--split-type",
-        choices=["balanced", "azimuth", "solstice", "high_variance"],
+        choices=["balanced", "azimuth", "solstice", "high_variance", "full_field"],
         default="balanced",
         help="Which synthetic dataset pool to read from (default: balanced).",
     )
@@ -227,7 +227,10 @@ def main() -> None:
     log.info(f"Smoke test    : {args.smoke_test}")
 
     if args.data_mode == "synthetic":
-        cfg.SYNTHETIC_DATASET_DIR = _synth_root / f"{args.split_type}_dataset" / "dataset"
+        if args.split_type == "full_field":
+            cfg.SYNTHETIC_DATASET_DIR = _synth_root / "full_field_dataset" / "dataset"
+        else:
+            cfg.SYNTHETIC_DATASET_DIR = _synth_root / f"{args.split_type}_dataset" / "dataset"
         dataset_dir = pathlib.Path(cfg.SYNTHETIC_DATASET_DIR)
         if not dataset_dir.exists():
             log.error(
