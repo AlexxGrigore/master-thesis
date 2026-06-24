@@ -2,7 +2,7 @@
 #SBATCH --job-name=artist_profiling
 #SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/profiling_out_%j.log
 #SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/profiling_err_%j.log
-#SBATCH --time=08:00:00
+#SBATCH --time=04:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:a40:1
