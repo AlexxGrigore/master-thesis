@@ -6,6 +6,8 @@ from scipy.ndimage import distance_transform_edt
 import torch
 import torch.nn.functional as F
 
+from artist.util import indices
+
 
 class NormalAlignmentLoss:
     """Stage-1 loss expressed directly in milliradians.
@@ -92,6 +94,133 @@ class AlignmentLoss:
             motor_positions=measured_motor_positions.to(device), device=device
         )
         return (pred_angles - meas_angles).norm(dim=-1) * 1000.0
+
+
+class MotorStepLoss:
+    """Stage-1 loss in motor-step space, optionally increment-normalized.
+
+    Compares the predicted motor positions against the recorded ones directly,
+    without ever calling ``motor_positions_to_angles``. This keeps the *optimized*
+    actuator parameters (initial angle a_i, offset c_i) out of the loss
+    computation entirely: gradients reach theta only through the prediction
+    ``m_pred = align(theta, sun, c_gt)``, while the recorded motors ``m_c`` are a
+    fixed, theta-free target. The result is real-data-valid and free of the
+    self-referential coupling present in AlignmentLoss/NormalAlignmentLoss.
+
+    With ``normalize_by_increment=True`` (default) each motor's residual is
+    divided by that actuator's step increment (steps per unit stroke length),
+    turning raw step counts into a comparable physical (stroke-length) scale so
+    the two actuators are balanced regardless of their differing gear ratios.
+    The increment is frozen in the Wortberg setup, so it acts as a fixed scaling
+    constant; it is detached to guarantee no gradient flows through the
+    normalization.
+
+    Returns
+    -------
+    torch.Tensor
+        Shape ``[N_active_samples]`` — per-sample residual norm. Units are
+        stroke length when normalized, raw motor steps otherwise.
+    """
+
+    def __init__(self, normalize_by_increment: bool = True) -> None:
+        self.normalize_by_increment = normalize_by_increment
+
+    def __call__(
+        self,
+        predicted_motor_positions: torch.Tensor,
+        measured_motor_positions: torch.Tensor,
+        actuators,
+        device: torch.device,
+    ) -> torch.Tensor:
+        pred = predicted_motor_positions.to(device)
+        meas = measured_motor_positions.to(device)
+        diff = pred - meas
+
+        if self.normalize_by_increment:
+            # Use the same physics-informed (post-softplus) increment the
+            # kinematics use, detached so it is a pure scaling constant.
+            non_optimizable_parameters, _ = actuators._physics_informed_parameters(
+                device=device
+            )
+            increment = non_optimizable_parameters[:, indices.actuator_increment].detach()
+            diff = diff / increment
+
+        return diff.norm(dim=-1)
+
+
+class ForwardAimLoss:
+    """Forward-consistent Stage-1 alignment loss.
+
+    Compares the FORWARD concentrator normal at the recorded motor positions m_c
+    against the geometric desired normal — the bisector of the directions toward
+    the sun and toward the observed centroid c_gt. It uses only the forward
+    kinematics (``_compute_orientations_from_motor_positions``), never the inverse,
+    so it is consistent with the forward model and has its minimum at the true
+    parameters.
+
+    This fixes the motor-position alignment loss, whose inverse map
+    (``incident_ray_directions_to_orientations``) does not invert the rotation
+    deviations and therefore places the loss minimum away from theta* (see
+    STAGE1_ALIGNMENT_LOSS_FINDINGS.md).
+
+    The optimized per-sample loss is the squared chord distance
+    ``||n_fwd - n_desired||^2`` (smooth gradient everywhere — no ``sqrt``/``arccos``
+    near convergence). The geometric target ``n_desired`` is detached, so gradients
+    flow only through ``n_fwd`` into theta.
+
+    With ``return_mrad=True`` the per-sample geodesic angle in mrad is returned
+    instead, for display only: ``2 * arcsin(||n_fwd - n_desired|| / 2) * 1000``.
+
+    Parameters
+    ----------
+    motor_positions : torch.Tensor
+        Recorded motor positions m_c. Shape ``[N_active, 2]``.
+    incident_rays : torch.Tensor
+        Incident ray directions (sun -> heliostat). Shape ``[N_active, 4]``.
+    aim_points : torch.Tensor
+        Observed centroids c_gt in world coordinates. Shape ``[N_active, 4]``.
+    origins : torch.Tensor
+        Mirror (concentrator) origins. Shape ``[N_active, 3]``.
+
+    Returns
+    -------
+    torch.Tensor
+        Shape ``[N_active]`` — squared chord distance (loss), or mrad if
+        ``return_mrad=True``.
+    """
+
+    _NORMAL_VEC = torch.tensor([0.0, -1.0, 0.0, 0.0])
+
+    def __call__(
+        self,
+        motor_positions: torch.Tensor,
+        incident_rays: torch.Tensor,
+        aim_points: torch.Tensor,
+        origins: torch.Tensor,
+        kinematic,
+        device: torch.device,
+        return_mrad: bool = False,
+    ) -> torch.Tensor:
+        nv = self._NORMAL_VEC.to(device=device, dtype=torch.float32)
+        orientations = kinematic._compute_orientations_from_motor_positions(
+            motor_positions.to(device=device, dtype=torch.float32), device
+        )
+        n_fwd = torch.nn.functional.normalize((orientations @ nv)[:, :3], dim=-1)
+
+        to_sun = torch.nn.functional.normalize(-incident_rays[:, :3].to(device), dim=-1)
+        to_aim = torch.nn.functional.normalize(
+            aim_points[:, :3].to(device) - origins.to(device), dim=-1
+        )
+        # Geometric desired normal = bisector of (toward sun) and (toward c_gt).
+        # Detached: a fixed target, gradients flow only through n_fwd -> theta.
+        n_desired = torch.nn.functional.normalize(to_sun + to_aim, dim=-1).detach()
+
+        diff = n_fwd - n_desired
+        chord2 = (diff * diff).sum(dim=-1)
+        if return_mrad:
+            chord = chord2.clamp(min=0.0).sqrt()
+            return 2.0 * torch.arcsin((chord * 0.5).clamp(-1.0, 1.0)) * 1000.0
+        return chord2
 
 
 class ContourLoss:

@@ -92,37 +92,33 @@ GENERATE_RAYS = 100              # rays for synthetic GT data generation
 # Training schedule
 # ============================================================================
 
-STAGE1_EPOCHS   = 20
+STAGE1_EPOCHS   = 100
 STAGE2_EPOCHS   = 100
-STAGE1_LOSS     = "motor_mse"   # "motor_mse" | "normal_mrad"
+STAGE1_LOSS     = "forward_aim"  # "forward_aim" (DEFAULT — forward normal vs geometric
+                                 #   desired normal; only consistent objective, see
+                                 #   STAGE1_ALIGNMENT_LOSS_FINDINGS.md)
+                                 # The following use the inverse map and are BROKEN
+                                 #   (loss minimum not at theta*), kept for comparison:
+                                 #   "motor_steps" (MotorStepLoss, increment-normalized) |
+                                 #   "motor_mse" (AlignmentLoss) | "normal_mrad" (NormalAlignmentLoss)
 MINI_BATCH_SIZE = 25             # Stage 2: samples per mini-batch
 
 # ----------------------------------------------------------------------------
 # Aim-point / motor-position formulation  (see CALIBRATION_FORMULATION.md)
 # ----------------------------------------------------------------------------
-# The motor position m_c and the observed centroid c_gt are the only real
-# observables; the *intended* aim point is not recorded. Both stages must be
-# expressed through (m_c, c_gt), never through a fictional "aim at centre".
-#
-# STAGE1_AIM — what aim point the inverse map align(theta, sun, aim) is fed:
-#   "centroid" (correct): aim at the observed centroid c_gt; match motors to m_c.
-#   "center"   (legacy) : aim at the receiver centre (only self-consistent on
-#                         synthetic data; mis-specified on real data).
-STAGE1_AIM = "centroid"
+# The formulation is hardcoded centre-free: the motor position m_c and the
+# observed centroid c_gt are the only real observables; the intended aim point is
+# never used. Stage 1 aims the inverse map at c_gt; Stage 2 and evaluation orient
+# from the recorded motors m_c. The legacy centre-aim modes have been removed.
 
-# STAGE2_ALIGN — how the heliostat is oriented before ray tracing:
-#   "motor_positions" (correct): orient from the recorded motors m_c, trace,
-#                                compare the landed spot to c_gt. Exact forward map.
-#   "incident_rays"   (legacy) : re-derive motors by aiming at the centre, then
-#                                trace (theta enters twice; breaks on real data).
-STAGE2_ALIGN = "motor_positions"
+# OPTIMIZE_ACTUATOR_OFFSET — whether the actuator offset c_i is calibrated.
+# c_i lives in the actuators' `non_optimizable_parameters` tensor. ARTIST's
+# default treats that whole tensor as fixed (manufacturing geometry); Wortberg
+# 2025 deliberately re-enables c_i. Set False to honour ARTIST's "non-optimizable"
+# designation and freeze the entire tensor; True reproduces Wortberg (only c_i
+# in that tensor receives gradients, everything else stays frozen).
+OPTIMIZE_ACTUATOR_OFFSET = True
 
-# EVAL_ALIGN — how the test / diagnostic forward pass orients the heliostat.
-# The evaluation must also be centre-free: feed the recorded GT motors m_c through
-# the model optics and measure where the beam lands vs the observed centroid c_gt.
-#   "motor_positions" (correct): err = ‖raytrace(theta, sun, m_c) − c_gt‖; exact at θ_GT.
-#   "center" (legacy): aim at the receiver centre (uses the fictional aim point).
-EVAL_ALIGN = "motor_positions"
 BASE_LR         = 1e-4
 PLOT_EVERY      = 1              # capture trail snapshot every N epochs (1 = all epochs)
 

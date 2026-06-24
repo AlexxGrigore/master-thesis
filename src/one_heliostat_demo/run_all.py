@@ -148,15 +148,18 @@ def _parse_args() -> argparse.Namespace:
                         "'real': load actual PAINT calibration images (implies --skip-dataset-gen)")
 
     # Stage control
+    p.add_argument("--skip-stage1", action="store_true",
+                   help="Run only Stage 2 (FocalSpotLoss); skip Stage 1 (AlignmentLoss)")
     p.add_argument("--skip-stage2", action="store_true",
                    help="Run only Stage 1 (AlignmentLoss); skip Stage 2 (FocalSpotLoss)")
     p.add_argument("--stage1-epochs", type=int, default=None,
                    help="Override cfg.STAGE1_EPOCHS (default: 20)")
     p.add_argument("--stage2-epochs", type=int, default=None,
                    help="Override cfg.STAGE2_EPOCHS (default: 100)")
-    p.add_argument("--stage1-loss", choices=["motor_mse", "normal_mrad"], default=None,
-                   help="Stage 1 loss: 'motor_mse' (AlignmentLoss, default) or "
-                        "'normal_mrad' (NormalAlignmentLoss)")
+    p.add_argument("--stage1-loss", choices=["motor_steps", "motor_mse", "normal_mrad"], default=None,
+                   help="Stage 1 loss: 'motor_steps' (increment-normalized motor steps, "
+                        "no angle conversion, default), 'motor_mse' (AlignmentLoss, angle space), "
+                        "or 'normal_mrad' (NormalAlignmentLoss)")
 
     return p.parse_args()
 
@@ -342,6 +345,7 @@ def main() -> None:
                     output_dir=hid_dir,
                     cfg=cfg,
                     device=device,
+                    skip_stage1=args.skip_stage1,
                     skip_stage2=args.skip_stage2,
                 )
 

@@ -65,9 +65,10 @@ def _parse_args() -> argparse.Namespace:
                           help="Keep DatasetSplitter assignment as-is")
 
     # Data generation mode
-    p.add_argument("--data-mode", choices=["random_synthetic", "synthetic"], default=None,
+    p.add_argument("--data-mode", choices=["random_synthetic", "synthetic", "real"], default=None,
                    help="'random_synthetic': random perturbations each run; "
-                        "'synthetic': use CUSTOM_PERTURBATIONS_SPEC from config "
+                        "'synthetic': use CUSTOM_PERTURBATIONS_SPEC from config; "
+                        "'real': load the PAINT benchmark directly "
                         "(overrides config.DATA_MODE)")
 
     # Stage control

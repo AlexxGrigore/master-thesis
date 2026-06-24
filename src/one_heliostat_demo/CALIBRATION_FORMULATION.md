@@ -303,19 +303,21 @@ residual Stage 2 cleans up.
 
 ---
 
-## 6. Summary of required changes — IMPLEMENTED
+## 6. Summary of required changes — IMPLEMENTED (centre-free formulation hardcoded)
 
-Status: applied in `single_heliostat/train.py` and `single_heliostat/config.py`. Each fix is
-behind a config flag so the legacy behaviour can be reproduced for ablations.
+Status: applied in `single_heliostat/train.py` and `single_heliostat/config.py`. The centre-free
+formulation is now the **only** behaviour — the legacy centre-aim modes and their config flags
+(`STAGE1_AIM`, `STAGE2_ALIGN`, `EVAL_ALIGN`) have been **removed**. To reproduce the old
+centre-based formulation for an ablation you must `git` back to before this change.
 
-| Component | Change | Flag |
-|-----------|--------|------|
-| `generate_dataset.py` / `_forward_pass` (generation) | **none** — keep aiming at centre | — |
-| `calibration_properties.json` / `SyntheticDatasetParser` | **none** — `c_gt`, `m_c`, `s` already saved/loaded | — |
-| `train.py` Stage 1 (train + val sub-loops) | aim the inverse map at `train_centroids` (`c_gt`) instead of `get_centers_of_target_areas` | `STAGE1_AIM = "centroid"` (vs `"center"`) |
-| `train.py` Stage 2 (train + val sub-loops) | orient from `train_motor_pos` (`m_c`) via `align_surfaces_with_motor_positions`; drop the `align(aim=centre)` call | `STAGE2_ALIGN = "motor_positions"` (vs `"incident_rays"`) |
-| `train.py` Evaluation + diagnostics (`_eval_test`, `capture_trails`) | orient from the recorded GT motors `m_c`; error = `‖raytrace(θ, sun, m_c) − c_gt‖`; the original aim point is never used | `EVAL_ALIGN = "motor_positions"` (vs `"center"`) |
-| `utils/synth_data.py::_forward_pass` | new optional `motor_positions` arg: orient from motors when given, else aim-at-centre (generation still needs centre) | — |
+| Component | Change |
+|-----------|--------|
+| `generate_dataset.py` / `_forward_pass` (generation) | **none** — keep aiming at centre (this is how `m_c` is produced) |
+| `calibration_properties.json` / `SyntheticDatasetParser` | **none** — `c_gt`, `m_c`, `s` already saved/loaded |
+| `train.py` Stage 1 (train + val sub-loops) | aim the inverse map at `train_centroids` / `val_centroids` (`c_gt`) — hardcoded |
+| `train.py` Stage 2 (train + val sub-loops) | orient from `train_motor_pos` (`m_c`) via `align_surfaces_with_motor_positions` — hardcoded |
+| `train.py` Evaluation + diagnostics (`_eval_test`, `capture_trails`) | orient from the recorded GT motors `m_c`; error = `‖raytrace(θ, sun, m_c) − c_gt‖`; the original aim point is never used — hardcoded |
+| `utils/synth_data.py::_forward_pass` | optional `motor_positions` arg: orient from motors when given (eval/diagnostics), else aim-at-centre (generation still needs centre) |
 
 Both fixes are the same idea applied to the inverse (Stage 1) and forward (Stage 2) halves of
 the calibration: **use the real observables `m_c` and `c_gt`; never the intended aim point.**
@@ -339,8 +341,7 @@ the calibration: **use the real observables `m_c` and `c_gt`; never the intended
   the landed spot vs the observed centroid `c_gt`: `err = ‖raytrace(θ, sun, m_c) − c_gt‖`,
   reported in mrad (`/ hel_dist`). This uses only real observables, is exact at `θ_GT`, and is
   the forward dual of Stage 1's inverse check. `capture_trails` uses the same convention so the
-  convergence curves match the final eval. The legacy centre-aim eval is still available via
-  `EVAL_ALIGN = "center"` for ablation. (An equally valid alternative metric is the *inverse*
+  convergence curves match the final eval. (An equally valid alternative metric is the *inverse*
   one — aim the model at `c_gt`, compare predicted motors to `m_c` — which is literally Stage 1's
   loss on the test set; the forward metric is chosen here because it stays in interpretable
   focal-spot mrad and is exact at the ground truth.)
