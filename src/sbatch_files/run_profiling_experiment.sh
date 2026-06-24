@@ -26,6 +26,9 @@ run() {
     apptainer exec --nv --bind /tudelft.net:/tudelft.net "$SIF" python "$@"
 }
 
+echo "=== Preflight check (aborts the job via set -e if anything is missing) ==="
+run profiling_experiment/check_daic.py --daic --sizes $SIZES
+
 echo "=== Phase A: scenario creation ==="
 run profiling_experiment/create_scenarios.py --daic --sizes $SIZES
 
