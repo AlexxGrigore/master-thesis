@@ -6,8 +6,8 @@ needs:
 
   * torch + CUDA, and whether the GPU is an A40,
   * every ARTIST / PAINT module the drivers import,
-  * every ``constants`` / ``config_dictionary`` key the drivers reference (the most
-    likely thing to drift between ARTIST versions),
+  * every ``artist.util.constants`` key the drivers reference (the most likely thing to
+    drift between ARTIST versions),
   * the datasets (PAINT heliostats, tower file, training benchmark, availability JSON),
   * that enough heliostats are eligible for the largest requested field size,
   * write permission for the scenario + output directories.
@@ -81,18 +81,24 @@ def check_torch_and_gpu() -> None:
 
 
 def check_artist_imports() -> None:
+    # Current ARTIST layout (post "rename data_parser subpackage to io" refactor):
+    # creation lives in artist.io, config keys in artist.util.constants, device in
+    # artist.util.env. (The older data_parser / config_dictionary / environment_setup
+    # names are gone — that's what the stale create_all_scenarios.py still uses.)
     modules = {
         "artist": [],
         "artist.io": ["PaintCalibrationDataParser"],
+        "artist.io.paint_scenario_parser": [
+            "extract_paint_tower_measurements", "extract_paint_heliostats_fitted_surface",
+        ],
         "artist.optim": ["KinematicsReconstructor"],
         "artist.optim.loss": ["FocalSpotLoss"],
         "artist.raytracing": ["HeliostatRayTracer"],
         "artist.scenario": ["Scenario"],
-        "artist.data_parser": ["paint_scenario_parser"],
         "artist.scenario.h5_scenario_generator": ["H5ScenarioGenerator"],
-        "artist.util": ["constants", "config_dictionary", "set_logger_config"],
+        "artist.util": ["constants", "set_logger_config"],
+        "artist.util.config": ["LightSourceConfig", "LightSourceListConfig"],
         "artist.util.env": ["get_device", "setup_distributed_environment"],
-        "artist.util.environment_setup": ["get_device"],
         "paint.util.paint_mappings": ["UTIS_KEY"],
     }
     for mod_name, attrs in modules.items():
@@ -109,7 +115,9 @@ def check_artist_imports() -> None:
 
 
 def check_required_constants() -> None:
-    from artist.util import config_dictionary, constants
+    # In the current ARTIST, all of these (incl. the keys the older create_all_scenarios
+    # read from config_dictionary) live in artist.util.constants.
+    from artist.util import constants
 
     required_constants = [
         "initial_learning_rate_rotation_deviation", "initial_learning_rate_initial_angles",
@@ -118,19 +126,16 @@ def check_required_constants() -> None:
         "scheduler_type", "reduce_on_plateau", "gamma", "lr_min", "lr_max", "step_size_up",
         "reduce_factor", "patience", "threshold", "cooldown", "optimization", "scheduler",
         "data_parser", "heliostat_data_mapping", "kinematics_reconstruction_raytracing", "device",
+        # used by scenario creation:
+        "sun_key", "light_source_distribution_is_normal", "fit_nurbs_from_normals",
     ]
     missing = [c for c in required_constants if not hasattr(constants, c)]
     record("FAIL" if missing else "OK", "artist.util.constants keys",
            f"missing: {missing}" if missing else f"all {len(required_constants)} present")
 
-    required_cfg = ["sun_key", "light_source_distribution_is_normal", "fit_nurbs_from_normals"]
-    missing_cfg = [c for c in required_cfg if not hasattr(config_dictionary, c)]
-    record("FAIL" if missing_cfg else "OK", "artist.util.config_dictionary keys",
-           f"missing: {missing_cfg}" if missing_cfg else f"all {len(required_cfg)} present")
-
 
 def check_artist_methods() -> None:
-    from artist.data_parser import paint_scenario_parser
+    from artist.io import paint_scenario_parser
     from artist.raytracing import HeliostatRayTracer
     from artist.scenario import Scenario
 
@@ -148,10 +153,9 @@ def check_artist_methods() -> None:
 
 
 def check_sibling_modules() -> None:
-    for p in (str(_SRC), str(_SRC / "one_heliostat_demo" / "single_heliostat")):
-        if p not in sys.path:
-            sys.path.insert(0, p)
-    for name in ("create_all_scenarios", "config", "selection", "profiling"):
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    for name in ("paths", "selection", "profiling"):
         try:
             importlib.import_module(name)
             record("OK", f"project module '{name}'")
@@ -165,27 +169,15 @@ def check_sibling_modules() -> None:
 
 
 def check_datasets(daic: bool) -> None:
-    # Resolve dataset paths the same way the drivers do, with a repo-relative fallback.
-    paint_dir = _REPO / "datasets" / "paint" / "heliostats"
-    try:
-        import create_all_scenarios as cas
-        paint_dir = cas.DAIC_PAINT_DIR if daic else cas.LOCAL_PAINT_DIR
-    except Exception:  # noqa: BLE001 — fall back to repo-relative path
-        pass
+    import paths
 
     targets = [
-        (paint_dir, "dir", "PAINT heliostats dir"),
-        (paint_dir / "WRI1030197-tower-measurements.json", "file", "tower measurements JSON"),
-        (_REPO / "datasets" / "paint"
-         / "benchmark_split-balanced_train-100_validation-50_deflectometry"
-         / "calibration_properties", "dir", "benchmark calibration_properties"),
-        (_REPO / "datasets" / "paint"
-         / "benchmark_split-balanced_train-100_validation-50_deflectometry"
-         / "flux_image", "dir", "benchmark flux_image"),
-        (_REPO / "datasets" / "paint" / "splits"
-         / "benchmark_split-balanced_train-100_validation-50_deflectometry.csv", "file",
-         "benchmark split CSV"),
-        (_SRC / "utils" / "deflectometry_availability.json", "file", "deflectometry availability JSON"),
+        (paths.heliostats_dir(daic), "dir", "PAINT heliostats dir"),
+        (paths.tower_file(daic), "file", "tower measurements JSON"),
+        (paths.calibration_dir(daic), "dir", "benchmark calibration_properties"),
+        (paths.flux_dir(daic), "dir", "benchmark flux_image"),
+        (paths.benchmark_csv(daic), "file", "benchmark split CSV"),
+        (paths.availability_json(), "file", "deflectometry availability JSON"),
     ]
     for path, kind, label in targets:
         exists = path.is_dir() if kind == "dir" else path.is_file()
@@ -220,21 +212,18 @@ def check_eligible_pool(daic: bool, sizes: list[int]) -> None:
 
 
 def check_write_perms(daic: bool) -> None:
-    try:
-        import create_all_scenarios as cas
-        base = cas.DAIC_BASE_DIR if daic else cas.LOCAL_BASE_DIR
-    except Exception:  # noqa: BLE001
-        base = _REPO
-    for sub in ("scenarios/profiling", "outputs/new_mapping_function/profiling_experiment"):
-        d = base / sub
+    import paths
+
+    for label, d in (("scenarios/profiling", paths.scenario_dir()),
+                     ("outputs/.../profiling_experiment", paths.output_dir())):
         try:
             d.mkdir(parents=True, exist_ok=True)
             probe = d / ".write_probe"
             probe.write_text("ok")
             probe.unlink()
-            record("OK", f"write access {sub}", str(d))
+            record("OK", f"write access {label}", str(d))
         except Exception as exc:  # noqa: BLE001
-            record("FAIL", f"write access {sub}", f"{type(exc).__name__}: {exc}")
+            record("FAIL", f"write access {label}", f"{type(exc).__name__}: {exc}")
 
 
 # ---------------------------------------------------------------------------

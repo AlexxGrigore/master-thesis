@@ -17,10 +17,10 @@ import json
 import pathlib
 import sys
 
-_SRC = pathlib.Path(__file__).resolve().parents[1]
-if str(_SRC) not in sys.path:
-    sys.path.insert(0, str(_SRC))
-import create_all_scenarios as cas  # noqa: E402
+_HERE = pathlib.Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+import paths  # noqa: E402  (sibling)
 
 
 def _latest(folder: pathlib.Path, prefix: str) -> pathlib.Path | None:
@@ -40,11 +40,10 @@ def main() -> None:
     p.add_argument("--creation", type=pathlib.Path, default=None)
     p.add_argument("--training", type=pathlib.Path, default=None)
     p.add_argument("--out", type=pathlib.Path, default=None)
-    p.add_argument("--daic", action="store_true")
+    p.add_argument("--daic", action="store_true", help="(accepted for symmetry; output dir is repo-relative)")
     args = p.parse_args()
 
-    base_dir = cas.DAIC_BASE_DIR if args.daic else cas.LOCAL_BASE_DIR
-    folder = base_dir / "outputs" / "new_mapping_function" / "profiling_experiment"
+    folder = paths.output_dir()
 
     creation = _load(args.creation or _latest(folder, "creation"))
     training = _load(args.training or _latest(folder, "training"))

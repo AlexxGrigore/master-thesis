@@ -30,13 +30,11 @@ import torch
 
 _HERE = pathlib.Path(__file__).resolve().parent
 _SRC = _HERE.parent
-for _p in (str(_SRC), str(_SRC / "one_heliostat_demo" / "single_heliostat")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
-import config as cfg  # noqa: E402  (benchmark / dataset paths)
-import create_all_scenarios as cas  # noqa: E402
 import paint.util.paint_mappings as paint_mappings  # noqa: E402
+import paths  # noqa: E402  (sibling — dataset / output path resolution)
 import selection  # noqa: E402
 from profiling import Profiler, accumulate_raytrace_time, free_cuda  # noqa: E402
 
@@ -98,13 +96,9 @@ def main() -> None:
     import logging
     logging.getLogger().setLevel(logging.WARNING)  # quiet ARTIST chatter
 
-    base_dir = cas.DAIC_BASE_DIR if args.daic else cas.LOCAL_BASE_DIR
-    scenario_dir = args.scenario_dir or (base_dir / "scenarios" / "profiling")
+    scenario_dir = args.scenario_dir or paths.scenario_dir()
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    results_path = args.results or (
-        base_dir / "outputs" / "new_mapping_function" / "profiling_experiment"
-        / f"training_{timestamp}.json"
-    )
+    results_path = args.results or (paths.output_dir() / f"training_{timestamp}.json")
 
     device = get_device()
     resolution = torch.tensor([args.resolution, args.resolution], device=device)
@@ -112,9 +106,9 @@ def main() -> None:
 
     # Build the full train mapping once; filter to the chosen heliostats per N.
     train_map_all = build_heliostat_data_mapping(
-        pathlib.Path(cfg.BENCHMARK_CSV),
-        pathlib.Path(cfg.CALIBRATION_DIR),
-        pathlib.Path(cfg.REAL_FLUX_DIR),
+        paths.benchmark_csv(args.daic),
+        paths.calibration_dir(args.daic),
+        paths.flux_dir(args.daic),
         "train",
     )
 

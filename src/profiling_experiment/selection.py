@@ -1,36 +1,36 @@
 """Single source of truth for which heliostats enter the profiling experiment.
 
-The whole experiment hinges on creation and training operating on *identical*
-heliostat sets: the scenario built for N heliostats must contain exactly the N
-heliostats that training then runs on. Both ``create_scenarios.py`` and
-``run_training.py`` therefore derive their list from here.
+The experiment hinges on creation and training operating on *identical* heliostat sets,
+so both ``create_scenarios.py`` and ``run_training.py`` derive their list from here.
 
 A heliostat is eligible only if it BOTH:
 
-  * has fitted-deflectometry data and is in the benchmark — required to build a NURBS
-    surface (reuses ``create_all_scenarios._build_fitted_heliostat_list``), AND
+  * has fitted-deflectometry data and existing Properties/Deflectometry files — required
+    to build a NURBS surface, AND
   * has at least ``min_train_samples`` calibration measurements in the train split —
-    required for joint kinematics reconstruction, which needs a uniform sample count
-    across all heliostats.
+    required for joint kinematics reconstruction (uniform sample count across heliostats).
 
-The eligible list is sorted by name, so ``select(10)`` is always a strict subset of
+The eligible list is sorted by name, so ``select(10)`` is a strict subset of
 ``select(20)`` — the N sweep is nested, not a fresh random draw each time.
+
+This module is self-contained: it does NOT import ``create_all_scenarios`` (which is stale
+— it imports the pre-refactor ``data_parser`` API that no longer exists in the current
+ARTIST). The deflectometry-folder scan is reimplemented here against the filesystem only.
 """
 
 from __future__ import annotations
 
+import json
 import pathlib
 import sys
+from datetime import datetime
 
-# Make the sibling project modules importable: src/ (for create_all_scenarios and the
-# utils package) and the one_heliostat_demo config that holds the benchmark paths.
+# src/ must be importable for the project's data-mapping helper.
 _SRC = pathlib.Path(__file__).resolve().parents[1]
-for _p in (str(_SRC), str(_SRC / "one_heliostat_demo" / "single_heliostat")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
-import config as cfg  # noqa: E402  (one_heliostat_demo/single_heliostat/config.py)
-import create_all_scenarios as cas  # noqa: E402
+import paths  # noqa: E402  (sibling module)
 
 from utils.evaluation import build_heliostat_data_mapping  # noqa: E402
 
@@ -39,36 +39,82 @@ from utils.evaluation import build_heliostat_data_mapping  # noqa: E402
 FittingEntry = tuple[str, pathlib.Path, pathlib.Path]
 
 
-def _paint_dir(daic: bool) -> pathlib.Path:
-    return cas.DAIC_PAINT_DIR if daic else cas.LOCAL_PAINT_DIR
+def _deflectometry_timestamp(filepath: pathlib.Path) -> datetime:
+    """Parse the timestamp in a deflectometry filename; datetime.min on failure.
+
+    Expected: {name}-filled-YYYY-MM-DDZHH-MM-SSZ-deflectometry.h5
+    """
+    parts = filepath.stem.split("-")
+    for i, part in enumerate(parts):
+        if len(part) == 4 and part.isdigit():  # year token
+            try:
+                date_str = f"{parts[i]}-{parts[i+1]}-{parts[i+2].split('Z')[0]}"
+                time_str = (
+                    f"{parts[i+2].split('Z')[1]}-{parts[i+3]}-{parts[i+4].split('Z')[0]}"
+                )
+                return datetime.strptime(
+                    f"{date_str} {time_str.replace('-', ':')}", "%Y-%m-%d %H:%M:%S"
+                )
+            except (IndexError, ValueError):
+                pass
+    return datetime.min
+
+
+def _latest_deflectometry_file(
+    name: str, deflectometry_folder: pathlib.Path
+) -> pathlib.Path | None:
+    files = list(deflectometry_folder.glob(f"{name}-filled-*-deflectometry.h5"))
+    return max(files, key=_deflectometry_timestamp) if files else None
+
+
+def _build_fitted_heliostat_list(
+    heliostats_dir: pathlib.Path, availability_json: pathlib.Path
+) -> list[FittingEntry]:
+    """(name, properties_path, deflectometry_path) for benchmark heliostats with
+    deflectometry data and the files actually on disk. Sorted by name."""
+    with open(availability_json) as f:
+        availability: dict[str, dict] = json.load(f)
+
+    target_names = sorted(
+        name
+        for name, info in availability.items()
+        if info.get("has_deflectometry") and info.get("in_benchmark")
+    )
+
+    result: list[FittingEntry] = []
+    for name in target_names:
+        folder = heliostats_dir / name
+        properties_folder = folder / "Properties"
+        deflectometry_folder = folder / "Deflectometry"
+        if not properties_folder.exists() or not deflectometry_folder.exists():
+            continue
+        props = list(properties_folder.glob(f"{name}-heliostat-properties.json"))
+        if not props:
+            continue
+        defl = _latest_deflectometry_file(name, deflectometry_folder)
+        if defl is None:
+            continue
+        result.append((name, props[0], defl))
+    return result
 
 
 def eligible_fitting_list(
     daic: bool = False, min_train_samples: int = 10
 ) -> list[FittingEntry]:
-    """Return all eligible heliostats as fitting triples, sorted by name."""
-    paint_dir = _paint_dir(daic)
-
-    # Heliostats with deflectometry data (and existing Properties/Deflectometry files).
-    fitting = cas._build_fitted_heliostat_list(
-        paint_dir, cas.DEFLECTOMETRY_AVAILABILITY_JSON
+    """All eligible heliostats as fitting triples, sorted by name."""
+    fitting = _build_fitted_heliostat_list(
+        paths.heliostats_dir(daic), paths.availability_json()
     )
-
-    # How many train-split calibration samples each heliostat has.
     train_map = build_heliostat_data_mapping(
-        pathlib.Path(cfg.BENCHMARK_CSV),
-        pathlib.Path(cfg.CALIBRATION_DIR),
-        pathlib.Path(cfg.REAL_FLUX_DIR),
+        paths.benchmark_csv(daic),
+        paths.calibration_dir(daic),
+        paths.flux_dir(daic),
         "train",
     )
     sample_counts = {name: len(calib_paths) for name, calib_paths, _ in train_map}
 
-    eligible = [
-        entry
-        for entry in fitting
-        if sample_counts.get(entry[0], 0) >= min_train_samples
-    ]
-    eligible.sort(key=lambda entry: entry[0])
+    eligible = [e for e in fitting if sample_counts.get(e[0], 0) >= min_train_samples]
+    eligible.sort(key=lambda e: e[0])
     return eligible
 
 
@@ -85,15 +131,17 @@ def select_fitting_list(
     return eligible[:n]
 
 
-def select_names(
-    n: int, daic: bool = False, min_train_samples: int = 10
-) -> list[str]:
+def select_names(n: int, daic: bool = False, min_train_samples: int = 10) -> list[str]:
     """First ``n`` eligible heliostat names (for filtering the training mapping)."""
-    return [entry[0] for entry in select_fitting_list(n, daic, min_train_samples)]
+    return [e[0] for e in select_fitting_list(n, daic, min_train_samples)]
 
 
 if __name__ == "__main__":
-    # Quick sanity check: print the eligible pool size and the first 50 names.
-    pool = eligible_fitting_list()
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--daic", action="store_true")
+    args = ap.parse_args()
+    pool = eligible_fitting_list(daic=args.daic)
     print(f"Eligible heliostats: {len(pool)}")
     print("First 50:", [e[0] for e in pool[:50]])
