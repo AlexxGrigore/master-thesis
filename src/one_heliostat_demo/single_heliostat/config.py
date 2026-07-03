@@ -54,6 +54,12 @@ SPLITTER_TRAIN_SIZE = 100
 # after the active-pixel filter.
 SPLITTER_VAL_SIZE = 50
 
+# Restrict real (PAINT) calibration samples to a single aim target.
+# None = use all targets (default). Set to a target_name, e.g.
+# "solar_tower_juelich_upper", to keep only samples aimed at that target.
+# Overridden by --target on the CLI (run_all.py). Affects DATA_MODE == "real" only.
+TARGET_FILTER = None
+
 # PAINT's DatasetSplitter assigns VALIDATION_INDEX as the intended final-evaluation set.
 #   True  (recommended): test_flux = VALIDATION_INDEX (final eval)
 #                        val_flux  = TEST_INDEX        (scheduler / early-stopping)

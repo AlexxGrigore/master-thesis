@@ -136,6 +136,10 @@ def _parse_args() -> argparse.Namespace:
                    help="Training samples drawn from the pool (overrides config.SPLITTER_TRAIN_SIZE)")
     p.add_argument("--val-size",   type=int, default=None,
                    help="Val/test samples reserved by the splitter (overrides config.SPLITTER_VAL_SIZE)")
+    p.add_argument("--target", default=None,
+                   help="Restrict real data to a single aim target_name "
+                        "(e.g. solar_tower_juelich_upper). Real mode only. "
+                        "Overrides config.TARGET_FILTER.")
     swap_grp = p.add_mutually_exclusive_group()
     swap_grp.add_argument("--swap-val-test",    dest="swap_val_test", action="store_true",  default=None,
                           help="test_flux = VALIDATION_INDEX, val_flux = TEST_INDEX (overrides config)")
@@ -233,6 +237,8 @@ def main() -> None:
         cfg.SPLITTER_TRAIN_SIZE = args.train_size
     if args.val_size is not None:
         cfg.SPLITTER_VAL_SIZE = args.val_size
+    if args.target is not None:
+        cfg.TARGET_FILTER = args.target
     if args.swap_val_test is not None:
         cfg.SWAP_VAL_TEST = args.swap_val_test
     if args.data_mode is not None:

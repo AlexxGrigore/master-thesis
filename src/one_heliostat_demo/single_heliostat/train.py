@@ -143,6 +143,28 @@ def _load_split_real(
         log.warning(f"  {heliostat_id} not found in PAINT {paint_split} split")
         return None
 
+    # Optional single-target restriction: keep only calibration samples whose
+    # target_name matches cfg.TARGET_FILTER (drops the others, keeping cal/flux
+    # lists aligned). Used to control for aim target across heliostats.
+    target_filter = getattr(cfg, "TARGET_FILTER", None)
+    if target_filter:
+        h, cals, fluxes = hel_mapping[0]
+        keep = [
+            i for i, cf in enumerate(cals)
+            if json.load(open(cf)).get("target_name") == target_filter
+        ]
+        if not keep:
+            log.warning(
+                f"  {heliostat_id}: 0 samples for target '{target_filter}' "
+                f"in {paint_split} split"
+            )
+            return None
+        hel_mapping = [(h, [cals[i] for i in keep], [fluxes[i] for i in keep])]
+        log.info(
+            f"  target '{target_filter}': kept {len(keep)}/{len(cals)} "
+            f"{paint_split} samples for {heliostat_id}"
+        )
+
     log.info(f"  PAINT {paint_split}: {len(hel_mapping[0][1])} samples for {heliostat_id}")
     parser = PaintCalibrationDataParser(
         centroid_extraction_method=getattr(cfg, "CENTROID_METHOD", "UTIS"),
@@ -1322,6 +1344,19 @@ def run(
      val_motor_pos, val_active_mask, val_target_mask) = val_data
     (test_flux, test_centroids, test_rays,
      test_motor_pos, test_active_mask, test_target_mask) = test_data
+
+    # Optional per-axis motor-encoder-offset correction (real-data calibration).
+    # cfg.MOTOR_OFFSET_STEPS = [axis1, axis2] in motor steps; subtracted from every
+    # recorded motor position to remove a systematic encoder-zero bias. No-op if unset.
+    _motor_offset = getattr(cfg, "MOTOR_OFFSET_STEPS", None)
+    if _motor_offset is not None:
+        _mo = torch.tensor(_motor_offset, device=device, dtype=train_motor_pos.dtype)
+        train_motor_pos = train_motor_pos - _mo
+        if val_motor_pos is not None:
+            val_motor_pos = val_motor_pos - _mo
+        if test_motor_pos is not None:
+            test_motor_pos = test_motor_pos - _mo
+        log.info(f"Applied motor-offset correction (steps): {list(_motor_offset)}")
 
     N_TRAIN = train_flux.shape[0]
     N_VAL   = val_flux.shape[0] if val_flux is not None else 0

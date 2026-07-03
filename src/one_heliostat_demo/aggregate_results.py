@@ -249,8 +249,9 @@ def _plot_accuracy_sorted(results: dict, agg_dir: pathlib.Path) -> None:
     if not results:
         return
 
-    hids    = sorted(results, key=lambda h: results[h]["after_stage2"]["mrad_mean"])
-    s2_mrad = np.array([results[h]["after_stage2"]["mrad_mean"] for h in hids])
+    hids     = sorted(results, key=lambda h: results[h]["after_stage2"]["mrad_mean"])
+    s2_mrad  = np.array([results[h]["after_stage2"]["mrad_mean"] for h in hids])
+    pre_mrad = np.array([results[h]["pre_training"]["mrad_mean"] for h in hids])
 
     field_mean   = float(np.mean(s2_mrad))
     field_median = float(np.median(s2_mrad))
@@ -258,20 +259,29 @@ def _plot_accuracy_sorted(results: dict, agg_dir: pathlib.Path) -> None:
     fig, ax = plt.subplots(figsize=(max(10, len(hids) * 0.22), 5))
 
     x = np.arange(len(hids))
-    colors = [
-        "#2ca02c" if v < 1.0 else "#ff7f0e" if v < 2.0 else "#d62728"
-        for v in s2_mrad
-    ]
+    # Pre-training accuracy as a translucent grey bar behind each heliostat's
+    # post-training (Stage-2) coloured bar — the visible grey above each bar is
+    # the improvement training achieved.
+    ax.bar(x, pre_mrad, color="grey", alpha=0.35, width=0.7, zorder=1,
+           label="Before training (pre)")
+    colors = [_band_color(v) for v in s2_mrad]
     ax.bar(x, s2_mrad, color=colors, width=0.7, zorder=2)
     ax.axhline(field_mean,   color="navy",   ls="--", lw=1.5,
-               label=f"Mean = {field_mean:.3f} mrad")
-    ax.axhline(field_median, color="purple", ls=":",  lw=1.5,
-               label=f"Median = {field_median:.3f} mrad")
+               label=f"Mean = {field_mean:.1f} mrad")
+    ax.axhline(field_median, color="black",  ls=":",  lw=1.5,
+               label=f"Median = {field_median:.1f} mrad")
     ax.set_xticks(x)
     ax.set_xticklabels(hids, rotation=90, fontsize=7)
     ax.set_ylabel("Test mrad (mean per heliostat)")
     ax.set_title("Per-heliostat test accuracy — sorted (after Stage 2)")
-    ax.legend(fontsize=9)
+
+    # Legend: mean/median lines plus the accuracy-band colour key.
+    from matplotlib.patches import Patch
+    band_handles = [Patch(facecolor=c, label=lbl) for _, c, lbl in _ACCURACY_BANDS]
+    line_handles, line_labels = ax.get_legend_handles_labels()
+    ax.legend(line_handles + band_handles,
+              line_labels + [lbl for _, _, lbl in _ACCURACY_BANDS],
+              fontsize=8, ncol=2)
     ax.grid(True, axis="y", alpha=0.3, zorder=1)
 
     fig.tight_layout()
@@ -289,23 +299,37 @@ def _plot_accuracy_distribution(results: dict, agg_dir: pathlib.Path) -> None:
     if not results:
         return
 
-    s2_mrad = np.array([results[h]["after_stage2"]["mrad_mean"] for h in results])
+    s2_mrad  = np.array([results[h]["after_stage2"]["mrad_mean"] for h in results])
+    pre_mrad = np.array([results[h]["pre_training"]["mrad_mean"] for h in results])
 
-    field_mean   = float(np.mean(s2_mrad))
-    field_median = float(np.median(s2_mrad))
+    s2_mean,  s2_median  = float(np.mean(s2_mrad)),  float(np.median(s2_mrad))
+    pre_mean, pre_median = float(np.mean(pre_mrad)), float(np.median(pre_mrad))
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(9, 5.5))
 
+    # Shared bins over the combined range so the two histograms are comparable.
     n_bins = max(8, len(s2_mrad) // 5)
-    ax.hist(s2_mrad, bins=n_bins, color="steelblue", edgecolor="white", alpha=0.85, zorder=2)
-    ax.axvline(field_mean,   color="navy",   ls="--", lw=1.5,
-               label=f"Mean = {field_mean:.3f} mrad")
-    ax.axvline(field_median, color="purple", ls=":",  lw=1.5,
-               label=f"Median = {field_median:.3f} mrad")
-    ax.set_xlabel("Test mrad (mean per heliostat)")
+    lo, hi = 0.0, float(max(pre_mrad.max(), s2_mrad.max()))
+    bins = np.linspace(lo, hi, n_bins + 1)
+
+    ax.hist(pre_mrad, bins=bins, color="firebrick",  edgecolor="white", alpha=0.55,
+            zorder=2, label="Before training (pre)")
+    ax.hist(s2_mrad,  bins=bins, color="steelblue",  edgecolor="white", alpha=0.75,
+            zorder=3, label="After training (Stage 2)")
+
+    ax.axvline(pre_mean,   color="firebrick", ls="--", lw=1.5,
+               label=f"Pre mean = {pre_mean:.1f} mrad")
+    ax.axvline(pre_median, color="firebrick", ls=":",  lw=1.5,
+               label=f"Pre median = {pre_median:.1f} mrad")
+    ax.axvline(s2_mean,    color="navy",      ls="--", lw=1.5,
+               label=f"Post mean = {s2_mean:.1f} mrad")
+    ax.axvline(s2_median,  color="purple",    ls=":",  lw=1.5,
+               label=f"Post median = {s2_median:.1f} mrad")
+
+    ax.set_xlabel("Focal-spot error [mrad] (mean per heliostat)")
     ax.set_ylabel("Count")
-    ax.set_title(f"Accuracy distribution  (N = {len(s2_mrad)} heliostats)")
-    ax.legend(fontsize=9)
+    ax.set_title(f"Accuracy distribution — before vs after training  (N = {len(s2_mrad)} heliostats)")
+    ax.legend(fontsize=8.5)
     ax.grid(True, alpha=0.3, zorder=1)
 
     fig.tight_layout()
@@ -421,12 +445,11 @@ def _plot_field_view(results: dict, agg_dir: pathlib.Path) -> None:
 # ---------------------------------------------------------------------------
 
 _ACCURACY_BANDS = [
-    (0.10, "#08519c", "≤ 0.10 mrad"),
-    (0.50, "#238b45", "0.10 – 0.50 mrad"),
-    (1.00, "#fec44f", "0.50 – 1.00 mrad"),
-    (1.50, "#f16913", "1.00 – 1.50 mrad"),
-    (2.00, "#cb181d", "1.50 – 2.00 mrad"),
-    (float("inf"), "#67000d", "> 2.00 mrad"),
+    (3.0,  "#2ca02c", "< 3 mrad"),
+    (5.0,  "#ffd92f", "3 – 5 mrad"),
+    (10.0, "#ff7f0e", "5 – 10 mrad"),
+    (20.0, "#9467bd", "10 – 20 mrad"),
+    (float("inf"), "#d62728", "> 20 mrad"),
 ]
 
 
