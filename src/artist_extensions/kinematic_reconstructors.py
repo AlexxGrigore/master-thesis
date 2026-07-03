@@ -15,12 +15,25 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from artist.optim import training, mean_loss_per_heliostat
+from artist.optim import training, reduce_loss_per_sample
 from artist.optim.kinematics_reconstructor import KinematicsReconstructor
 from artist.raytracing.heliostat_ray_tracer import HeliostatRayTracer
 from artist.util import constants, indices, get_device
 
 log = logging.getLogger(__name__)
+
+
+def mean_loss_per_heliostat(
+    loss_per_sample: torch.Tensor, number_of_samples_per_heliostat: int
+) -> torch.Tensor:
+    """Compat shim: ARTIST #214 replaced mean_loss_per_heliostat with the generic
+    reduce_loss_per_sample(loss, n, reduction). This restores the old behaviour
+    (mean over each heliostat's samples → [number_of_heliostats])."""
+    return reduce_loss_per_sample(
+        loss_per_sample,
+        number_of_samples_per_heliostat,
+        reduction=lambda t: t.mean(dim=1),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -899,7 +912,7 @@ class WortbergContourReconstructor(WortbergKinematicReconstructor):
         n_samples_per_heliostat, device,
     ) -> torch.Tensor:
         """Call forward_with_components and accumulate per-term means for logging."""
-        from artist.optim import mean_loss_per_heliostat as _mlph
+        _mlph = mean_loss_per_heliostat  # module-level compat shim (ARTIST #214)
         total, coarse, fine, gravity = loss_fn.forward_with_components(
             prediction=flux,
             ground_truth=ground_truth[sample_indices],

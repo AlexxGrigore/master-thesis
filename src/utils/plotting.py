@@ -7,8 +7,8 @@ from matplotlib import pyplot as plt
 from matplotlib.ticker import LogLocator, LogFormatter
 from scipy.ndimage import gaussian_filter
 
-from artist.core.heliostat_ray_tracer import HeliostatRayTracer
-from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
+from artist.raytracing.heliostat_ray_tracer import HeliostatRayTracer
+from artist.io.paint_calibration_parser import PaintCalibrationDataParser
 from artist.scenario.scenario import Scenario
 
 # ---------------------------------------------------------------------------

@@ -47,13 +47,13 @@ from datetime import datetime
 import h5py
 import torch
 
-from artist.data_parser import paint_scenario_parser
+from artist.io import paint_scenario_parser
 from artist.scenario.configuration_classes import (
     LightSourceConfig,
     LightSourceListConfig,
 )
 from artist.scenario.h5_scenario_generator import H5ScenarioGenerator
-from artist.util import config_dictionary, set_logger_config
+from artist.util import constants as config_dictionary, set_logger_config
 from artist.util.environment_setup import get_device
 
 set_logger_config()

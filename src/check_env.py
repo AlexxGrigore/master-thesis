@@ -33,7 +33,7 @@ try:
     import artist
     print(f"  Imported OK  ✓")
     from artist.scenario.scenario import Scenario
-    from artist.util import config_dictionary
+    from artist.util import constants as config_dictionary
     print(f"  Core imports OK  ✓")
 except Exception as e:
     print(f"  ERROR: {e}")

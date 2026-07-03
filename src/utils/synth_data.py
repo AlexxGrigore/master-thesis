@@ -464,7 +464,7 @@ class SyntheticDatasetParser:
 
         # Tower reference: mean of planar target area centers (computed once).
         if self._backlash_amplitude_rad > 0.0:
-            from artist.util import index_mapping as _idx
+            from artist.util import indices as _idx
             _planar   = scenario.solar_tower.target_areas[_idx.planar_target_areas]
             _tower_ref = _planar.centers[:, :3].mean(dim=0)
         else:

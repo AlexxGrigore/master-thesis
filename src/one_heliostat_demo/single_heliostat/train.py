@@ -46,7 +46,8 @@ sys.path.insert(0, str(_here))
 if _paint.exists():
     sys.path.insert(0, str(_paint))
 
-from artist.optim.loss import FocalSpotLoss
+from artist.flux import get_center_of_mass
+from artist.geometry import bitmap_coordinates_to_target_coordinates
 from artist.raytracing.heliostat_ray_tracer import HeliostatRayTracer
 from artist.scenario.scenario import Scenario
 from artist.util import constants as _const, get_device, indices, set_logger_config
@@ -1743,7 +1744,22 @@ def run(
         s2_eval = s1_eval
     else:
         optimizer_s2, scheduler_s2 = _build_s2_optimizer(kinematic, cfg)
-        focal_spot_loss_fn = FocalSpotLoss(scenario=scenario)
+        # Focal-spot loss against the parsed ground-truth centroids c_gt (UTIS).
+        # ARTIST #214 changed FocalSpotLoss to take ground-truth FLUX BITMAPS and
+        # centroid them via centre-of-mass, which is not the same reference as the
+        # UTIS centroid on real data. This local equivalent keeps the original
+        # semantics: squared distance between predicted-flux centroid and c_gt.
+        def focal_spot_loss_fn(prediction, ground_truth, target_area_indices, bitmap_resolution):
+            bitmap_coords = get_center_of_mass(bitmaps=prediction, device=device)
+            pred_coords = bitmap_coordinates_to_target_coordinates(
+                bitmap_coordinates=bitmap_coords,
+                bitmap_resolution=bitmap_resolution,
+                solar_tower=scenario.solar_tower,
+                target_area_indices=target_area_indices,
+                device=device,
+            )
+            return ((pred_coords[:, :3] - ground_truth[:, :3]) ** 2).sum(dim=-1)
+
         scenario.set_number_of_rays(cfg.TRAIN_RAYS)
 
         # Forward map for Stage 2: orient the heliostat from the recorded motor
@@ -1812,8 +1828,7 @@ def run(
                     prediction=flux,
                     ground_truth=mb_gt[sample_idx],
                     target_area_indices=mb_target[sample_idx],
-                    reduction_dimensions=(indices.focal_spots,),
-                    device=device,
+                    bitmap_resolution=ray_tracer.bitmap_resolution,
                 )
                 weight = mb_size / N_TRAIN
                 (lps.mean() * weight).backward()
@@ -1863,8 +1878,7 @@ def run(
                             prediction=fl_v,
                             ground_truth=mbg_v[sidx_v],
                             target_area_indices=mbt_v[sidx_v],
-                            reduction_dimensions=(indices.focal_spots,),
-                            device=device,
+                            bitmap_resolution=rt_v.bitmap_resolution,
                         )
                         val_accum += lps_v.mean().item() * (msv / N_VAL)
                 s2_val_loss = val_accum
