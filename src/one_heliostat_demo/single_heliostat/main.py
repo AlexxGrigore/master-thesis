@@ -65,6 +65,9 @@ def _parse_args() -> argparse.Namespace:
                           help="Keep DatasetSplitter assignment as-is")
 
     # Data generation mode
+    p.add_argument("--auto-motor-offset", action="store_true",
+                   help="Estimate and remove a per-axis motor-encoder-zero offset "
+                        "from the training split before training (real data).")
     p.add_argument("--data-mode", choices=["random_synthetic", "synthetic", "real"], default=None,
                    help="'random_synthetic': random perturbations each run; "
                         "'synthetic': use CUSTOM_PERTURBATIONS_SPEC from config; "
@@ -124,6 +127,8 @@ def main() -> None:
         cfg.DATA_MODE = args.data_mode
     if args.stage1_epochs is not None:
         cfg.STAGE1_EPOCHS = args.stage1_epochs
+    if args.auto_motor_offset:
+        cfg.AUTO_MOTOR_OFFSET = True
 
     # Real-data mode never needs a generation step.
     if cfg.DATA_MODE == "real":

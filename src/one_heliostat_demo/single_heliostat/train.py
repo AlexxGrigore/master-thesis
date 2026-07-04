@@ -1349,7 +1349,30 @@ def run(
     # Optional per-axis motor-encoder-offset correction (real-data calibration).
     # cfg.MOTOR_OFFSET_STEPS = [axis1, axis2] in motor steps; subtracted from every
     # recorded motor position to remove a systematic encoder-zero bias. No-op if unset.
+    #
+    # cfg.AUTO_MOTOR_OFFSET = True estimates that offset from the TRAINING split:
+    # per axis, median of (m_gt − inverse(c_gt)) under the nominal (uncorrected)
+    # kinematics. A constant discrepancy here is an encoder-zero / reference error
+    # (e.g. re-referenced encoder not reflected in the heliostat properties) that
+    # lies far outside the deviation-parameter bounds and is otherwise untrainable.
+    # Requires the deviation-aware inverse (ARTIST #214).
     _motor_offset = getattr(cfg, "MOTOR_OFFSET_STEPS", None)
+    if _motor_offset is None and getattr(cfg, "AUTO_MOTOR_OFFSET", False):
+        with torch.no_grad():
+            hg.activate_heliostats(active_heliostats_mask=train_active_mask, device=device)
+            _aim = train_centroids.clone()
+            _aim[:, 3] = 1.0
+            kinematic.incident_ray_directions_to_orientations(
+                incident_ray_directions=train_rays, aim_points=_aim, device=device,
+            )
+            _m_needed = kinematic.active_motor_positions.detach()
+            _motor_offset = (
+                (train_motor_pos - _m_needed).median(dim=0).values.cpu().tolist()
+            )
+        log.info(
+            f"AUTO_MOTOR_OFFSET: estimated from {train_motor_pos.shape[0]} train "
+            f"sample(s): {[round(v, 1) for v in _motor_offset]} steps"
+        )
     if _motor_offset is not None:
         _mo = torch.tensor(_motor_offset, device=device, dtype=train_motor_pos.dtype)
         train_motor_pos = train_motor_pos - _mo

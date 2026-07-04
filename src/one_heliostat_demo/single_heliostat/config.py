@@ -85,6 +85,16 @@ DATA_MODE = "synthetic"
 # Centroid extraction method used by PaintCalibrationDataParser (real data only).
 CENTROID_METHOD = "UTIS"
 
+# Per-axis motor-encoder-offset correction (real data only).
+# MOTOR_OFFSET_STEPS: [axis1, axis2] in raw motor steps, subtracted from every
+#   recorded motor position (manual override). None = disabled.
+# AUTO_MOTOR_OFFSET: estimate the offset from the training split as the per-axis
+#   median of (m_gt − inverse(c_gt)) under nominal kinematics, then subtract it.
+#   Removes constant encoder-zero biases (e.g. AY39: −4986 steps ≈ −32 mm on
+#   axis 2) that lie far outside the deviation-parameter bounds.
+MOTOR_OFFSET_STEPS = None
+AUTO_MOTOR_OFFSET  = False
+
 # ============================================================================
 # Ray counts & surface resolution
 # ============================================================================
