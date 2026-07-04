@@ -151,6 +151,10 @@ def _parse_args() -> argparse.Namespace:
                    help="'synthetic'/'random_synthetic': load from SYNTHETIC_DATASET_DIR; "
                         "'real': load actual PAINT calibration images (implies --skip-dataset-gen)")
 
+    p.add_argument("--auto-motor-offset", action="store_true",
+                   help="Estimate and remove a per-axis motor-encoder-zero offset "
+                        "from the training split before training (real data).")
+
     # Stage control
     p.add_argument("--skip-stage1", action="store_true",
                    help="Run only Stage 2 (FocalSpotLoss); skip Stage 1 (AlignmentLoss)")
@@ -243,6 +247,8 @@ def main() -> None:
         cfg.SWAP_VAL_TEST = args.swap_val_test
     if args.data_mode is not None:
         cfg.DATA_MODE = args.data_mode
+    if args.auto_motor_offset:
+        cfg.AUTO_MOTOR_OFFSET = True
     if args.stage1_epochs is not None:
         cfg.STAGE1_EPOCHS = args.stage1_epochs
     if args.stage2_epochs is not None:
