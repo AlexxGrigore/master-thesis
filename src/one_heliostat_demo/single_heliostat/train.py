@@ -477,26 +477,39 @@ def _setup_kinematic_for_training(kinematic, device: torch.device, cfg=None):
     kinematic.actuators.optimizable_parameters.requires_grad_(True)
     kinematic.actuators.non_optimizable_parameters.requires_grad_(True)
 
+    # b_i (initial_stroke_length) is frozen by default (Wortberg 2025). When
+    # OPTIMIZE_ACTUATOR_STROKE is set, it receives gradients like a_i and is
+    # clamped to ±_BOUND_ACTUATOR_STROKE_TRAIN_M in _apply_bounds.
+    _opt_stroke = bool(getattr(cfg, "OPTIMIZE_ACTUATOR_STROKE", False)) if cfg is not None else False
+
     def _freeze_stroke(grad):
+        if _opt_stroke:
+            return grad
         mask = torch.ones_like(grad)
         mask[:, indices.actuator_initial_stroke_length, :] = 0.0
         return grad * mask
 
-    # The actuators' non_optimizable_parameters tensor is frozen by default
-    # (ARTIST's "non-optimizable" geometry). When OPTIMIZE_ACTUATOR_OFFSET is set,
-    # only the actuator offset c_i is unfrozen (Wortberg 2025); everything else in
-    # the tensor still stays fixed.
+    # The actuators' non_optimizable_parameters tensor holds a mix of continuous
+    # linkage geometry (offset c_i, pivot radius r_i, increment) and pure IDs /
+    # limits (type, clockwise flag, min/max motor positions — used by the inverse
+    # for branch selection). Only the enabled continuous entries get gradients;
+    # the IDs/limits NEVER do.
     _opt_offset = bool(getattr(cfg, "OPTIMIZE_ACTUATOR_OFFSET", False)) if cfg is not None else False
+    _opt_pivot = bool(getattr(cfg, "OPTIMIZE_PIVOT_RADIUS", False)) if cfg is not None else False
 
     def _non_opt_grad(grad):
         mask = torch.zeros_like(grad)
         if _opt_offset:
             mask[:, indices.actuator_offset, :] = 1.0
+        if _opt_pivot:
+            mask[:, indices.actuator_pivot_radius, :] = 1.0
         return grad * mask
 
     kinematic.actuators.optimizable_parameters.register_hook(_freeze_stroke)
     kinematic.actuators.non_optimizable_parameters.register_hook(_non_opt_grad)
     log.info(f"Actuator offset c_i optimized: {_opt_offset}")
+    log.info(f"Actuator stroke b_i optimized: {_opt_stroke}")
+    log.info(f"Pivot radius r_i optimized: {_opt_pivot}")
 
     kinematic._base_position_deviation = torch.zeros(1, 3, device=device, requires_grad=True)
 
@@ -507,8 +520,24 @@ def _setup_kinematic_for_training(kinematic, device: torch.device, cfg=None):
     init_offset = kinematic.actuators.non_optimizable_parameters[
         :, indices.actuator_offset, :
     ].detach().clone()
+    init_stroke = kinematic.actuators.optimizable_parameters[
+        :, indices.actuator_initial_stroke_length, :
+    ].detach().clone()
+    init_pivot = kinematic.actuators.non_optimizable_parameters[
+        :, indices.actuator_pivot_radius, :
+    ].detach().clone()
 
-    return init_angle, init_offset, init_translation
+    return init_angle, init_offset, init_translation, init_stroke, init_pivot
+
+
+def _actuator_lr(cfg):
+    """LR for the actuator optimizable_parameters group (holds a_i and b_i).
+    When b_i is unfrozen it must travel a re-referencing-scale distance (tens of
+    mm); since an Adam step is ≈ lr, the base LR (~0.1 mm/step) can't reach it in
+    100 epochs, so scale this group up. Only affects OPTIMIZE_ACTUATOR_STROKE runs;
+    a_i is tightly bound-clamped each step so the higher LR is harmless for it."""
+    mult = getattr(cfg, "ACTUATOR_STROKE_LR_MULT", 1.0) if getattr(cfg, "OPTIMIZE_ACTUATOR_STROKE", False) else 1.0
+    return cfg.BASE_LR * mult
 
 
 def _build_s1_optimizer(kinematic, cfg):
@@ -516,14 +545,20 @@ def _build_s1_optimizer(kinematic, cfg):
         [
             {"params": kinematic.translation_deviation_parameters,     "lr": cfg.BASE_LR * 5.0},
             {"params": kinematic.rotation_deviation_parameters,        "lr": cfg.BASE_LR},
-            {"params": kinematic.actuators.optimizable_parameters,     "lr": cfg.BASE_LR},
+            {"params": kinematic.actuators.optimizable_parameters,     "lr": _actuator_lr(cfg)},
             {"params": kinematic.actuators.non_optimizable_parameters, "lr": cfg.BASE_LR},
             {"params": kinematic._base_position_deviation,             "lr": cfg.BASE_LR * 5.0},
         ],
         lr=cfg.BASE_LR,
     )
+    # STAGE1_PLATEAU_FACTOR >= 1.0 disables the decay. PyTorch requires factor < 1,
+    # so "disabled" is expressed as infinite patience (same scheduler class, so the
+    # metric-based .step() call in the loop stays valid).
+    _s1_factor = getattr(cfg, "STAGE1_PLATEAU_FACTOR", 0.5)
     sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        opt, mode="min", factor=0.5, patience=5,
+        opt, mode="min",
+        factor=_s1_factor if _s1_factor < 1.0 else 0.5,
+        patience=5 if _s1_factor < 1.0 else 10**9,
         threshold=1e-4, cooldown=3, min_lr=1e-8,
     )
     return opt, sched
@@ -537,7 +572,7 @@ def _build_s2_optimizer(kinematic, cfg):
         [
             {"params": kinematic.translation_deviation_parameters,     "lr": cfg.BASE_LR * 5.0},
             {"params": kinematic.rotation_deviation_parameters,        "lr": cfg.BASE_LR},
-            {"params": kinematic.actuators.optimizable_parameters,     "lr": cfg.BASE_LR},
+            {"params": kinematic.actuators.optimizable_parameters,     "lr": _actuator_lr(cfg)},
             {"params": kinematic.actuators.non_optimizable_parameters, "lr": cfg.BASE_LR},
             {"params": kinematic._base_position_deviation,             "lr": cfg.BASE_LR * 5.0},
         ],
@@ -1356,7 +1391,27 @@ def run(
     # (e.g. re-referenced encoder not reflected in the heliostat properties) that
     # lies far outside the deviation-parameter bounds and is otherwise untrainable.
     # Requires the deviation-aware inverse (ARTIST #214).
+    # AUTO_MOTOR_OFFSET_MODE selects the shape of the correction:
+    #   "constant" — one offset per axis in STEPS (encoder-zero / b_i-type fault)
+    #   "angle"    — one offset per axis in JOINT ANGLE (home-angle / a_i-type
+    #                fault); the equivalent step correction varies with motor
+    #                position via ds/dα from the actuator linkage geometry, so it
+    #                is applied per sample: m −= Δα · (ds/dα)(m) · increment.
+    def _steps_per_rad(kin, m):
+        """[N,2] motor positions → [N,2] motor steps per radian of joint angle."""
+        nop = kin.actuators.non_optimizable_parameters
+        op = kin.actuators.optimizable_parameters
+        inc = nop[0, indices.actuator_increment]
+        c = nop[0, indices.actuator_offset]
+        r = nop[0, indices.actuator_pivot_radius]
+        b = op[0, indices.actuator_initial_stroke_length]
+        s = b + m / inc
+        u = ((c**2 + r**2 - s**2) / (2 * c * r)).clamp(-1 + 1e-9, 1 - 1e-9)
+        return (c * r * torch.sqrt(1 - u**2) / s) * inc
+
+    _offset_mode = getattr(cfg, "AUTO_MOTOR_OFFSET_MODE", "constant")
     _motor_offset = getattr(cfg, "MOTOR_OFFSET_STEPS", None)
+    _angle_offset = None
     if _motor_offset is None and getattr(cfg, "AUTO_MOTOR_OFFSET", False):
         with torch.no_grad():
             hg.activate_heliostats(active_heliostats_mask=train_active_mask, device=device)
@@ -1366,14 +1421,31 @@ def run(
                 incident_ray_directions=train_rays, aim_points=_aim, device=device,
             )
             _m_needed = kinematic.active_motor_positions.detach()
-            _motor_offset = (
-                (train_motor_pos - _m_needed).median(dim=0).values.cpu().tolist()
-            )
-        log.info(
-            f"AUTO_MOTOR_OFFSET: estimated from {train_motor_pos.shape[0]} train "
-            f"sample(s): {[round(v, 1) for v in _motor_offset]} steps"
-        )
-    if _motor_offset is not None:
+            _d = train_motor_pos - _m_needed
+            if _offset_mode == "angle":
+                _x = _steps_per_rad(kinematic, train_motor_pos)
+                _angle_offset = ((_d * _x).sum(dim=0) / (_x * _x).sum(dim=0))
+                log.info(
+                    f"AUTO_MOTOR_OFFSET (angle mode): Δα estimated from "
+                    f"{train_motor_pos.shape[0]} train sample(s): "
+                    f"{[round(v * 1000, 2) for v in _angle_offset.cpu().tolist()]} mrad"
+                )
+            else:
+                _motor_offset = _d.median(dim=0).values.cpu().tolist()
+                log.info(
+                    f"AUTO_MOTOR_OFFSET: estimated from {train_motor_pos.shape[0]} train "
+                    f"sample(s): {[round(v, 1) for v in _motor_offset]} steps"
+                )
+    if _angle_offset is not None:
+        with torch.no_grad():
+            train_motor_pos = train_motor_pos - _angle_offset * _steps_per_rad(kinematic, train_motor_pos)
+            if val_motor_pos is not None:
+                val_motor_pos = val_motor_pos - _angle_offset * _steps_per_rad(kinematic, val_motor_pos)
+            if test_motor_pos is not None:
+                test_motor_pos = test_motor_pos - _angle_offset * _steps_per_rad(kinematic, test_motor_pos)
+        log.info(f"Applied angle-mode motor correction: Δα = "
+                 f"{[round(v * 1000, 2) for v in _angle_offset.cpu().tolist()]} mrad")
+    elif _motor_offset is not None:
         _mo = torch.tensor(_motor_offset, device=device, dtype=train_motor_pos.dtype)
         train_motor_pos = train_motor_pos - _mo
         if val_motor_pos is not None:
@@ -1399,32 +1471,54 @@ def run(
     # ------------------------------------------------------------------ #
     # 5. Optimizer setup (replicates notebook Cell 17)                    #
     # ------------------------------------------------------------------ #
-    init_angle, init_offset, init_translation = _setup_kinematic_for_training(kinematic, device, cfg)
+    init_angle, init_offset, init_translation, init_stroke, init_pivot = \
+        _setup_kinematic_for_training(kinematic, device, cfg)
+    _opt_stroke = bool(getattr(cfg, "OPTIMIZE_ACTUATOR_STROKE", False))
+    _opt_pivot = bool(getattr(cfg, "OPTIMIZE_PIVOT_RADIUS", False))
+
+    # Training bounds (full-parameter regime); fall back to the legacy generation
+    # constants when the TRAIN_* values are absent from an older config.
+    _b_rot    = getattr(cfg, "_BOUND_ROTATION_TRAIN_RAD", cfg._BOUND_ROTATION_RAD)
+    _b_angle  = getattr(cfg, "_BOUND_ACTUATOR_ANGLE_TRAIN_RAD", cfg._BOUND_ACTUATOR_ANGLE_RAD)
+    _b_coff   = getattr(cfg, "_BOUND_ACTUATOR_OFFSET_TRAIN_M", cfg._BOUND_ACTUATOR_OFFSET_M)
+    _b_pivot  = getattr(cfg, "_BOUND_PIVOT_RADIUS_TRAIN_M", 0.02)
+    _b_transl = getattr(cfg, "_BOUND_TRANSLATION_TRAIN_M", cfg._BOUND_TRANSLATION_M)
+    _b_basep  = getattr(cfg, "_BOUND_BASE_POSITION_TRAIN_M", cfg._BOUND_BASE_POSITION_M)
 
     def _apply_bounds():
         kinematic.translation_deviation_parameters.data.clamp_(
-            init_translation - cfg._BOUND_TRANSLATION_M,
-            init_translation + cfg._BOUND_TRANSLATION_M,
+            init_translation - _b_transl,
+            init_translation + _b_transl,
         )
-        kinematic.rotation_deviation_parameters.data.clamp_(
-            -cfg._BOUND_ROTATION_RAD, cfg._BOUND_ROTATION_RAD,
-        )
+        kinematic.rotation_deviation_parameters.data.clamp_(-_b_rot, _b_rot)
         kinematic.actuators.optimizable_parameters.data[
             :, indices.actuator_initial_angle, :
         ].clamp_(
-            init_angle - cfg._BOUND_ACTUATOR_ANGLE_RAD,
-            init_angle + cfg._BOUND_ACTUATOR_ANGLE_RAD,
+            init_angle - _b_angle,
+            init_angle + _b_angle,
         )
         kinematic.actuators.non_optimizable_parameters.data[
             :, indices.actuator_offset, :
         ].clamp_(
-            init_offset - cfg._BOUND_ACTUATOR_OFFSET_M,
-            init_offset + cfg._BOUND_ACTUATOR_OFFSET_M,
+            init_offset - _b_coff,
+            init_offset + _b_coff,
         )
-        if hasattr(kinematic, "_base_position_deviation"):
-            kinematic._base_position_deviation.data.clamp_(
-                -cfg._BOUND_BASE_POSITION_M, cfg._BOUND_BASE_POSITION_M,
+        if _opt_stroke:
+            kinematic.actuators.optimizable_parameters.data[
+                :, indices.actuator_initial_stroke_length, :
+            ].clamp_(
+                init_stroke - cfg._BOUND_ACTUATOR_STROKE_TRAIN_M,
+                init_stroke + cfg._BOUND_ACTUATOR_STROKE_TRAIN_M,
             )
+        if _opt_pivot:
+            kinematic.actuators.non_optimizable_parameters.data[
+                :, indices.actuator_pivot_radius, :
+            ].clamp_(
+                init_pivot - _b_pivot,
+                init_pivot + _b_pivot,
+            )
+        if hasattr(kinematic, "_base_position_deviation"):
+            kinematic._base_position_deviation.data.clamp_(-_b_basep, _b_basep)
 
     def _all_params():
         p = [
@@ -2034,6 +2128,14 @@ def run(
         "actuator_offset_dev_m":  (
             kinematic.actuators.non_optimizable_parameters[:, indices.actuator_offset, :]
             - init_offset
+        ).detach().cpu().tolist(),
+        "actuator_stroke_dev_m":  (
+            kinematic.actuators.optimizable_parameters[:, indices.actuator_initial_stroke_length, :]
+            - init_stroke
+        ).detach().cpu().tolist(),
+        "pivot_radius_dev_m":     (
+            kinematic.actuators.non_optimizable_parameters[:, indices.actuator_pivot_radius, :]
+            - init_pivot
         ).detach().cpu().tolist(),
         "translation_dev_m":      kinematic.translation_deviation_parameters.detach().cpu().tolist(),
         "base_position_dev_m":    kinematic._base_position_deviation.detach().cpu().tolist()

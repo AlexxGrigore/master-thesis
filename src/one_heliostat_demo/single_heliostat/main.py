@@ -68,6 +68,14 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--auto-motor-offset", action="store_true",
                    help="Estimate and remove a per-axis motor-encoder-zero offset "
                         "from the training split before training (real data).")
+    p.add_argument("--optimize-actuator-stroke", action="store_true",
+                   help="Unfreeze the actuator initial stroke length b_i (±50 mm) so "
+                        "the optimizer absorbs an encoder-zero bias directly, instead "
+                        "of correcting it via --auto-motor-offset (real data).")
+    p.add_argument("--motor-offset-mode", choices=["constant", "angle"], default=None,
+                   help="Shape of the --auto-motor-offset correction: 'constant' = "
+                        "per-axis steps (encoder-zero fault); 'angle' = per-axis joint "
+                        "angle (home-angle fault, applied per sample via ds/dα).")
     p.add_argument("--data-mode", choices=["random_synthetic", "synthetic", "real"], default=None,
                    help="'random_synthetic': random perturbations each run; "
                         "'synthetic': use CUSTOM_PERTURBATIONS_SPEC from config; "
@@ -79,6 +87,11 @@ def _parse_args() -> argparse.Namespace:
                    help="Run only Stage 1 (AlignmentLoss); skip Stage 2 (FocalSpotLoss)")
     p.add_argument("--stage1-epochs", type=int, default=None,
                    help="Override cfg.STAGE1_EPOCHS (default: 20)")
+    p.add_argument("--stage2-epochs", type=int, default=None,
+                   help="Override cfg.STAGE2_EPOCHS")
+    p.add_argument("--base-lr", type=float, default=None,
+                   help="Override cfg.BASE_LR (Adam step ≈ lr, so this caps how far "
+                        "a parameter can travel per epoch — relevant when unfreezing b_i)")
 
     return p.parse_args()
 
@@ -127,8 +140,16 @@ def main() -> None:
         cfg.DATA_MODE = args.data_mode
     if args.stage1_epochs is not None:
         cfg.STAGE1_EPOCHS = args.stage1_epochs
+    if args.stage2_epochs is not None:
+        cfg.STAGE2_EPOCHS = args.stage2_epochs
+    if args.base_lr is not None:
+        cfg.BASE_LR = args.base_lr
     if args.auto_motor_offset:
         cfg.AUTO_MOTOR_OFFSET = True
+    if args.optimize_actuator_stroke:
+        cfg.OPTIMIZE_ACTUATOR_STROKE = True
+    if args.motor_offset_mode is not None:
+        cfg.AUTO_MOTOR_OFFSET_MODE = args.motor_offset_mode
 
     # Real-data mode never needs a generation step.
     if cfg.DATA_MODE == "real":

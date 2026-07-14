@@ -109,8 +109,11 @@ class WortbergKinematicReconstructor(KinematicsReconstructor):
     # ------------------------------------------------------------------
     # Core training loop
     # ------------------------------------------------------------------
+    # ARTIST #220 renamed _reconstruct_kinematics_parameters_with_raytracing to
+    # _reconstruct_kinematics_flux_driven; reconstruct_kinematics() dispatches to
+    # the new name, so the override must use it too.
 
-    def _reconstruct_kinematics_parameters_with_raytracing(
+    def _reconstruct_kinematics_flux_driven(
         self,
         loss_definition,
         device=None,
@@ -696,7 +699,11 @@ class WortbergAlignmentReconstructor(WortbergKinematicReconstructor):
     Expects ``loss_definition`` to be an ``AlignmentLoss`` instance.
     """
 
-    def _reconstruct_kinematics_parameters_with_raytracing(
+    # Overrides the flux-driven (raytracing) dispatch branch on purpose: experiments
+    # construct this class with reconstruction_method=kinematics_reconstruction_raytracing
+    # and this method replaces the inner loop. Renamed for ARTIST #220 (was
+    # _reconstruct_kinematics_parameters_with_raytracing).
+    def _reconstruct_kinematics_flux_driven(
         self,
         loss_definition,
         device=None,

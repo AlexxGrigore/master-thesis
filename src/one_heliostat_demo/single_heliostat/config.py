@@ -94,6 +94,13 @@ CENTROID_METHOD = "UTIS"
 #   axis 2) that lie far outside the deviation-parameter bounds.
 MOTOR_OFFSET_STEPS = None
 AUTO_MOTOR_OFFSET  = False
+# Shape of the auto-estimated correction:
+#   "constant" — per-axis constant in STEPS (encoder-zero / b_i-type fault)
+#   "angle"    — per-axis constant in JOINT ANGLE (home-angle / a_i-type fault);
+#                applied per sample as Δα·(ds/dα)(m)·increment. Fresh-look analysis
+#                (outputs/really_important/fresh_look/) found the angle model fits
+#                48/63 heliostats better than the constant-step model.
+AUTO_MOTOR_OFFSET_MODE = "constant"
 
 # ============================================================================
 # Ray counts & surface resolution
@@ -135,6 +142,28 @@ MINI_BATCH_SIZE = 25             # Stage 2: samples per mini-batch
 # in that tensor receives gradients, everything else stays frozen).
 OPTIMIZE_ACTUATOR_OFFSET = True
 
+# OPTIMIZE_ACTUATOR_STROKE — whether the actuator initial stroke length b_i is
+# calibrated. Full-parameter regime (supervisor 2026-07-14, see
+# OPTIMIZATION_PARAMETERS.md): TRAINABLE by default with a ±50 mm bound
+# (_BOUND_ACTUATOR_STROKE_TRAIN_M, encoder re-referencing scale). b_i is the
+# encoder-zero anchor of the motor→angle map; training it replaces the
+# AUTO_MOTOR_OFFSET data-side correction (same correction space). Do not enable
+# AUTO_MOTOR_OFFSET simultaneously — that double-corrects the same fault.
+OPTIMIZE_ACTUATOR_STROKE = True
+
+# OPTIMIZE_PIVOT_RADIUS — whether the linkage pivot radius r_i is calibrated
+# (±_BOUND_PIVOT_RADIUS_TRAIN_M around the loaded value). Part of the
+# full-parameter regime. The rest of the non_optimizable tensor (type,
+# clockwise flag, min/max motor limits) is NEVER optimized: IDs and
+# inverse-kinematics branch-selection limits.
+OPTIMIZE_PIVOT_RADIUS = True
+
+# LR multiplier for the actuator param group (a_i, b_i) applied ONLY when
+# OPTIMIZE_ACTUATOR_STROKE is True. b_i must travel a re-referencing-scale
+# distance; an Adam step ≈ lr, so at BASE_LR (~0.1 mm/step) it can't reach ~32 mm
+# in 100 epochs. 20× → ~2 mm/step, reachable in ~16 epochs.
+ACTUATOR_STROKE_LR_MULT = 20.0
+
 BASE_LR         = 1e-4
 PLOT_EVERY      = 1              # capture trail snapshot every N epochs (1 = all epochs)
 
@@ -166,9 +195,33 @@ SCAN_RAYS = 10
 _BOUND_TRANSLATION_M      = 0.05
 _BOUND_ROTATION_RAD       = 0.005
 _BOUND_ACTUATOR_ANGLE_RAD = 0.005
-_BOUND_ACTUATOR_STROKE_M  = 0.005
+_BOUND_ACTUATOR_STROKE_M  = 0.005   # random-perturbation scale (dataset generation only)
 _BOUND_ACTUATOR_OFFSET_M  = 0.005
 _BOUND_BASE_POSITION_M    = 0.05
+
+# ----------------------------------------------------------------------------
+# TRAINING bounds — full-parameter regime (supervisor 2026-07-14).
+# Separate from the _BOUND_* generation constants above (those describe synthetic
+# perturbation magnitudes and stay untouched). All clamps are centred on the
+# LOADED initial values (translation[7] holds the physical 0.175 m concentrator
+# offset; a_1 is stored with a −π/2 shift), never on zero.
+# ----------------------------------------------------------------------------
+# ±50 mm: physical scale of an encoder re-referencing (AY39 ≈ 32 mm); on axis 2
+# this spans ≈ ±165 mrad of joint-angle correction — Stage 1's reachable set now
+# contains the reference errors that AUTO_MOTOR_OFFSET used to remove.
+_BOUND_ACTUATOR_STROKE_TRAIN_M = 0.05
+_BOUND_ROTATION_TRAIN_RAD       = 0.020   # joint tilts (was ±5 mrad)
+# a_i home angle: effectively UNBOUNDED (±500 mrad). Decisive AY39 experiment
+# (fullparam_regime/AY39_opt_widea): the ±20 mrad bound was the binding
+# constraint — freed, a₂ walks to the true fault (−99 mrad) and AY39 reaches
+# 19.4 mrad (beats even the old offset's 22.9). Sanity-checked on AY37/AY36:
+# no regression, a stops at the data's value (−4.8 / −27.8 mrad).
+_BOUND_ACTUATOR_ANGLE_TRAIN_RAD = 0.5
+_BOUND_ACTUATOR_OFFSET_TRAIN_M  = 0.020   # c_i linkage side (was ±5 mm)
+_BOUND_PIVOT_RADIUS_TRAIN_M     = 0.020   # r_i linkage side (was frozen)
+# Base-position bound: the WATCHED one (supervisor) — keep tight, monitor clamps.
+_BOUND_BASE_POSITION_TRAIN_M    = 0.05
+_BOUND_TRANSLATION_TRAIN_M      = 0.05
 
 RANDOM_PERT_BOUNDS = {
     "rotation_rad":       _BOUND_ROTATION_RAD,

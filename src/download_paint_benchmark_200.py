@@ -64,6 +64,11 @@ def _parse_args() -> argparse.Namespace:
         "--daic", action="store_true",
         help="Use DAIC storage path (/tudelft.net/...) instead of local datasets/paint/.",
     )
+    p.add_argument(
+        "--no-deflectometry", action="store_true",
+        help="Include ALL heliostats with enough measurements, regardless of "
+             "deflectometry availability (default: require deflectometry).",
+    )
     return p.parse_args()
 
 ITEM_TYPES = [
@@ -108,9 +113,10 @@ def main() -> None:
     heliostats_dir = paint_dir / "heliostats"
     metadata_file  = paint_dir / "metadata" / "calibration_metadata_all_heliostats.csv"
 
+    _suffix = "" if args.no_deflectometry else "_deflectometry"
     benchmark_name = (
         f"benchmark_split-{split_type}_train-{train_size}"
-        f"_validation-{val_size}_deflectometry"
+        f"_validation-{val_size}{_suffix}"
     )
 
     set_logger_config()
@@ -130,14 +136,20 @@ def main() -> None:
     counts   = metadata.groupby(mappings.HELIOSTAT_ID).size()
 
     hids_enough_data   = set(counts[counts >= min_measurements].index)
-    hids_deflectometry = _heliostats_with_deflectometry(heliostats_dir)
-    qualifying         = sorted(hids_enough_data & hids_deflectometry)
+    if args.no_deflectometry:
+        qualifying = sorted(hids_enough_data)
+    else:
+        hids_deflectometry = _heliostats_with_deflectometry(heliostats_dir)
+        qualifying         = sorted(hids_enough_data & hids_deflectometry)
 
     print(f"\nHeliostat selection:")
     print(f"  Total in metadata          : {len(counts)}")
     print(f"  With >= {min_measurements} measurements     : {len(hids_enough_data)}")
-    print(f"  With deflectometry locally : {len(hids_deflectometry)}")
-    print(f"  Qualifying (both)          : {len(qualifying)}")
+    if args.no_deflectometry:
+        print(f"  Deflectometry filter       : DISABLED (--no-deflectometry)")
+    else:
+        print(f"  With deflectometry locally : {len(hids_deflectometry)}")
+    print(f"  Qualifying                 : {len(qualifying)}")
 
     if not qualifying:
         raise RuntimeError(
@@ -231,14 +243,14 @@ def main() -> None:
             f"for all {len(benchmark_heliostats)} benchmark heliostats."
         )
     else:
-        print(f"\nDownloading Properties + Deflectometry for {len(missing)} heliostats...")
+        collections = [mappings.SAVE_PROPERTIES.lower()]
+        if not args.no_deflectometry:
+            collections.append(mappings.SAVE_DEFLECTOMETRY.lower())
+        print(f"\nDownloading {collections} for {len(missing)} heliostats...")
         client = StacClient(output_dir=heliostats_dir)
         client.get_heliostat_data(
             heliostats=missing,
-            collections=[
-                mappings.SAVE_PROPERTIES.lower(),
-                mappings.SAVE_DEFLECTOMETRY.lower(),
-            ],
+            collections=collections,
         )
         print(f"✓ Done → {heliostats_dir}")
 

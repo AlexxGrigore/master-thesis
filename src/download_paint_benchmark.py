@@ -29,6 +29,7 @@ Run from anywhere:
 All steps are idempotent — already-downloaded data is skipped.
 """
 
+import argparse
 import pathlib
 
 import pandas as pd
@@ -38,7 +39,7 @@ from paint.data.dataset import PaintCalibrationDataset
 from paint.data.dataset_splits import DatasetSplitter
 from paint.util import set_logger_config
 
-# ── configuration ─────────────────────────────────────────────────────────────
+# ── configuration (defaults; all overridable on the CLI) ─────────────────────
 
 PAINT_DIR = pathlib.Path(__file__).parent.parent / "datasets" / "paint"
 
@@ -53,10 +54,45 @@ ITEM_TYPES = [
 
 TOWER_FILE = "WRI1030197-tower-measurements.json"
 
+_SPLIT_CHOICES = {
+    "balanced":      mappings.BALANCED_SPLIT,
+    "azimuth":       mappings.AZIMUTH_SPLIT,
+    "solstice":      mappings.SOLSTICE_SPLIT,
+    "high_variance": mappings.HIGH_VARIANCE_SPLIT,
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Download a PAINT calibration benchmark (all heliostats).")
+    p.add_argument("--split-type", choices=list(_SPLIT_CHOICES), default="balanced",
+                   help="Split strategy (default: balanced).")
+    p.add_argument("--train-size", type=int, default=TRAIN_SIZE,
+                   help=f"Training samples per heliostat (default: {TRAIN_SIZE}).")
+    p.add_argument("--val-size", type=int, default=VAL_SIZE,
+                   help=f"Validation/test samples per heliostat (default: {VAL_SIZE}).")
+    p.add_argument("--paint-dir", type=pathlib.Path, default=PAINT_DIR,
+                   help=f"Target PAINT directory (default: {PAINT_DIR}).")
+    p.add_argument("--skip-flux", action="store_true",
+                   help="Skip the flux images (centroid-only training does not need them; "
+                        "halves the download).")
+    p.add_argument("--skip-deflectometry", action="store_true",
+                   help="Download only heliostat Properties, not Deflectometry h5 files "
+                        "(recommended for the full field — only 63 heliostats have "
+                        "deflectometry and the files are large).")
+    return p.parse_args()
+
+
 def main() -> None:
+    args = _parse_args()
+    global PAINT_DIR, SPLIT_TYPE, TRAIN_SIZE, VAL_SIZE, ITEM_TYPES
+    PAINT_DIR = args.paint_dir
+    SPLIT_TYPE = _SPLIT_CHOICES[args.split_type]
+    TRAIN_SIZE = args.train_size
+    VAL_SIZE = args.val_size
+    if args.skip_flux:
+        ITEM_TYPES = [mappings.CALIBRATION_PROPERTIES_KEY]
     set_logger_config()
 
     # ── 1. download calibration metadata ──────────────────────────────────────
@@ -149,15 +185,15 @@ def main() -> None:
             f"Downloading Properties + Deflectometry "
             f"for {len(missing)}/{len(benchmark_heliostats)} heliostats..."
         )
+        collections = [mappings.SAVE_PROPERTIES.lower()]
+        if not args.skip_deflectometry:
+            collections.append(mappings.SAVE_DEFLECTOMETRY.lower())
         client = StacClient(output_dir=heliostats_dir)
         client.get_heliostat_data(
             heliostats=missing,
-            collections=[
-                mappings.SAVE_PROPERTIES.lower(),
-                mappings.SAVE_DEFLECTOMETRY.lower(),
-            ],
+            collections=collections,
         )
-        print(f"✓ Properties + Deflectometry downloaded to {heliostats_dir}")
+        print(f"✓ {' + '.join(collections)} downloaded to {heliostats_dir}")
 
     print(f"\nDone.")
 
