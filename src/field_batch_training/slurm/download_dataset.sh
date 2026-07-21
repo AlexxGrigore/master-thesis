@@ -2,7 +2,8 @@
 #SBATCH --job-name=paint_dl_50_20
 #SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/paint_dl_out_%j.log
 #SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/paint_dl_err_%j.log
-#SBATCH --time=12:00:00
+#SBATCH --time=10:00:00
+#SBATCH --qos=medium
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
 

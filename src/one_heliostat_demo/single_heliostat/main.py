@@ -92,6 +92,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--base-lr", type=float, default=None,
                    help="Override cfg.BASE_LR (Adam step ≈ lr, so this caps how far "
                         "a parameter can travel per epoch — relevant when unfreezing b_i)")
+    p.add_argument("--no-geometric-init", dest="geometric_init", action="store_false", default=None,
+                   help="Disable the Kabsch geometric initialization before Stage 1 "
+                        "(overrides cfg.GEOMETRIC_INIT). Use to reproduce the old "
+                        "start-from-nominal behaviour.")
 
     return p.parse_args()
 
@@ -103,20 +107,27 @@ def _print_summary(results: dict) -> None:
     tot_min  = results["total_time_min"]
 
     print()
-    print("=" * 70)
+    print("=" * 84)
     print(f"  RESULTS  —  {hid}  |  {n_test} test samples  |  "
           f"dist={dist_m:.0f} m  |  {tot_min:.1f} min")
-    print("=" * 70)
-    print(f"  {'Stage':<22} {'Mean [mrad]':>12} {'Median [mrad]':>14}")
-    print("  " + "-" * 50)
+    print("=" * 84)
+    print("  centroid = ray-traced focal-spot centroid (incl. surface)  |  "
+          "direction = kinematic pointing (excl. surface)")
+    print(f"  {'Stage':<18} {'centroid mean':>14} {'centroid med':>13} "
+          f"{'direction mean':>15} {'direction med':>14}")
+    print("  " + "-" * 78)
     for key, label in [
         ("pre_training", "Pre-training"),
         ("after_stage1", "After Stage 1"),
         ("after_stage2", "After Stage 2"),
     ]:
         ev = results[key]
-        print(f"  {label:<22} {ev['mrad_mean']:12.4f} {ev['mrad_median']:14.4f}")
-    print("=" * 70)
+        c_mn  = ev.get("centroid_mrad_mean", ev["mrad_mean"])
+        c_med = ev.get("centroid_mrad_median", ev["mrad_median"])
+        d_mn  = ev.get("direction_mrad_mean", float("nan"))
+        d_med = ev.get("direction_mrad_median", float("nan"))
+        print(f"  {label:<18} {c_mn:14.4f} {c_med:13.4f} {d_mn:15.4f} {d_med:14.4f}")
+    print("=" * 84)
     print()
 
 
@@ -150,6 +161,8 @@ def main() -> None:
         cfg.OPTIMIZE_ACTUATOR_STROKE = True
     if args.motor_offset_mode is not None:
         cfg.AUTO_MOTOR_OFFSET_MODE = args.motor_offset_mode
+    if args.geometric_init is False:
+        cfg.GEOMETRIC_INIT = False
 
     # Real-data mode never needs a generation step.
     if cfg.DATA_MODE == "real":

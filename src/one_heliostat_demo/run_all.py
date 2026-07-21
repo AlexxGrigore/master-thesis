@@ -164,6 +164,9 @@ def _parse_args() -> argparse.Namespace:
                    help="Override cfg.STAGE1_EPOCHS (default: 20)")
     p.add_argument("--stage2-epochs", type=int, default=None,
                    help="Override cfg.STAGE2_EPOCHS (default: 100)")
+    p.add_argument("--surface-points", type=int, default=None,
+                   help="Override cfg.SURFACE_POINTS_PER_FACET (default: 25 -> 25x25 pts/facet). "
+                        "Cost scales with the square: 100 is 16x the ray-tracing work of 25.")
     p.add_argument("--stage1-loss", choices=["motor_steps", "motor_mse", "normal_mrad"], default=None,
                    help="Stage 1 loss: 'motor_steps' (increment-normalized motor steps, "
                         "no angle conversion, default), 'motor_mse' (AlignmentLoss, angle space), "
@@ -253,6 +256,8 @@ def main() -> None:
         cfg.STAGE1_EPOCHS = args.stage1_epochs
     if args.stage2_epochs is not None:
         cfg.STAGE2_EPOCHS = args.stage2_epochs
+    if args.surface_points is not None:
+        cfg.SURFACE_POINTS_PER_FACET = args.surface_points
     if args.stage1_loss is not None:
         cfg.STAGE1_LOSS = args.stage1_loss
 

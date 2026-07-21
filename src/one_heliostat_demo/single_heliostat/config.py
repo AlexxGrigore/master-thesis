@@ -117,6 +117,25 @@ GENERATE_RAYS = 100              # rays for synthetic GT data generation
 
 STAGE1_EPOCHS   = 100
 STAGE2_EPOCHS   = 100
+
+# ReduceLROnPlateau (Stage 1). The scheduler only lowers the LR once the val loss
+# stops improving by more than THRESHOLD (relative) for PATIENCE epochs. With the
+# geometric-init orientation LR (1e-3) the loss descends steadily and may not
+# plateau within a short run — raise STAGE1_EPOCHS to let it converge and the
+# scheduler will anneal the tail. FACTOR >= 1.0 disables the decay entirely.
+STAGE1_PLATEAU_FACTOR    = 0.5
+STAGE1_PLATEAU_PATIENCE  = 8
+# Relative threshold: an epoch counts as "improving" only if the val loss drops by
+# more than this fraction. 1e-4 (0.01%) is so lenient that any slow steady descent
+# resets the patience counter and the LR never anneals. 1e-3 (0.1%) lets the
+# scheduler fire once the improvement genuinely slows, annealing the LR to squeeze
+# the tail — the way to push a long run to its floor.
+STAGE1_PLATEAU_THRESHOLD = 1e-3
+# Stage 2 scheduler.
+STAGE2_PLATEAU_FACTOR    = 0.5
+STAGE2_PLATEAU_PATIENCE  = 10
+STAGE2_PLATEAU_THRESHOLD = 1e-4
+
 STAGE1_LOSS     = "forward_aim"  # "forward_aim" (DEFAULT — forward normal vs geometric
                                  #   desired normal; only consistent objective, see
                                  #   STAGE1_ALIGNMENT_LOSS_FINDINGS.md)
@@ -167,6 +186,30 @@ ACTUATOR_STROKE_LR_MULT = 20.0
 BASE_LR         = 1e-4
 PLOT_EVERY      = 1              # capture trail snapshot every N epochs (1 = all epochs)
 
+# ----------------------------------------------------------------------------
+# Geometric initialization (Stage 1)  — see AA23_METHOD_STUDY.md
+# ----------------------------------------------------------------------------
+# Before the Stage-1 forward-aim refine, seed the orientation parameters from a
+# closed-form estimate of the mount misorientation: build the nominal-vs-desired
+# normal clouds on the training split, solve Kabsch/Wahba for the single rotation
+# that best maps one onto the other, and fit the 4 tilts + 2 phi_0 to it. This
+# lands Stage 1 in the correct basin deterministically (no random restarts), which
+# a single gradient descent from nominal could not reach for large mount faults.
+# Only applied when STAGE1_LOSS == "forward_aim".
+GEOMETRIC_INIT           = True
+GEOMETRIC_INIT_EPOCHS    = 200      # inner fit of the orientation params to the Kabsch rotation
+GEOMETRIC_INIT_LR        = 3e-3
+# With a correct orientation seed, the extra translation / base-position DOFs of
+# the full-parameter regime only shift the ray-traced landing (hurting the centroid
+# metric) without improving pointing. Restrict the Stage-1 refine to Mathias's free
+# set — orientation (tilts) + phi_0 + stroke — freezing translation, base, offset,
+# pivot. Applied only when GEOMETRIC_INIT is on. See AA23_METHOD_STUDY.md.
+GEOMETRIC_INIT_ORIENTATION_ONLY = True
+# Stage-1 rotation-deviation learning rate used AFTER the geometric seed (the
+# refine only needs to travel a little, but 1e-4 is too slow for that). Applied
+# only when GEOMETRIC_INIT is on; otherwise the rotation group keeps BASE_LR.
+S1_ORIENTATION_LR        = 1e-3
+
 # ============================================================================
 # Data quality filter
 # ============================================================================
@@ -210,7 +253,11 @@ _BOUND_BASE_POSITION_M    = 0.05
 # this spans ≈ ±165 mrad of joint-angle correction — Stage 1's reachable set now
 # contains the reference errors that AUTO_MOTOR_OFFSET used to remove.
 _BOUND_ACTUATOR_STROKE_TRAIN_M = 0.05
-_BOUND_ROTATION_TRAIN_RAD       = 0.020   # joint tilts (was ±5 mrad)
+# Joint tilts: widened 0.020 → 0.5 rad. AA23-class heliostats have a real mount
+# reorientation of ~0.16 rad that the old ±20 mrad clamp could not represent; the
+# geometric init (below) plus this bound let Stage 1 reach it. See
+# outputs/new_mapping_function/aa23_method_comparison/AA23_METHOD_STUDY.md.
+_BOUND_ROTATION_TRAIN_RAD       = 0.5     # joint tilts (was ±20 mrad)
 # a_i home angle: effectively UNBOUNDED (±500 mrad). Decisive AY39 experiment
 # (fullparam_regime/AY39_opt_widea): the ±20 mrad bound was the binding
 # constraint — freed, a₂ walks to the true fault (−99 mrad) and AY39 reaches

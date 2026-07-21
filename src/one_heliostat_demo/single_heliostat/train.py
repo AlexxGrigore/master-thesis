@@ -418,13 +418,132 @@ def _true_concentrator_normal(
 # Helpers: evaluation
 # ---------------------------------------------------------------------------
 
+def _direction_error_mrad(kinematic, hg, motor_positions, incident_rays,
+                          target_centroids, active_mask, base_pos_dev, device):
+    """Direction-only pointing error [mrad], per sample.
+
+    The angle between the beam the CURRENT kinematics would reflect (sun reflected
+    about the rigid-body concentrator normal at the recorded motors) and the
+    direction from the mirror to the observed centroid c_gt. This is a PURE
+    pointing metric: it uses the kinematic normal only, with no mirror-surface
+    ray tracing, so it excludes surface (canting/shape) spread. Matches the
+    convention used by the DLR/Wortberg pointing-accuracy evaluation.
+    """
+    with torch.no_grad():
+        hg.activate_heliostats(active_heliostats_mask=active_mask, device=device)
+        rep = base_pos_dev.repeat_interleave(active_mask, dim=0)
+        pad = torch.zeros(rep.shape[0], 1, device=device)
+        kinematic.active_heliostat_positions = (
+            kinematic.active_heliostat_positions + torch.cat([rep, pad], dim=1)
+        )
+        origins = kinematic.active_heliostat_positions[:, :3]
+        normal = _concentrator_normal_from_motors(kinematic, motor_positions, device)
+        d_in = torch.nn.functional.normalize(incident_rays[:, :3].to(device), dim=-1)
+        reflected = torch.nn.functional.normalize(
+            d_in - 2 * (d_in * normal).sum(-1, keepdim=True) * normal, dim=-1
+        )
+        measured = torch.nn.functional.normalize(
+            target_centroids[:, :3].to(device) - origins, dim=-1
+        )
+        cos = (reflected * measured).sum(-1).clamp(-1.0, 1.0)
+        return (torch.arccos(cos) * 1000.0).cpu().numpy()
+
+
+def _geometric_init(kinematic, hg, train_motor_pos, train_rays, train_centroids,
+                    train_active_mask, base_pos_dev, cfg, device):
+    """Seed the Stage-1 orientation parameters from a closed-form mount-misorientation
+    estimate (Kabsch / Wahba), then fit the 4 tilts + 2 phi_0 to reproduce it.
+
+    Rationale (see AA23_METHOD_STUDY.md): for heliostats with a large mount
+    reorientation, a single gradient descent from nominal lands in a wrong local
+    basin. The optimal single rotation ``dR`` mapping the nominal forward normals
+    onto the desired (sun<->c_gt bisector) normals is available in closed form; using
+    it as the start puts Stage 1 in the correct basin deterministically. Stroke /
+    offset / linkage are left at nominal here (orientation-only seed); the main
+    Stage-1 loop then refines everything per config.
+    """
+    ia = indices.actuator_initial_angle
+    is_ = indices.actuator_initial_stroke_length
+
+    def _med_angle(x, y):
+        c = (torch.nn.functional.normalize(x, dim=-1)
+             * torch.nn.functional.normalize(y, dim=-1)).sum(-1).clamp(-1.0, 1.0)
+        return torch.arccos(c).median()
+
+    # Normal clouds at the current (nominal) parameters.
+    with torch.no_grad():
+        hg.activate_heliostats(active_heliostats_mask=train_active_mask, device=device)
+        rep = base_pos_dev.repeat_interleave(train_active_mask, dim=0)
+        pad = torch.zeros(rep.shape[0], 1, device=device)
+        kinematic.active_heliostat_positions = (
+            kinematic.active_heliostat_positions + torch.cat([rep, pad], dim=1)
+        )
+        origins = kinematic.active_heliostat_positions[:, :3]
+        a = _concentrator_normal_from_motors(kinematic, train_motor_pos, device)
+        b = _true_concentrator_normal(origins, train_rays, train_centroids, device)
+
+        # Kabsch: rotation R minimizing sum||b_i - R a_i||^2.
+        Hm = a.T @ b
+        U, S, Vt = torch.linalg.svd(Hm)
+        d = torch.sign(torch.det(Vt.T @ U.T))
+        R = Vt.T @ torch.diag(torch.tensor([1.0, 1.0, float(d)], device=device)) @ U.T
+        if _med_angle(a @ R, b) < _med_angle(a @ R.T, b):
+            R = R.T
+        t_target = torch.nn.functional.normalize(a @ R.T, dim=-1)
+        dR_angle = torch.arccos(((torch.trace(R) - 1) / 2).clamp(-1.0, 1.0)).item()
+
+    # Fit the orientation params (rotation tilts + phi_0) to reproduce t_target.
+    b_rot = getattr(cfg, "_BOUND_ROTATION_TRAIN_RAD", 0.5)
+    b_ang = getattr(cfg, "_BOUND_ACTUATOR_ANGLE_TRAIN_RAD", 0.5)
+    angle0 = kinematic.actuators.optimizable_parameters[:, ia, :].detach().clone()
+    stroke0 = kinematic.actuators.optimizable_parameters[:, is_, :].detach().clone()
+    opt = torch.optim.Adam(
+        [
+            {"params": kinematic.rotation_deviation_parameters, "lr": getattr(cfg, "GEOMETRIC_INIT_LR", 3e-3)},
+            {"params": kinematic.actuators.optimizable_parameters, "lr": getattr(cfg, "GEOMETRIC_INIT_LR", 3e-3)},
+        ],
+        lr=getattr(cfg, "GEOMETRIC_INIT_LR", 3e-3),
+    )
+    for _ in range(int(getattr(cfg, "GEOMETRIC_INIT_EPOCHS", 200))):
+        opt.zero_grad()
+        hg.activate_heliostats(active_heliostats_mask=train_active_mask, device=device)
+        nfwd = _concentrator_normal_from_motors(kinematic, train_motor_pos, device)
+        loss = ((nfwd - t_target) ** 2).sum(-1).mean()
+        loss.backward()
+        opt.step()
+        with torch.no_grad():
+            # Orientation-only seed: keep stroke at nominal, clamp to bounds.
+            kinematic.actuators.optimizable_parameters.data[:, is_, :] = stroke0
+            kinematic.rotation_deviation_parameters.data.clamp_(-b_rot, b_rot)
+            kinematic.actuators.optimizable_parameters.data[:, ia, :].clamp_(
+                angle0 - b_ang, angle0 + b_ang
+            )
+    with torch.no_grad():
+        resid = _med_angle(
+            _concentrator_normal_from_motors(kinematic, train_motor_pos, device), t_target
+        ).item()
+    log.info(
+        f"Geometric init: dR angle = {dR_angle * 1000:.0f} mrad  |  "
+        f"seed normal residual = {resid * 1000:.1f} mrad"
+    )
+
+
 def _eval_test(scenario, hg, test_rays, test_active_mask, test_target_mask,
                test_centroids, test_motor_pos, hel_dist_m: float, cfg, device, label: str):
     """Forward-pass test set, return eval dict with flux, per-sample errs, label.
 
     Centre-free evaluation: orient the heliostat from the recorded GT motors
-    ``test_motor_pos`` (m_c) and measure where the beam lands vs the observed
-    centroid ``test_centroids`` (c_gt). The original aim point is never used.
+    ``test_motor_pos`` (m_c) and measure the beam vs the observed centroid c_gt.
+    The original aim point is never used. Two error metrics are reported:
+
+    * ``errs_centroid_mrad`` (a.k.a. ``errs_mrad``) — the ray-traced FOCAL-SPOT
+      CENTROID landing error: trace the full mirror surface, take the flux
+      centroid, measure its distance to c_gt / range. INCLUDES mirror-surface
+      (canting/shape) spread.
+    * ``errs_direction_mrad`` — the DIRECTION-ONLY pointing error: angle between
+      the reflected beam direction (kinematic normal only) and the direction to
+      c_gt. EXCLUDES surface effects; this is the metric used by the DLR/Wortberg
+      pointing-accuracy comparison.
     """
     old_n_rays = scenario.light_sources.light_source_list[0].number_of_rays
     scenario.set_number_of_rays(cfg.DISPLAY_RAYS)
@@ -441,20 +560,30 @@ def _eval_test(scenario, hg, test_rays, test_active_mask, test_target_mask,
 
     scenario.set_number_of_rays(old_n_rays)
 
-    errs_mrad = (
+    # Metric 1 — ray-traced focal-spot centroid landing error (includes surface).
+    errs_centroid_mrad = (
         torch.norm(pred_cents[:, :3] - test_centroids[:, :3], dim=1) / hel_dist_m * 1000
     ).cpu().numpy()
-    errs_m = errs_mrad * hel_dist_m / 1000.0
+    errs_m = errs_centroid_mrad * hel_dist_m / 1000.0
+
+    # Metric 2 — direction-only kinematic pointing error (excludes surface).
+    errs_direction_mrad = _direction_error_mrad(
+        kinematic, hg, test_motor_pos, test_rays, test_centroids,
+        test_active_mask, bpd, device,
+    )
 
     log.info(
-        f"Eval [{label}]: mean={errs_mrad.mean():.4f} mrad  "
-        f"median={float(np.median(errs_mrad)):.4f} mrad"
+        f"Eval [{label}]: "
+        f"centroid mean={errs_centroid_mrad.mean():.4f} median={float(np.median(errs_centroid_mrad)):.4f} mrad  |  "
+        f"direction mean={errs_direction_mrad.mean():.4f} median={float(np.median(errs_direction_mrad)):.4f} mrad"
     )
     return {
-        "label":     label,
-        "flux":      pred_flux.cpu(),
-        "errs_mrad": errs_mrad,
-        "errs_m":    errs_m,
+        "label":               label,
+        "flux":                pred_flux.cpu(),
+        "errs_mrad":           errs_centroid_mrad,   # legacy alias (= centroid)
+        "errs_centroid_mrad":  errs_centroid_mrad,
+        "errs_direction_mrad": errs_direction_mrad,
+        "errs_m":              errs_m,
     }
 
 
@@ -541,13 +670,25 @@ def _actuator_lr(cfg):
 
 
 def _build_s1_optimizer(kinematic, cfg):
+    # After a geometric seed the orientation only needs a short refine, but the
+    # rotation group must still travel tens of mrad — BASE_LR (1e-4) is too slow
+    # for that. Use the dedicated S1_ORIENTATION_LR when geometric init is on.
+    _geom = getattr(cfg, "GEOMETRIC_INIT", False)
+    _rot_lr = getattr(cfg, "S1_ORIENTATION_LR", cfg.BASE_LR) if _geom else cfg.BASE_LR
+    # Mathias's free set with geometric init: orientation + phi_0 + stroke only;
+    # freeze translation / base / offset / pivot (LR 0) so they can't shift the
+    # ray-traced landing without improving pointing.
+    _orient_only = _geom and getattr(cfg, "GEOMETRIC_INIT_ORIENTATION_ONLY", False)
+    _transl_lr = 0.0 if _orient_only else cfg.BASE_LR * 5.0
+    _base_lr   = 0.0 if _orient_only else cfg.BASE_LR * 5.0
+    _nonopt_lr = 0.0 if _orient_only else cfg.BASE_LR
     opt = torch.optim.Adam(
         [
-            {"params": kinematic.translation_deviation_parameters,     "lr": cfg.BASE_LR * 5.0},
-            {"params": kinematic.rotation_deviation_parameters,        "lr": cfg.BASE_LR},
+            {"params": kinematic.translation_deviation_parameters,     "lr": _transl_lr},
+            {"params": kinematic.rotation_deviation_parameters,        "lr": _rot_lr},
             {"params": kinematic.actuators.optimizable_parameters,     "lr": _actuator_lr(cfg)},
-            {"params": kinematic.actuators.non_optimizable_parameters, "lr": cfg.BASE_LR},
-            {"params": kinematic._base_position_deviation,             "lr": cfg.BASE_LR * 5.0},
+            {"params": kinematic.actuators.non_optimizable_parameters, "lr": _nonopt_lr},
+            {"params": kinematic._base_position_deviation,             "lr": _base_lr},
         ],
         lr=cfg.BASE_LR,
     )
@@ -558,8 +699,8 @@ def _build_s1_optimizer(kinematic, cfg):
     sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
         opt, mode="min",
         factor=_s1_factor if _s1_factor < 1.0 else 0.5,
-        patience=5 if _s1_factor < 1.0 else 10**9,
-        threshold=1e-4, cooldown=3, min_lr=1e-8,
+        patience=getattr(cfg, "STAGE1_PLATEAU_PATIENCE", 5) if _s1_factor < 1.0 else 10**9,
+        threshold=getattr(cfg, "STAGE1_PLATEAU_THRESHOLD", 1e-4), cooldown=3, min_lr=1e-8,
     )
     return opt, sched
 
@@ -578,9 +719,12 @@ def _build_s2_optimizer(kinematic, cfg):
         ],
         lr=cfg.BASE_LR,
     )
+    _s2_factor = getattr(cfg, "STAGE2_PLATEAU_FACTOR", 0.5)
     sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        opt, mode="min", factor=0.5, patience=10,
-        threshold=1e-4, cooldown=5, min_lr=1e-8,
+        opt, mode="min",
+        factor=_s2_factor if _s2_factor < 1.0 else 0.5,
+        patience=getattr(cfg, "STAGE2_PLATEAU_PATIENCE", 10) if _s2_factor < 1.0 else 10**9,
+        threshold=getattr(cfg, "STAGE2_PLATEAU_THRESHOLD", 1e-4), cooldown=5, min_lr=1e-8,
     )
     return opt, sched
 
@@ -679,49 +823,123 @@ def _plot_loss_curves(s1_hist, s1_val, s1_mrad, s1_mrad_val, s2_hist, s2_val,
                       plots_dir: pathlib.Path,
                       s1_loss_label: str = "Stage 1 loss",
                       s1_loss_units: str = "",
-                      lr_drop_epochs: list | None = None) -> None:
-    fig, axes = plt.subplots(1, 3, figsize=(17, 3.5))
-    ep1  = range(1, len(s1_hist) + 1)
-    ep1m = range(1, len(s1_mrad) + 1)
-    ep2  = range(1, len(s2_hist) + 1)
+                      lr_drop_epochs: list | None = None,
+                      s2_mrad: list | None = None,
+                      s2_mrad_val: list | None = None,
+                      s2_lr_drop_epochs: list | None = None) -> None:
+    """2x2 loss panels, all with a LOG y-axis (same values, log-adjusted).
 
-    def _mark_lr_drops(ax):
-        """Dotted vertical line at each epoch where the LR scheduler reduced the LR."""
-        for j, e in enumerate(lr_drop_epochs or []):
+    Row 0: Stage 1 — optimized loss | same objective in mrad (normal error).
+    Row 1: Stage 2 — optimized loss (FocalSpotLoss) | same in mrad (centroid error).
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(13, 8))
+
+    def _mark(ax, drops):
+        for j, e in enumerate(drops or []):
             ax.axvline(e, ls=":", color="gray", lw=1.0, alpha=0.8, zorder=0,
                        label="LR reduced" if j == 0 else None)
 
-    # Panel 0 — the actual optimized Stage 1 loss (units depend on loss type).
-    axes[0].plot(ep1, s1_hist, lw=1.5, color="steelblue",  label="train")
+    from matplotlib.ticker import FuncFormatter
+
+    def _plain(val, _pos=None):
+        # Format a tick value as a plain decimal (no x10^n), trimming zeros.
+        if val <= 0:
+            return ""
+        if val >= 1:
+            return f"{val:g}"
+        return f"{val:.10f}".rstrip("0").rstrip(".")
+
+    def _minor_plain(v, _p=None):
+        if v <= 0:
+            return ""
+        m = round(v / 10 ** np.floor(np.log10(v)))
+        return _plain(v) if m in (2, 3, 5) else ""
+
+    def _logy(ax, series, plain=False):
+        # Only switch to log if every plotted value is strictly positive.
+        vals = [v for s in series for v in s if v is not None and np.isfinite(v)]
+        if vals and min(vals) > 0:
+            ax.set_yscale("log")
+            # Plain decimal labels only for the mrad panels; the loss panels keep
+            # the default log (scientific 10^n) formatting.
+            if plain:
+                ax.yaxis.set_major_formatter(FuncFormatter(_plain))
+                ax.yaxis.set_minor_formatter(FuncFormatter(_minor_plain))
+
+    def _annot_min(ax, series, plain):
+        """Mark the lowest value the (val-preferred) curve reaches."""
+        pts = [(i + 1, y) for i, y in enumerate(series or [])
+               if y is not None and np.isfinite(y)]
+        if not pts:
+            return
+        ep, val = min(pts, key=lambda t: t[1])
+        ax.axhline(val, ls=":", color="black", lw=0.9, alpha=0.55, zorder=1)
+        ax.scatter([ep], [val], s=28, color="black", zorder=6)
+        txt = _plain(val) if plain else f"{val:.3g}"
+        ax.annotate(f"min {txt}  (ep {ep})", xy=(0.98, 0.05), xycoords="axes fraction",
+                    ha="right", va="bottom", fontsize=8.5,
+                    bbox=dict(boxstyle="round,pad=0.28", fc="white", ec="black", alpha=0.85))
+
+    # Panel (0,0) — Stage 1 optimized loss.
+    ax = axes[0, 0]
+    ax.plot(range(1, len(s1_hist) + 1), s1_hist, lw=1.5, color="steelblue", label="train")
     if s1_val:
-        axes[0].plot(ep1, s1_val, lw=1.5, color="darkorange", ls="--", label="val")
-    _mark_lr_drops(axes[0])
+        ax.plot(range(1, len(s1_val) + 1), s1_val, lw=1.5, color="darkorange", ls="--", label="val")
+    _mark(ax, lr_drop_epochs)
+    _logy(ax, [s1_hist, s1_val or []])
+    _annot_min(ax, s1_val or s1_hist, plain=False)
     _ylab0 = f"Loss [{s1_loss_units}]" if s1_loss_units else "Loss"
-    axes[0].set(title=f"Stage 1 optimized loss\n{s1_loss_label} — the gradient signal",
-                xlabel="Epoch", ylabel=_ylab0)
-    axes[0].legend(fontsize=8); axes[0].grid(alpha=0.3)
+    ax.set(title=f"Stage 1 optimized loss (log)\n{s1_loss_label} — the gradient signal",
+           xlabel="Epoch", ylabel=_ylab0)
+    ax.legend(fontsize=8); ax.grid(alpha=0.3, which="both")
 
-    # Panel 1 — same objective expressed in mrad (normal error, display-only).
-    axes[1].plot(ep1m, s1_mrad, lw=1.5, color="seagreen",  label="train")
+    # Panel (0,1) — Stage 1 objective in mrad.
+    ax = axes[0, 1]
+    ax.plot(range(1, len(s1_mrad) + 1), s1_mrad, lw=1.5, color="seagreen", label="train")
     if s1_mrad_val:
-        axes[1].plot(ep1m, s1_mrad_val, lw=1.5, color="firebrick", ls="--", label="val")
-    _mark_lr_drops(axes[1])
-    axes[1].set(title="Stage 1 objective in mrad (display only)\nnormal-vector error — same data as left, readable units",
-                xlabel="Epoch", ylabel="Normal error [mrad]")
-    axes[1].legend(fontsize=8); axes[1].grid(alpha=0.3)
+        ax.plot(range(1, len(s1_mrad_val) + 1), s1_mrad_val, lw=1.5, color="firebrick", ls="--", label="val")
+    _mark(ax, lr_drop_epochs)
+    _logy(ax, [s1_mrad, s1_mrad_val or []], plain=True)
+    _annot_min(ax, s1_mrad_val or s1_mrad, plain=True)
+    ax.set(title="Stage 1 objective in mrad (log, display only)\nnormal-vector error — same data as left",
+           xlabel="Epoch", ylabel="Normal error [mrad]")
+    ax.legend(fontsize=8); ax.grid(alpha=0.3, which="both")
 
-    # Panel 2 — Stage 2 focal-spot loss.
-    axes[2].plot(ep2, s2_hist, lw=1.5, color="steelblue",  label="train")
-    if s2_val:
-        axes[2].plot(ep2, s2_val, lw=1.5, color="darkorange", ls="--", label="val")
-    axes[2].set(title="Stage 2 optimized loss\nFocalSpotLoss — the gradient signal",
-                xlabel="Epoch", ylabel="Loss [m²]")
-    axes[2].legend(fontsize=8); axes[2].grid(alpha=0.3)
+    # Panel (1,0) — Stage 2 optimized loss.
+    ax = axes[1, 0]
+    if s2_hist:
+        ax.plot(range(1, len(s2_hist) + 1), s2_hist, lw=1.5, color="steelblue", label="train")
+        if s2_val:
+            ax.plot(range(1, len(s2_val) + 1), s2_val, lw=1.5, color="darkorange", ls="--", label="val")
+        _mark(ax, s2_lr_drop_epochs)
+        _logy(ax, [s2_hist, s2_val or []])
+        _annot_min(ax, s2_val or s2_hist, plain=False)
+        ax.legend(fontsize=8)
+    else:
+        ax.text(0.5, 0.5, "Stage 2 skipped", ha="center", va="center", transform=ax.transAxes)
+    ax.set(title="Stage 2 optimized loss (log)\nFocalSpotLoss — the gradient signal",
+           xlabel="Epoch", ylabel="Loss [m²]")
+    ax.grid(alpha=0.3, which="both")
 
-    fig.suptitle("Raw training losses — what each stage actually minimizes "
-                 "(left two panels are the SAME Stage-1 objective in different units)",
-                 fontsize=10)
-    plt.tight_layout(rect=(0, 0, 1, 0.93))
+    # Panel (1,1) — Stage 2 in mrad (ray-traced centroid error per epoch).
+    ax = axes[1, 1]
+    if s2_mrad:
+        ax.plot(range(1, len(s2_mrad) + 1), s2_mrad, lw=1.5, color="seagreen", label="train")
+        if s2_mrad_val:
+            ax.plot(range(1, len(s2_mrad_val) + 1), s2_mrad_val, lw=1.5, color="firebrick", ls="--", label="val")
+        _mark(ax, s2_lr_drop_epochs)
+        _logy(ax, [s2_mrad, s2_mrad_val or []], plain=True)
+        _annot_min(ax, s2_mrad_val or s2_mrad, plain=True)
+        ax.legend(fontsize=8)
+    else:
+        ax.text(0.5, 0.5, "Stage 2 skipped", ha="center", va="center", transform=ax.transAxes)
+    ax.set(title="Stage 2 objective in mrad (log)\ncentroid landing error — same data as left",
+           xlabel="Epoch", ylabel="Centroid error [mrad]")
+    ax.grid(alpha=0.3, which="both")
+
+    fig.suptitle("Raw training losses (log y-axis) — each stage's objective in loss units and in mrad",
+                 fontsize=11)
+    plt.tight_layout(rect=(0, 0, 1, 0.95))
     fig.savefig(plots_dir / "loss_curves.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
 
@@ -1536,6 +1754,18 @@ def run(
             return kinematic._base_position_deviation.detach()
         return torch.zeros(1, 3, device=device)
 
+    # Geometric initialization (before the Stage-1 refine): closed-form Kabsch seed
+    # of the orientation params. Only for the forward-aim objective; skipped when
+    # Stage 1 is skipped or disabled in config.
+    if (getattr(cfg, "GEOMETRIC_INIT", False)
+            and getattr(cfg, "STAGE1_LOSS", "forward_aim") == "forward_aim"
+            and not skip_stage1):
+        _geometric_init(
+            kinematic, hg, train_motor_pos, train_rays, train_centroids,
+            train_active_mask, _current_base_pos(), cfg, device,
+        )
+        _apply_bounds()
+
     optimizer_s1, scheduler_s1 = _build_s1_optimizer(kinematic, cfg)
 
     # ------------------------------------------------------------------ #
@@ -1724,7 +1954,10 @@ def run(
             # Record the LR in effect this epoch (group 0 is representative — the
             # ReduceLROnPlateau scales all groups by the same factor). A value below
             # the previous epoch's marks a scheduler-triggered LR reduction.
-            _cur_lr = optimizer_s1.param_groups[0]["lr"]
+            # Track the ACTIVE learning rate (max across groups). Group 0 is the
+            # translation group, which is frozen (lr=0) under orientation-only
+            # geometric init, so reading it would never see the scheduler's drop.
+            _cur_lr = max(g["lr"] for g in optimizer_s1.param_groups)
             if stage1_lr_history and _cur_lr < stage1_lr_history[-1] - 1e-12:
                 stage1_lr_drop_epochs.append(epoch)
             stage1_lr_history.append(_cur_lr)
@@ -1855,6 +2088,8 @@ def run(
     # ------------------------------------------------------------------ #
     stage2_history:     list[float] = []
     stage2_val_history: list[float] = []
+    stage2_lr_history:  list[float] = []
+    stage2_lr_drop_epochs: list[int] = []
 
     if skip_stage2:
         log.info("--skip-stage2 set — skipping Stage 2 (FocalSpotLoss).")
@@ -1901,6 +2136,11 @@ def run(
         t_s2 = time.time()
 
         for epoch in tqdm(range(1, cfg.STAGE2_EPOCHS + 1), desc="Stage 2"):
+            _cur_lr2 = max(g["lr"] for g in optimizer_s2.param_groups)
+            if stage2_lr_history and _cur_lr2 < stage2_lr_history[-1] - 1e-12:
+                stage2_lr_drop_epochs.append(epoch)
+            stage2_lr_history.append(_cur_lr2)
+
             optimizer_s2.zero_grad()
             loss_accum = None
 
@@ -2041,12 +2281,23 @@ def run(
     # ------------------------------------------------------------------ #
 
     def _mrad_stats(ev: dict) -> dict:
-        return {
-            "mrad_mean":   float(ev["errs_mrad"].mean()),
-            "mrad_median": float(np.median(ev["errs_mrad"])),
-            "m_mean":      float(ev["errs_m"].mean()),
-            "m_median":    float(np.median(ev["errs_m"])),
+        # Two named metrics (see _eval_test):
+        #   centroid_mrad_*  — ray-traced focal-spot centroid landing (incl. surface)
+        #   direction_mrad_* — direction-only kinematic pointing (excl. surface)
+        # Legacy mrad_mean/mrad_median are kept as aliases of the centroid metric so
+        # existing consumers (aggregate_results.py, plots) are unaffected.
+        stats = {
+            "mrad_mean":            float(ev["errs_mrad"].mean()),
+            "mrad_median":          float(np.median(ev["errs_mrad"])),
+            "m_mean":               float(ev["errs_m"].mean()),
+            "m_median":             float(np.median(ev["errs_m"])),
+            "centroid_mrad_mean":   float(ev["errs_centroid_mrad"].mean()),
+            "centroid_mrad_median": float(np.median(ev["errs_centroid_mrad"])),
         }
+        if "errs_direction_mrad" in ev:
+            stats["direction_mrad_mean"]   = float(ev["errs_direction_mrad"].mean())
+            stats["direction_mrad_median"] = float(np.median(ev["errs_direction_mrad"]))
+        return stats
 
     results = {
         "heliostat_id":    heliostat_id,
@@ -2062,17 +2313,21 @@ def run(
     with open(output_dir / "results.json", "w") as fh:
         json.dump(results, fh, indent=2)
 
-    # Metrics ASCII table
+    # Metrics ASCII table — both named metrics side by side.
     with open(output_dir / "metrics_table.txt", "w") as fh:
-        fh.write(f"Heliostat: {heliostat_id}  |  test samples: {N_TEST}\n\n")
-        fh.write(f"{'Stage':<22} {'Mean [mrad]':>12} {'Median [mrad]':>14} {'Mean [m]':>10} {'Median [m]':>10}\n")
-        fh.write("-" * 70 + "\n")
+        fh.write(f"Heliostat: {heliostat_id}  |  test samples: {N_TEST}\n")
+        fh.write("centroid = ray-traced focal-spot centroid landing (incl. surface); "
+                 "direction = kinematic pointing (excl. surface)\n\n")
+        fh.write(f"{'Stage':<22} {'centroid mean':>14} {'centroid median':>16} "
+                 f"{'direction mean':>16} {'direction median':>18}\n")
+        fh.write("-" * 90 + "\n")
         for ev in [pre_eval, s1_eval, s2_eval]:
-            mn  = ev["errs_mrad"].mean()
-            med = float(np.median(ev["errs_mrad"]))
+            c_mn  = ev["errs_centroid_mrad"].mean()
+            c_med = float(np.median(ev["errs_centroid_mrad"]))
+            d_mn  = ev["errs_direction_mrad"].mean()
+            d_med = float(np.median(ev["errs_direction_mrad"]))
             fh.write(
-                f"{ev['label']:<22} {mn:12.4f} {med:14.4f}"
-                f" {mn * hel_dist_m / 1000:10.6f} {med * hel_dist_m / 1000:10.6f}\n"
+                f"{ev['label']:<22} {c_mn:14.4f} {c_med:16.4f} {d_mn:16.4f} {d_med:18.4f}\n"
             )
 
     # Convergence CSV
@@ -2177,12 +2432,20 @@ def run(
         trail_checkpoints, stage1_mrad_history, stage1_mrad_val_history,
         cfg.STAGE1_EPOCHS, plots_dir, heliostat_id,
     )
+    # Stage-2 accuracy in mrad, per epoch (ray-traced centroid error from the
+    # trail checkpoints captured during Stage 2, i.e. epoch > STAGE1_EPOCHS).
+    _s2_ckpts = [c for c in trail_checkpoints if c["epoch"] > cfg.STAGE1_EPOCHS]
+    _s2_mrad     = [c["mrad_mean"] for c in _s2_ckpts]
+    _s2_mrad_val = [c["mrad_val_mean"] for c in _s2_ckpts
+                    if c.get("mrad_val_mean") is not None and np.isfinite(c.get("mrad_val_mean", float("nan")))]
     _plot_loss_curves(
         stage1_history, stage1_val_history,
         stage1_mrad_history, stage1_mrad_val_history,
         stage2_history, stage2_val_history,
         plots_dir, s1_loss_label=_s1_loss_label, s1_loss_units=_s1_loss_units,
         lr_drop_epochs=stage1_lr_drop_epochs,
+        s2_mrad=_s2_mrad, s2_mrad_val=_s2_mrad_val,
+        s2_lr_drop_epochs=stage2_lr_drop_epochs,
     )
 
     if pert_tensors is not None:

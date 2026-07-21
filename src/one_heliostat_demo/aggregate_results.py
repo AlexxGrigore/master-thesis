@@ -60,6 +60,104 @@ def _load_results(output_dir: pathlib.Path, heliostat_ids: list[str]) -> dict:
     return results
 
 
+def _log_actual_ticks(axis, vmin: float, vmax: float) -> None:
+    """Label a log axis with actual round values (1, 2, 5, 10, 20, 50, …) instead of 10^k."""
+    from matplotlib.ticker import FixedLocator, FuncFormatter
+    cand = [0.5, 1, 2, 3, 5, 10, 20, 30, 50, 100, 200, 300, 500, 1000, 2000, 5000]
+    ticks = [t for t in cand if vmin <= t <= vmax]
+    axis.set_major_locator(FixedLocator(ticks))
+    axis.set_minor_locator(FixedLocator([]))
+    axis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+
+
+def _compute_real_pre_mrad(heliostat_ids: list[str]) -> dict:
+    """True geometric before-training miss per heliostat (mean, median) in mrad.
+
+    The training pipeline's pre_training metric is the ray-traced focal-spot centroid,
+    which SATURATES (clamps to the target-bitmap edge) when the uncalibrated beam misses
+    the target — so badly-aimed heliostats look ~90 mrad when they are really hundreds.
+    This recomputes the honest, unbounded miss: reflect one ray off the mirror at its
+    nominal kinematics, intersect the target plane through the measured centroid, and
+    measure the 3-D distance. Real-data only; heliostats that can't be loaded are omitted
+    (the caller keeps the stored value).
+    """
+    import importlib.util
+
+    import torch
+
+    cfg_path = _here / "single_heliostat" / "config.py"
+    spec = importlib.util.spec_from_file_location("_sh_cfg", cfg_path)
+    cfg = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(cfg)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"  real pre-miss: could not load config ({exc}); keeping stored values")
+        return {}
+
+    csv_path = pathlib.Path(cfg.BENCHMARK_CSV)
+    if not csv_path.exists():
+        log.info("  real pre-miss: benchmark CSV absent; keeping stored pre values")
+        return {}
+
+    from artist.scenario.scenario import Scenario
+    from artist.io.paint_calibration_parser import PaintCalibrationDataParser
+    from utils.evaluation import build_heliostat_data_mapping
+
+    device = torch.device("cpu")
+    plane_n = torch.tensor([0.0, 1.0, 0.0])
+    cal_dir, flux_dir = pathlib.Path(cfg.CALIBRATION_DIR), pathlib.Path(cfg.REAL_FLUX_DIR)
+
+    maps: dict = {}
+    for split in ("train", "validation", "test"):
+        try:
+            for h, cs, fs in build_heliostat_data_mapping(csv_path, cal_dir, flux_dir, split):
+                maps.setdefault(h, [[], []])
+                maps[h][0] += list(cs); maps[h][1] += list(fs)
+        except Exception:  # noqa: BLE001
+            pass
+
+    parser = PaintCalibrationDataParser(
+        centroid_extraction_method=getattr(cfg, "CENTROID_METHOD", "UTIS"))
+    out: dict = {}
+    for hid in heliostat_ids:
+        if hid not in maps:
+            continue
+        sc_path = pathlib.Path(cfg.SCENARIO_PATH_TEMPLATE.format(heliostat_id=hid))
+        if not sc_path.exists():
+            continue
+        try:
+            with h5py.File(sc_path, "r") as fh:
+                scenario = Scenario.load_scenario_from_hdf5(
+                    scenario_file=fh, device=device,
+                    number_of_surface_points_per_facet=torch.tensor([2, 2]))
+            hg = scenario.heliostat_field.heliostat_groups[0]
+            kin = hg.kinematics
+            cals, fluxes = maps[hid]
+            _, cents, rays, motors, amask, _ = parser.parse_data_for_reconstruction(
+                heliostat_data_mapping=[(hid, cals, fluxes)],
+                heliostat_group=hg, scenario=scenario, device=device)
+            hg.activate_heliostats(active_heliostats_mask=amask, device=device)
+            with torch.no_grad():
+                orient = kin.motor_positions_to_orientations(motor_positions=motors, device=device)
+                n = torch.nn.functional.normalize(
+                    (orient @ torch.tensor([0.0, 0.0, 1.0, 0.0]))[:, :3], dim=-1)
+                o = (orient @ torch.tensor([0.0, 0.0, 0.0, 1.0]))[:, :3]
+                i = torch.nn.functional.normalize(rays[:, :3], dim=-1)
+                r = i - 2.0 * (i * n).sum(-1, keepdim=True) * n
+                denom = (r * plane_n).sum(-1)
+                tt = ((cents[:, :3] - o) * plane_n).sum(-1) / torch.where(
+                    denom.abs() < 1e-9, torch.full_like(denom, float("nan")), denom)
+                p = o + tt.unsqueeze(-1) * r
+                rng = (cents[:, :3] - o).norm(dim=-1)
+                mrad = (p - cents[:, :3]).norm(dim=-1) / rng * 1000
+                mrad = mrad[torch.isfinite(mrad)]
+            if mrad.numel():
+                out[hid] = (float(mrad.mean()), float(mrad.median()))
+        except Exception as exc:  # noqa: BLE001
+            log.warning(f"  real pre-miss failed for {hid}: {exc}")
+    return out
+
+
 def _load_convergence(output_dir: pathlib.Path, heliostat_ids: list[str]) -> dict:
     """
     Returns {hid: {"pre": row|None, "stage1": [rows], "stage2": [rows]}}
@@ -270,10 +368,20 @@ def _plot_accuracy_sorted(results: dict, agg_dir: pathlib.Path) -> None:
                label=f"Mean = {field_mean:.1f} mrad")
     ax.axhline(field_median, color="black",  ls=":",  lw=1.5,
                label=f"Median = {field_median:.1f} mrad")
+    # Real geometric pre-miss can span 2 mrad to ~1000 mrad; use a log axis so the
+    # post-training bars stay readable next to the tall before-training bars.
+    big_range = float(np.nanmax(pre_mrad)) > 150 and float(np.nanmin(s2_mrad)) > 0
+    if big_range:
+        ax.set_yscale("log")
+        ymin = max(0.5, float(np.nanmin(s2_mrad)) * 0.6)
+        ymax = float(np.nanmax(pre_mrad)) * 1.3
+        ax.set_ylim(ymin, ymax)
+        _log_actual_ticks(ax.yaxis, ymin, ymax)
     ax.set_xticks(x)
     ax.set_xticklabels(hids, rotation=90, fontsize=7)
-    ax.set_ylabel("Test mrad (mean per heliostat)")
-    ax.set_title("Per-heliostat test accuracy — sorted (after Stage 2)")
+    ax.set_ylabel("Test mrad (mean per heliostat)" + ("  [log scale]" if big_range else ""))
+    ax.set_title("Per-heliostat test accuracy — sorted (after Stage 2)"
+                 + ("\nbefore = true geometric miss (unbounded)" if big_range else ""))
 
     # Legend: mean/median lines plus the accuracy-band colour key.
     from matplotlib.patches import Patch
@@ -308,9 +416,16 @@ def _plot_accuracy_distribution(results: dict, agg_dir: pathlib.Path) -> None:
     fig, ax = plt.subplots(figsize=(9, 5.5))
 
     # Shared bins over the combined range so the two histograms are comparable.
+    # Use log-spaced bins when the (real, unbounded) pre values span a wide range.
     n_bins = max(8, len(s2_mrad) // 5)
-    lo, hi = 0.0, float(max(pre_mrad.max(), s2_mrad.max()))
-    bins = np.linspace(lo, hi, n_bins + 1)
+    hi = float(max(pre_mrad.max(), s2_mrad.max()))
+    if hi > 150:
+        lo = max(0.5, float(min(pre_mrad.min(), s2_mrad.min())))
+        bins = np.logspace(np.log10(lo), np.log10(hi), n_bins + 1)
+        ax.set_xscale("log")
+        _log_actual_ticks(ax.xaxis, lo, hi)
+    else:
+        bins = np.linspace(0.0, hi, n_bins + 1)
 
     ax.hist(pre_mrad, bins=bins, color="firebrick",  edgecolor="white", alpha=0.55,
             zorder=2, label="Before training (pre)")
@@ -641,6 +756,7 @@ def _write_summary_table(results: dict, agg_dir: pathlib.Path) -> None:
 def aggregate(
     output_dir: pathlib.Path,
     heliostat_ids: list[str] | None = None,
+    geometric_pre: bool = True,
 ) -> None:
     """
     Aggregate results from a run_all.py output directory.
@@ -672,6 +788,19 @@ def aggregate(
     results   = _load_results(output_dir, heliostat_ids)
     conv_data = _load_convergence(output_dir, heliostat_ids)
 
+    # Replace the SATURATED pre-training metric (ray-traced centroid, capped when the
+    # beam misses the target bitmap) with the TRUE geometric miss. Real-data runs only;
+    # falls back to the stored value where the geometric miss can't be computed. Disable
+    # with geometric_pre=False for synthetic runs (where the stored pre is already honest).
+    if geometric_pre and results:
+        real = _compute_real_pre_mrad(list(results.keys()))
+        for hid, (mn, md) in real.items():
+            results[hid].setdefault("pre_training_saturated", dict(results[hid]["pre_training"]))
+            results[hid]["pre_training"]["mrad_mean"] = mn
+            results[hid]["pre_training"]["mrad_median"] = md
+        if real:
+            log.info(f"  real geometric pre-miss applied to {len(real)}/{len(results)} heliostats")
+
     _plot_mrad_convergence(conv_data, agg_dir)
     _plot_loss_curves(conv_data, agg_dir)
     _plot_accuracy_sorted(results, agg_dir)
@@ -692,10 +821,14 @@ def main() -> None:
                         help="run_all.py output directory to aggregate")
     parser.add_argument("--heliostat-ids", nargs="+", default=None, metavar="ID",
                         help="Subset of heliostat IDs (default: all with results.json)")
+    parser.add_argument("--no-geometric-pre", action="store_true",
+                        help="Keep the stored (saturated) pre-training metric instead of "
+                             "recomputing the true geometric miss. Use for synthetic runs.")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)-8s  %(message)s")
-    aggregate(output_dir=args.output_dir, heliostat_ids=args.heliostat_ids)
+    aggregate(output_dir=args.output_dir, heliostat_ids=args.heliostat_ids,
+              geometric_pre=not args.no_geometric_pre)
 
 
 if __name__ == "__main__":

@@ -13,3 +13,4 @@ logs/*
 **/*.pyc
 **/*.pyo
 src/runtime_log.txt
+/mathias_results
