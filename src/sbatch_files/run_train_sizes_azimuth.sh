@@ -3,6 +3,7 @@
 #SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/train_sizes_azimuth_out_%j.log
 #SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/train_sizes_azimuth_err_%j.log
 #SBATCH --time=05:00:00
+#SBATCH --qos=medium
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:a40:1
