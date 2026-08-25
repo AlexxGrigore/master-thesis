@@ -1,10 +1,7 @@
 """Extended loss functions for kinematic reconstruction experiments."""
 from __future__ import annotations
 
-import numpy as np
-from scipy.ndimage import distance_transform_edt
 import torch
-import torch.nn.functional as F
 
 from artist.util import indices
 
@@ -223,285 +220,151 @@ class ForwardAimLoss:
         return chord2
 
 
-class ContourLoss:
-    """Contour-based loss matching the upper edge of the focal spot.
 
-    Based on Tristan Wortberg (2025). Instead of collapsing each flux image to
-    a single COM point, this loss extracts a 2-D soft contour image by detecting
-    the *upper* edge of the focal spot (which is unaffected by blocking/shading)
-    and compares predicted vs. measured contours via three complementary terms:
+# ---------------------------------------------------------------------------
+# Robust reductions for the Stage-1 objective
+# ---------------------------------------------------------------------------
 
-    Coarse (soft distance field)
-        Each predicted contour pixel is penalised by its distance to the nearest
-        GT contour pixel.  Provides gradients even when contours don't overlap.
+def robust_reduce(
+    chord_squared: torch.Tensor,
+    mode: str = "l2",
+    delta_mrad: float = 3.0,
+    trim_fraction: float = 0.25,
+) -> torch.Tensor:
+    """Aggregate ForwardAimLoss per-sample residuals with a robust estimator.
 
-    Fine (DICE coefficient)
-        1 − DICE between predicted and GT contour images.  Sensitive to precise
-        pixel-level alignment but needs initial overlap to produce gradients.
+    This changes only HOW the per-sample residuals are combined, not what is
+    measured. The plain mean of the squared chord (``"l2"``) is a least-squares
+    fit: it weights every sample by the square of its error, so a handful of
+    bad calibration samples dominate the solution and pull the fit off-centre.
+    Robust reductions cap or discard that influence.
 
-    Gravity (COM distance)
-        Euclidean distance between the COMs of the two contour images.  Acts as a
-        smooth global gradient, preventing stalls when coarse/fine are flat.
+    The residual is expressed in mrad, ``r = ||n_fwd - n_desired|| * 1000``
+    (the small-angle chord, within 0.1% of the geodesic angle over the whole
+    working range), so ``delta_mrad`` is directly interpretable.
 
-    The contour-extraction pipeline (applied identically to both images):
-        1. Per-image min-max normalisation → [0, 1]
-        2. q rounds of bilinear up/down-sampling + Gaussian blur (noise removal)
-        3. Soft thresholding via sigmoid (centre τ, sharpness η)
-        4. Soft erosion via 3×3 mean convolution (suppress isolated pixels)
-        5. Vertical Sobel convolution + ReLU → upper-edge contour image C
+    Modes
+    -----
+    ``"l2"``      mean(r²)·1e-6 — identical to the historical ``lps.mean()``.
+    ``"huber"``   quadratic within δ, linear beyond: bounds each outlier's
+                  gradient to a constant instead of letting it grow with r.
+    ``"soft_l1"`` pseudo-Huber ``2δ²(sqrt(1+(r/δ)²)−1)`` — the same behaviour
+                  without the branch, smooth everywhere.
+    ``"trimmed"`` least-trimmed-squares: drop the worst ``trim_fraction`` of
+                  samples and take the mean of the rest.
+
+    Trade-off (measured on AA23): robust modes improve the MEDIAN pointing
+    error but cost mean and centroid accuracy, because they buy the bulk of the
+    distribution by sacrificing the tail — and the centroid metric is
+    tail-sensitive. Always report both.
 
     Parameters
     ----------
-    smoothing_rounds : int
-        Number of bilinear up/down passes before Gaussian blur (q).
-    gaussian_kernel_size : int
-        Kernel size for Gaussian blur (odd integer).
-    gaussian_sigma : float
-        Standard deviation for Gaussian blur.
-    threshold_tau : float
-        Sigmoid centre threshold τ.  Wortberg default: 0.58.
-    threshold_eta : float
-        Sigmoid sharpness η.  Wortberg default: 70.0.
-    weight_coarse : float
-        Weight β for the coarse distance-field term.
-    weight_gravity : float
-        Weight γ for the gravity (COM-distance) term.
-        The fine (DICE) term receives weight 1 − β − γ.
+    chord_squared : torch.Tensor
+        Per-sample squared chord distance from ``ForwardAimLoss``. Shape ``[N]``.
+    mode : str
+        One of ``"l2"``, ``"huber"``, ``"soft_l1"``, ``"trimmed"``.
+    delta_mrad : float
+        Huber / soft-L1 transition point δ, in mrad.
+    trim_fraction : float
+        Fraction of the largest residuals discarded in ``"trimmed"`` mode.
 
-    Notes
-    -----
-    The distance transform (coarse term) is computed via
-    ``scipy.ndimage.distance_transform_edt`` on the CPU.  It is applied only to
-    the binarised GT contour (no gradients needed), so it does not appear in the
-    autograd graph.  Pre-computing and caching D_G before training starts would
-    eliminate this per-epoch CPU cost.
+    Returns
+    -------
+    torch.Tensor
+        Scalar loss. Scaled to the chord² convention so that ``"l2"`` reproduces
+        the previous objective exactly and learning rates stay comparable.
     """
+    r2_mrad = chord_squared * 1e6                     # (mrad)²
+    scale = 1e-6                                      # back to the chord² scale
 
-    def __init__(
-        self,
-        smoothing_rounds: int = 2,
-        gaussian_kernel_size: int = 5,
-        gaussian_sigma: float = 1.0,
-        threshold_tau: float = 0.58,
-        threshold_eta: float = 70.0,
-        weight_coarse: float = 0.3,
-        weight_gravity: float = 0.2,
-    ) -> None:
-        self.smoothing_rounds       = smoothing_rounds
-        self.gaussian_kernel_size   = gaussian_kernel_size
-        self.gaussian_sigma         = gaussian_sigma
-        self.threshold_tau          = threshold_tau
-        self.threshold_eta          = threshold_eta
-        self.weight_coarse          = weight_coarse
-        self.weight_gravity         = weight_gravity
-        self.weight_fine            = 1.0 - weight_coarse - weight_gravity
-        # Cache: hash(binary_gt[i].tobytes()) -> float32 distance-transform array.
-        # GT images are fixed across epochs, so the cache fills in epoch 1 and
-        # gives 100% hits from epoch 2 onward, eliminating the per-epoch CPU cost.
-        self._dt_cache: dict[int, np.ndarray] = {}
+    if mode == "l2":
+        return r2_mrad.mean() * scale
 
-    def __call__(
-        self,
-        prediction: torch.Tensor,
-        ground_truth: torch.Tensor,
-        target_area_indices=None,
-        reduction_dimensions=None,
-        device: torch.device | None = None,
-    ) -> torch.Tensor:
-        """Compute per-sample contour loss.
+    if mode == "trimmed":
+        if not 0.0 <= trim_fraction < 1.0:
+            raise ValueError(f"trim_fraction must be in [0, 1), got {trim_fraction}")
+        n_keep = max(1, int(round(r2_mrad.numel() * (1.0 - trim_fraction))))
+        kept, _ = torch.topk(r2_mrad, n_keep, largest=False)
+        return kept.mean() * scale
 
-        Parameters
-        ----------
-        prediction : torch.Tensor, shape [N, H, W]
-            Predicted flux images from the ray tracer.
-        ground_truth : torch.Tensor, shape [N, H, W]
-            Measured flux images from the dataset.
+    # sqrt is safe: the +1e-12 keeps the gradient finite at r = 0, and both
+    # remaining modes are quadratic there anyway.
+    r = torch.sqrt(chord_squared + 1e-12) * 1000.0
+    d = float(delta_mrad)
 
-        Returns
-        -------
-        torch.Tensor, shape [N]
-            Per-sample scalar loss values.
-        """
-        if device is not None:
-            ground_truth = ground_truth.to(device)
+    if mode == "huber":
+        quad = 0.5 * r2_mrad
+        lin = d * (r - 0.5 * d)
+        return torch.where(r <= d, quad, lin).mean() * (2.0 * scale)
 
-        c_pred = self._to_contour(prediction)
-        c_gt   = self._to_contour(ground_truth)
+    if mode == "soft_l1":
+        return (2.0 * d * d * (torch.sqrt(1.0 + (r / d) ** 2) - 1.0)).mean() * scale
 
-        coarse  = self._coarse_loss(c_pred, c_gt)
-        fine    = self._fine_loss(c_pred, c_gt)
-        gravity = self._gravity_loss(c_pred, c_gt)
+    raise ValueError(
+        f"Unknown reduction {mode!r}. Choose from 'l2', 'huber', 'soft_l1', 'trimmed'."
+    )
 
-        return self.weight_coarse * coarse + self.weight_fine * fine + self.weight_gravity * gravity
 
-    # ------------------------------------------------------------------
-    # Preprocessing pipeline
-    # ------------------------------------------------------------------
+def robust_reduce_squared(
+    squared_residual: torch.Tensor,
+    mode: str = "l2",
+    delta: float = 1.0,
+    trim_fraction: float = 0.25,
+) -> torch.Tensor:
+    """Robustly aggregate per-sample SQUARED residuals, in the residual's own units.
 
-    def _normalize(self, x: torch.Tensor) -> torch.Tensor:
-        """Per-image min-max normalisation to [0, 1]."""
-        N = x.shape[0]
-        mn = x.view(N, -1).min(dim=1).values
-        mx = x.view(N, -1).max(dim=1).values
-        return (x - mn.view(N, 1, 1)) / (mx - mn).view(N, 1, 1).clamp(min=1e-12)
+    The Stage-2 counterpart of :func:`robust_reduce`. Stage 2 measures a
+    focal-spot miss distance on the target plane, so the residual is in metres
+    and ``delta`` must be given in metres too (convert an angular tolerance with
+    ``delta_m = delta_mrad * heliostat_distance_m / 1000``).
 
-    def _smooth(self, x: torch.Tensor) -> torch.Tensor:
-        """q rounds of bilinear up/down-sampling followed by Gaussian blur."""
-        H, W = x.shape[-2], x.shape[-1]
-        for _ in range(self.smoothing_rounds):
-            x = F.interpolate(
-                x.unsqueeze(1), scale_factor=2, mode="bilinear", align_corners=False
-            ).squeeze(1)
-            x = F.interpolate(
-                x.unsqueeze(1), size=(H, W), mode="bilinear", align_corners=False
-            ).squeeze(1)
-        ks = self.gaussian_kernel_size
-        coords = torch.arange(ks, device=x.device, dtype=x.dtype) - ks // 2
-        g = torch.exp(-0.5 * (coords / self.gaussian_sigma) ** 2)
-        g = g / g.sum()
-        kernel = (g[:, None] * g[None, :]).view(1, 1, ks, ks)
-        return F.conv2d(x.unsqueeze(1), kernel, padding=ks // 2).squeeze(1)
+    ``"l2"`` returns ``squared_residual.mean()`` unchanged, so it reproduces the
+    historical objective exactly. All modes operate on the same residual scale,
+    which keeps the arms of a comparison on equal footing under gradient
+    clipping (a rescaled loss would otherwise clip differently).
 
-    def _soft_threshold(self, x: torch.Tensor) -> torch.Tensor:
-        """Differentiable sigmoid-based soft threshold."""
-        return torch.sigmoid(self.threshold_eta * (x - self.threshold_tau))
+    Parameters
+    ----------
+    squared_residual : torch.Tensor
+        Per-sample squared residual, e.g. squared metres. Shape ``[N]``.
+    mode : str
+        ``"l2"``, ``"huber"``, ``"soft_l1"`` or ``"trimmed"``.
+    delta : float
+        Transition point, in the SAME units as the (unsquared) residual.
+    trim_fraction : float
+        Fraction of the largest residuals discarded in ``"trimmed"`` mode.
 
-    def _soft_erosion(self, x: torch.Tensor) -> torch.Tensor:
-        """3×3 mean convolution to suppress isolated noise pixels."""
-        kernel = torch.ones(1, 1, 3, 3, device=x.device, dtype=x.dtype) / 9.0
-        return F.conv2d(x.unsqueeze(1), kernel, padding=1).squeeze(1)
+    Returns
+    -------
+    torch.Tensor
+        Scalar loss, scaled to the squared-residual convention so learning rates
+        stay comparable across modes.
+    """
+    if mode == "l2":
+        return squared_residual.mean()
 
-    def _sobel_upper_edge(self, x: torch.Tensor) -> torch.Tensor:
-        """Vertical Sobel filter detecting the upper edge of bright regions.
+    if mode == "trimmed":
+        if not 0.0 <= trim_fraction < 1.0:
+            raise ValueError(f"trim_fraction must be in [0, 1), got {trim_fraction}")
+        n_keep = max(1, int(round(squared_residual.numel() * (1.0 - trim_fraction))))
+        kept, _ = torch.topk(squared_residual, n_keep, largest=False)
+        return kept.mean()
 
-        Gives a positive response where pixels below are brighter than pixels
-        above (the upper boundary of the focal spot).  ReLU suppresses the lower
-        edge and any negative artefacts.
-        """
-        kernel = torch.tensor(
-            [[-1.0, -2.0, -1.0],
-             [ 0.0,  0.0,  0.0],
-             [ 1.0,  2.0,  1.0]],
-            device=x.device, dtype=x.dtype,
-        ).view(1, 1, 3, 3)
-        return F.relu(F.conv2d(x.unsqueeze(1), kernel, padding=1).squeeze(1))
+    # Safe sqrt: both remaining modes are quadratic at 0, and the epsilon keeps
+    # the gradient finite there.
+    r = torch.sqrt(squared_residual + 1e-12)
+    d = float(delta)
 
-    def _to_contour(self, x: torch.Tensor) -> torch.Tensor:
-        """Full preprocessing pipeline → soft contour image [N, H, W]."""
-        x = self._normalize(x)
-        x = self._smooth(x)
-        x = self._soft_threshold(x)
-        x = self._soft_erosion(x)
-        return self._sobel_upper_edge(x)
+    if mode == "huber":
+        # x2 so the quadratic branch matches mean(r^2) — same scale as "l2".
+        return torch.where(
+            r <= d, 0.5 * squared_residual, d * (r - 0.5 * d)
+        ).mean() * 2.0
 
-    # ------------------------------------------------------------------
-    # Loss terms
-    # ------------------------------------------------------------------
+    if mode == "soft_l1":
+        return (2.0 * d * d * (torch.sqrt(1.0 + (r / d) ** 2) - 1.0)).mean()
 
-    def _coarse_loss(self, c_pred: torch.Tensor, c_gt: torch.Tensor) -> torch.Tensor:
-        """Soft distance-field loss: predicted contour weighted by distance to GT contour."""
-        N = c_pred.shape[0]
-        binary_gt = (c_gt.detach() > 0.5).cpu().numpy()  # [N, H, W] bool
-        # distance_transform_edt: each non-zero pixel → distance to nearest zero pixel.
-        # Passing ~binary_gt gives each non-contour pixel its distance to the nearest
-        # contour pixel; contour pixels themselves get 0.
-        d_gt_arrays = []
-        for i in range(N):
-            key = hash(binary_gt[i].tobytes())
-            if key not in self._dt_cache:
-                self._dt_cache[key] = distance_transform_edt(~binary_gt[i]).astype(np.float32)
-            d_gt_arrays.append(self._dt_cache[key])
-        d_gt_t = torch.from_numpy(np.stack(d_gt_arrays, axis=0)).to(
-            device=c_pred.device, dtype=c_pred.dtype
-        )
-        return (c_pred * d_gt_t).sum(dim=(-2, -1))
-
-    def _fine_loss(self, c_pred: torch.Tensor, c_gt: torch.Tensor) -> torch.Tensor:
-        """1 − DICE coefficient between predicted and GT contour images."""
-        eps = 1e-6
-        intersection = (c_pred * c_gt).sum(dim=(-2, -1))
-        union = c_pred.sum(dim=(-2, -1)) + c_gt.sum(dim=(-2, -1))
-        dice = 2.0 * intersection / (union + eps)
-        return 1.0 - dice
-
-    def _gravity_loss(self, c_pred: torch.Tensor, c_gt: torch.Tensor) -> torch.Tensor:
-        """Euclidean distance between the COMs of predicted and GT contour images."""
-        eps = 1e-6
-        N, H, W = c_pred.shape
-        ys = torch.arange(H, device=c_pred.device, dtype=c_pred.dtype)
-        xs = torch.arange(W, device=c_pred.device, dtype=c_pred.dtype)
-
-        def _com(c: torch.Tensor) -> torch.Tensor:
-            total = c.sum(dim=(-2, -1)).clamp(min=eps)
-            cy = (c * ys[None, :, None]).sum(dim=(-2, -1)) / total
-            cx = (c * xs[None, None, :]).sum(dim=(-2, -1)) / total
-            return torch.stack([cy, cx], dim=-1)  # [N, 2]
-
-        # Detach GT: we only backpropagate through the predicted side.
-        return torch.norm(_com(c_pred) - _com(c_gt).detach(), dim=-1)
-
-    # ------------------------------------------------------------------
-    # Component-aware forward (for logging)
-    # ------------------------------------------------------------------
-
-    def forward_with_components(
-        self,
-        prediction: torch.Tensor,
-        ground_truth: torch.Tensor,
-        target_area_indices=None,
-        reduction_dimensions=None,
-        device: torch.device | None = None,
-    ) -> tuple[torch.Tensor, float, float, float]:
-        """Like __call__ but also returns unweighted per-term means for logging.
-
-        Returns
-        -------
-        total : torch.Tensor, shape [N]  — weighted sum (same as __call__)
-        mean_coarse : float              — unweighted coarse term mean over N
-        mean_fine   : float              — unweighted fine term mean over N
-        mean_gravity: float              — unweighted gravity term mean over N
-        """
-        if device is not None:
-            ground_truth = ground_truth.to(device)
-        c_pred = self._to_contour(prediction)
-        c_gt   = self._to_contour(ground_truth)
-        coarse  = self._coarse_loss(c_pred, c_gt)
-        fine    = self._fine_loss(c_pred, c_gt)
-        gravity = self._gravity_loss(c_pred, c_gt)
-        total   = self.weight_coarse * coarse + self.weight_fine * fine + self.weight_gravity * gravity
-        return (
-            total,
-            coarse.detach().mean().item(),
-            fine.detach().mean().item(),
-            gravity.detach().mean().item(),
-        )
-
-    # ------------------------------------------------------------------
-    # Pipeline introspection (for step-by-step visualization)
-    # ------------------------------------------------------------------
-
-    @torch.no_grad()
-    def get_intermediate_steps(
-        self, x: torch.Tensor
-    ) -> list[tuple[str, np.ndarray]]:
-        """Run the contour pipeline on a single image and return each intermediate.
-
-        Parameters
-        ----------
-        x : torch.Tensor, shape [1, H, W]  — one flux image (batch dim required)
-
-        Returns
-        -------
-        list of (step_name, H×W float32 numpy array) in pipeline order:
-            Raw, Normalized, Smoothed, Thresholded, Eroded, Contour
-        """
-        def _np(t: torch.Tensor) -> np.ndarray:
-            return t[0].cpu().float().numpy()
-
-        steps = [("Raw", _np(x))]
-        x = self._normalize(x);    steps.append(("Normalized",  _np(x)))
-        x = self._smooth(x);       steps.append(("Smoothed",    _np(x)))
-        x = self._soft_threshold(x); steps.append(("Thresholded", _np(x)))
-        x = self._soft_erosion(x); steps.append(("Eroded",      _np(x)))
-        x = self._sobel_upper_edge(x); steps.append(("Contour",  _np(x)))
-        return steps
+    raise ValueError(
+        f"Unknown reduction {mode!r}. Choose from 'l2', 'huber', 'soft_l1', 'trimmed'."
+    )

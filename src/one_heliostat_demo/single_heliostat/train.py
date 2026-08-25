@@ -53,7 +53,20 @@ from artist.scenario.scenario import Scenario
 from artist.util import constants as _const, get_device, indices, set_logger_config
 from artist.util import setup_distributed_environment
 
-from artist_extensions.loss_functions_ext import AlignmentLoss, ForwardAimLoss, MotorStepLoss, NormalAlignmentLoss
+from artist_extensions.contour_loss import (
+    ContourExtractor,
+    HybridFocalContourLoss,
+    WortbergContourLoss,
+    build_contour_ground_truth,
+)
+from artist_extensions.loss_functions_ext import (
+    AlignmentLoss,
+    ForwardAimLoss,
+    MotorStepLoss,
+    NormalAlignmentLoss,
+    robust_reduce,
+    robust_reduce_squared,
+)
 from utils.synth_data import _forward_pass, SyntheticDatasetParser
 
 log = logging.getLogger(__name__)
@@ -63,8 +76,11 @@ log = logging.getLogger(__name__)
 # Helpers: scenario / data loading
 # ---------------------------------------------------------------------------
 
-def _load_scenario(heliostat_id: str, cfg, device: torch.device):
-    scenario_path = pathlib.Path(cfg.SCENARIO_PATH_TEMPLATE.format(heliostat_id=heliostat_id))
+def _load_scenario(heliostat_id: str, cfg, device: torch.device, scenario_path=None):
+    if scenario_path is None:
+        scenario_path = pathlib.Path(cfg.SCENARIO_PATH_TEMPLATE.format(heliostat_id=heliostat_id))
+    else:
+        scenario_path = pathlib.Path(scenario_path)
     if not scenario_path.exists():
         raise FileNotFoundError(f"Scenario not found: {scenario_path}")
 
@@ -78,7 +94,10 @@ def _load_scenario(heliostat_id: str, cfg, device: torch.device):
         )
 
     hg = scenario.heliostat_field.heliostat_groups[0]
-    hel_pos      = hg.positions[0, :3].float()
+    # Multi-heliostat (neighbourhood) scenarios: resolve the studied row by name,
+    # never assume row 0. Only the studied row is ever activated/trained.
+    hel_idx      = hg.names.index(heliostat_id)
+    hel_pos      = hg.positions[hel_idx, :3].float()
     target_areas = scenario.solar_tower.target_areas
     target_ctrs  = target_areas[indices.planar_target_areas].centers[:, :3].float()
     tower_ref    = target_ctrs.mean(dim=0)
@@ -86,7 +105,20 @@ def _load_scenario(heliostat_id: str, cfg, device: torch.device):
 
     log.info(f"Scenario: {scenario_path}")
     log.info(f"Heliostat {heliostat_id}  |  dist-to-tower = {hel_dist_m:.1f} m")
-    return scenario, hg, hel_dist_m
+    if hg.number_of_heliostats > 1:
+        log.info(f"  group members {hg.names} — studied row {hel_idx}; "
+                 "all others are passive (blocking) neighbours, never trained")
+    return scenario, hg, hel_dist_m, hel_idx
+
+
+def _one_hot_active(index: int, count: int, size: int, device: torch.device) -> torch.Tensor:
+    """Active mask of length `size` holding `count` instances at `index`, zero elsewhere.
+
+    Single-heliostat scenarios reduce to the historical ``torch.tensor([count])``.
+    """
+    mask = torch.zeros(size, dtype=torch.long, device=device)
+    mask[index] = count
+    return mask
 
 
 def _load_split(
@@ -185,6 +217,8 @@ def _pool_and_split(
     cfg,
     device: torch.device,
     swap_val_test: bool = True,
+    hel_idx: int = 0,
+    n_hel: int = 1,
 ):
     """
     Aggregate train+val+test into one pool, filter for active pixels, then
@@ -289,11 +323,130 @@ def _pool_and_split(
             pool_centroids[t],
             pool_rays[t],
             pool_motor_pos[t],
-            torch.tensor([len(idx)], device=device, dtype=torch.long),
+            _one_hot_active(hel_idx, len(idx), n_hel, device),
             pool_target_mask[t],
         )
 
     return _slice(train_idx), _slice(val_idx), _slice(test_idx), pool_rays
+
+
+def _load_fixed_split_real(heliostat_id: str, cfg, hg, scenario, device: torch.device,
+                              hel_idx: int = 0, n_hel: int = 1):
+    """Load the benchmark CSV's OWN train/validation/test assignment verbatim.
+
+    _pool_and_split() pools all samples and re-derives a NEW split via the PAINT
+    DatasetSplitter, sized by cfg.SPLITTER_TRAIN_SIZE/VAL_SIZE. That is the right
+    thing when the goal is a specific, controlled train size — but it means a
+    benchmark CSV that ALREADY carries a fixed, meaningful split (e.g. the
+    field-wide 50/20/20 CSV) gets silently discarded and replaced with a different
+    one. This function is for when "the dataset has a 50-20-20 split" is supposed to
+    mean "use it", not "recompute one" — e.g. because train_size/val_size defaults
+    (100/50) don't even fit inside a 90-sample-per-heliostat pool.
+
+    The active-pixel quality filter is still applied per split (a data-quality gate,
+    not a resampling scheme, so keeping it is correct in both modes). The val/test
+    swap is also still applied for consistency with every other result in this
+    project, since this benchmark CSV was built by the same PAINT DatasetSplitter
+    convention (VALIDATION_INDEX = intended final-eval set).
+
+    `hel_idx`/`n_hel` build a proper one-hot active mask across the WHOLE group
+    (not just a size-1 count, which only happens to work for single-heliostat
+    scenarios) -- needed because this dataset's own scenario_path can be a
+    multi-member neighbourhood scenario even when this particular run doesn't
+    use blocking (e.g. Stage 1, which never ray-traces).
+
+    Returns the same 4-tuple shape as _pool_and_split: (train, val, test, None).
+    The 4th slot (pool_rays) is unused downstream even in the _pool_and_split path
+    (dead — verified by grep for `full_train_rays`) so it is returned as None
+    rather than fabricated.
+    """
+    min_pct = getattr(cfg, "MIN_ACTIVE_PIXEL_PERCENT", 2.0)
+
+    def _filter_active(data):
+        if data is None:
+            return None
+        flux, centroids, rays, motor_pos, active_mask, target_mask = data
+        n_raw = flux.shape[0]
+        active_pct = torch.tensor(
+            [float((flux[i] > 0.01).sum()) / float(flux[i].numel()) * 100.0
+             for i in range(n_raw)],
+            dtype=torch.float32,
+        )
+        keep = active_pct >= min_pct
+        n_keep = int(keep.sum().item())
+        if n_keep < n_raw:
+            log.info(f"    active-pixel filter: kept {n_keep}/{n_raw}")
+        return (
+            flux[keep], centroids[keep], rays[keep], motor_pos[keep],
+            _one_hot_active(hel_idx, n_keep, n_hel, device),
+            target_mask[keep],
+        )
+
+    train_data = _filter_active(_load_split_real(heliostat_id, cfg, "train",      hg, scenario, device))
+    val_data   = _filter_active(_load_split_real(heliostat_id, cfg, "validation", hg, scenario, device))
+    test_data  = _filter_active(_load_split_real(heliostat_id, cfg, "test",       hg, scenario, device))
+
+    if getattr(cfg, "SWAP_VAL_TEST", True):
+        val_data, test_data = test_data, val_data
+        log.info("  val↔test swapped (SWAP_VAL_TEST=True)")
+
+    for name, d in (("train", train_data), ("val", val_data), ("test", test_data)):
+        log.info(f"  fixed split {name}: {0 if d is None else d[0].shape[0]} samples")
+
+    return train_data, val_data, test_data, None
+
+
+def _load_fixed_split_synthetic(heliostat_id: str, dataset_dir: pathlib.Path, cfg, hg, scenario,
+                                  device: torch.device, hel_idx: int = 0, n_hel: int = 1):
+    """Like `_load_fixed_split_real`, but sourced from a pre-generated synthetic
+    `dataset_dir` (train/val/test/{id}/{idx}/...) instead of the real PAINT benchmark.
+
+    For datasets that already carry a specific, meaningful split baked in at
+    generation time (e.g. real sun positions pooled from a fixed 50/20/20 benchmark
+    CSV, as in `generate_occlusion_dataset.py`), honors it verbatim -- no pooling,
+    no DatasetSplitter re-split, so results stay comparable across runs that are
+    only supposed to differ in something else (e.g. injected blocking level).
+
+    `hel_idx`/`n_hel` build a proper one-hot active mask across the WHOLE group
+    (not just a size-1 count, which only happens to work for single-heliostat
+    scenarios) -- needed because this dataset's own scenario_path can be a
+    multi-member neighbourhood scenario even when this particular run doesn't
+    use blocking (e.g. Stage 1, which never ray-traces).
+    """
+    min_pct = getattr(cfg, "MIN_ACTIVE_PIXEL_PERCENT", 2.0)
+
+    def _filter_active(data):
+        if data is None:
+            return None
+        flux, centroids, rays, motor_pos, active_mask, target_mask = data
+        n_raw = flux.shape[0]
+        active_pct = torch.tensor(
+            [float((flux[i] > 0.01).sum()) / float(flux[i].numel()) * 100.0
+             for i in range(n_raw)],
+            dtype=torch.float32,
+        )
+        keep = active_pct >= min_pct
+        n_keep = int(keep.sum().item())
+        if n_keep < n_raw:
+            log.info(f"    active-pixel filter: kept {n_keep}/{n_raw}")
+        return (
+            flux[keep], centroids[keep], rays[keep], motor_pos[keep],
+            _one_hot_active(hel_idx, n_keep, n_hel, device),
+            target_mask[keep],
+        )
+
+    train_data = _filter_active(_load_split(heliostat_id, dataset_dir, "train", hg, scenario, device))
+    val_data   = _filter_active(_load_split(heliostat_id, dataset_dir, "val",   hg, scenario, device))
+    test_data  = _filter_active(_load_split(heliostat_id, dataset_dir, "test",  hg, scenario, device))
+
+    if getattr(cfg, "SWAP_VAL_TEST", True):
+        val_data, test_data = test_data, val_data
+        log.info("  val<->test swapped (SWAP_VAL_TEST=True)")
+
+    for name, d in (("train", train_data), ("val", val_data), ("test", test_data)):
+        log.info(f"  fixed split {name}: {0 if d is None else d[0].shape[0]} samples")
+
+    return train_data, val_data, test_data, None
 
 
 def _load_perturbations(dataset_dir: pathlib.Path, heliostat_id: str, device: torch.device):
@@ -445,8 +598,14 @@ def _direction_error_mrad(kinematic, hg, motor_positions, incident_rays,
         measured = torch.nn.functional.normalize(
             target_centroids[:, :3].to(device) - origins, dim=-1
         )
-        cos = (reflected * measured).sum(-1).clamp(-1.0, 1.0)
-        return (torch.arccos(cos) * 1000.0).cpu().numpy()
+        # atan2(||cross||, dot) in float64: well-conditioned at small angles, unlike
+        # arccos(dot), whose derivative vanishes near cos=1 so float32 rounds any
+        # angle below ~0.3 mrad down to exactly 0.
+        r64 = reflected.double()
+        m64 = measured.double()
+        cross_norm = torch.linalg.cross(r64, m64, dim=-1).norm(dim=-1)
+        dot = (r64 * m64).sum(-1)
+        return (torch.atan2(cross_norm, dot) * 1000.0).cpu().numpy()
 
 
 def _geometric_init(kinematic, hg, train_motor_pos, train_rays, train_centroids,
@@ -528,8 +687,23 @@ def _geometric_init(kinematic, hg, train_motor_pos, train_rays, train_centroids,
     )
 
 
+def _blocker_target_override(cfg, scenario) -> int | None:
+    """Experiment F (full-field blocking): fixed aim target for the passive blockers.
+
+    When ``cfg.BLOCKER_TARGET_NAME`` is set (e.g. "solar_tower_juelich_lower"),
+    every passive blocker is aimed at that target instead of each sample's own
+    target. Unset (default) keeps the Experiment-S convention exactly.
+    """
+    name = getattr(cfg, "BLOCKER_TARGET_NAME", None)
+    if name is None:
+        return None
+    return int(scenario.solar_tower.target_name_to_index[name])
+
+
 def _eval_test(scenario, hg, test_rays, test_active_mask, test_target_mask,
-               test_centroids, test_motor_pos, hel_dist_m: float, cfg, device, label: str):
+               test_centroids, test_motor_pos, hel_dist_m: float, cfg, device, label: str,
+               hel_idx: int = 0, blocking: bool = False,
+               fixed_tilt_rows: list | None = None, fixed_tilt: float | None = None):
     """Forward-pass test set, return eval dict with flux, per-sample errs, label.
 
     Centre-free evaluation: orient the heliostat from the recorded GT motors
@@ -550,13 +724,22 @@ def _eval_test(scenario, hg, test_rays, test_active_mask, test_target_mask,
 
     kinematic = hg.kinematics
     bpd = kinematic._base_position_deviation.detach() if hasattr(kinematic, "_base_position_deviation") \
-          else torch.zeros(1, 3, device=device)
+          else torch.zeros(hg.number_of_heliostats, 3, device=device)
 
     with torch.no_grad():
-        pred_cents, pred_flux = _forward_pass(
-            scenario, hg, test_rays, test_active_mask, test_target_mask, bpd, device,
-            motor_positions=test_motor_pos,
-        )
+        if blocking:
+            from one_heliostat_demo.blocking_study.blocking_utils import forward_pass_blocking
+            pred_cents, pred_flux, _blocked_fracs = forward_pass_blocking(
+                scenario, hg, hel_idx, test_rays, test_target_mask, device,
+                motor_positions=test_motor_pos, base_pos_delta=bpd,
+                target_index_override=_blocker_target_override(cfg, scenario),
+                fixed_tilt_rows=fixed_tilt_rows, fixed_tilt=fixed_tilt,
+            )
+        else:
+            pred_cents, pred_flux = _forward_pass(
+                scenario, hg, test_rays, test_active_mask, test_target_mask, bpd, device,
+                motor_positions=test_motor_pos,
+            )
 
     scenario.set_number_of_rays(old_n_rays)
 
@@ -640,7 +823,10 @@ def _setup_kinematic_for_training(kinematic, device: torch.device, cfg=None):
     log.info(f"Actuator stroke b_i optimized: {_opt_stroke}")
     log.info(f"Pivot radius r_i optimized: {_opt_pivot}")
 
-    kinematic._base_position_deviation = torch.zeros(1, 3, device=device, requires_grad=True)
+    kinematic._base_position_deviation = torch.zeros(
+        kinematic.rotation_deviation_parameters.shape[0], 3,
+        device=device, requires_grad=True,
+    )
 
     init_translation = kinematic.translation_deviation_parameters.detach().clone()
     init_angle  = kinematic.actuators.optimizable_parameters[
@@ -709,13 +895,29 @@ def _build_s2_optimizer(kinematic, cfg):
     kinematic._base_position_deviation = (
         kinematic._base_position_deviation.detach().requires_grad_(True)
     )
+    # STAGE2_PARAM_SET selects which parameters Stage 2 may move:
+    #   "all"              — every group (DEFAULT, historical). Stage 2 is then the
+    #                        ONLY place translation / base position / offset / pivot
+    #                        are ever trained, since the geometric-init Stage 1
+    #                        pins them at lr=0.
+    #   "orientation_only" — the same frozen set Stage 1 uses (orientation + a/b),
+    #                        so Stage 2 refines pointing on the ray-traced objective
+    #                        without the extra landing DOFs that can drift the
+    #                        direction metric.
+    _param_set = getattr(cfg, "STAGE2_PARAM_SET", "all")
+    if _param_set not in ("all", "orientation_only"):
+        raise ValueError(f"Unknown STAGE2_PARAM_SET {_param_set!r}")
+    _orient_only = _param_set == "orientation_only"
+    _transl_lr = 0.0 if _orient_only else cfg.BASE_LR * 5.0
+    _base_lr   = 0.0 if _orient_only else cfg.BASE_LR * 5.0
+    _nonopt_lr = 0.0 if _orient_only else cfg.BASE_LR
     opt = torch.optim.Adam(
         [
-            {"params": kinematic.translation_deviation_parameters,     "lr": cfg.BASE_LR * 5.0},
+            {"params": kinematic.translation_deviation_parameters,     "lr": _transl_lr},
             {"params": kinematic.rotation_deviation_parameters,        "lr": cfg.BASE_LR},
             {"params": kinematic.actuators.optimizable_parameters,     "lr": _actuator_lr(cfg)},
-            {"params": kinematic.actuators.non_optimizable_parameters, "lr": cfg.BASE_LR},
-            {"params": kinematic._base_position_deviation,             "lr": cfg.BASE_LR * 5.0},
+            {"params": kinematic.actuators.non_optimizable_parameters, "lr": _nonopt_lr},
+            {"params": kinematic._base_position_deviation,             "lr": _base_lr},
         ],
         lr=cfg.BASE_LR,
     )
@@ -734,7 +936,8 @@ def _build_s2_optimizer(kinematic, cfg):
 # ---------------------------------------------------------------------------
 
 def _plot_mrad_convergence(trail_checkpoints: list, stage1_epochs: int,
-                            plots_dir: pathlib.Path, heliostat_id: str) -> None:
+                            plots_dir: pathlib.Path, heliostat_id: str,
+                            stage1_label: str = "Stage 1") -> None:
     epochs      = [c["epoch"]      for c in trail_checkpoints]
     mrad_train  = [c["mrad_mean"]  for c in trail_checkpoints]
     mrad_val    = [c["mrad_val_mean"] for c in trail_checkpoints]
@@ -746,7 +949,10 @@ def _plot_mrad_convergence(trail_checkpoints: list, stage1_epochs: int,
         ax.plot(epochs, mrad_val, lw=2.0, color="darkorange", ls="--", label="val mrad (mean)")
     ax.axvline(stage1_epochs, color="gray", ls=":", lw=1.5, zorder=0)
     ymax = max(ax.get_ylim()[1], 0.1)
-    ax.text(stage1_epochs - 0.4, ymax * 0.97, "Stage 1\n(AlignmentLoss)",
+    # Name the loss that ACTUALLY ran — hardcoding "AlignmentLoss" here labelled every
+    # plot with a loss that has not been the default since the inverse-kinematics fix,
+    # and one documented as theoretically broken.
+    ax.text(stage1_epochs - 0.4, ymax * 0.97, f"Stage 1\n({stage1_label})",
             fontsize=7, color="gray", ha="right", va="top")
     ax.text(stage1_epochs + 0.4, ymax * 0.97, "Stage 2\n(FocalSpotLoss)",
             fontsize=7, color="gray", ha="left",  va="top")
@@ -1500,6 +1706,132 @@ def _plot_test_flux(test_eval: dict, test_flux: torch.Tensor, test_rays: torch.T
 
 
 # ---------------------------------------------------------------------------
+# Contour-loss diagnostics (Stage 2, STAGE2_LOSS == "contour")
+# ---------------------------------------------------------------------------
+
+def _plot_contour_pipeline(
+    extractor,
+    pred_flux: torch.Tensor,
+    meas_flux: torch.Tensor,
+    gt_contour,
+    plots_dir: pathlib.Path,
+    heliostat_id: str,
+    n_samples: int = 3,
+) -> None:
+    """Per-sample contour-extraction walkthrough + predicted-vs-GT overlay.
+
+    For each sample: one row of extraction steps for the predicted flux, one
+    for the measured flux, and a third row with the GT distance map and the
+    contour overlay (GT green, predicted red, over the measured flux). The
+    overlay doubles as the orientation sanity check — both contours must hug
+    the UPPER edge of the spot.
+    """
+    n_samples = min(n_samples, pred_flux.shape[0], meas_flux.shape[0])
+    for i in range(n_samples):
+        with torch.no_grad():
+            pred_steps = extractor.intermediate_steps(pred_flux[i])
+            meas_steps = extractor.intermediate_steps(meas_flux[i].to(pred_flux.device))
+            dmap = gt_contour.distance_maps[i].cpu().numpy()
+
+        n_cols = len(pred_steps)
+        fig, axes = plt.subplots(3, n_cols, figsize=(2.2 * n_cols, 7.0))
+        for row, (steps, row_name) in enumerate(
+            [(pred_steps, "predicted"), (meas_steps, "measured")]
+        ):
+            for col, (name, img) in enumerate(steps):
+                ax = axes[row, col]
+                ax.imshow(img, cmap="inferno")
+                ax.set_title(f"{name}\n({row_name})", fontsize=7)
+                ax.axis("off")
+
+        # Row 3: GT distance map + overlay (rest blank).
+        ax = axes[2, 0]
+        im = ax.imshow(dmap, cmap="viridis")
+        ax.set_title("GT distance map D_G\n(0 on contour)", fontsize=7)
+        ax.axis("off")
+        fig.colorbar(im, ax=ax, fraction=0.046)
+
+        ax = axes[2, 1]
+        meas_img = meas_flux[i].detach().cpu().float().numpy()
+        mx = meas_img.max()
+        ax.imshow(meas_img / mx if mx > 0 else meas_img, cmap="gray", vmin=0, vmax=1)
+        c_gt_img = gt_contour.contours[i].cpu().numpy()
+        c_pr_img = pred_steps[-1][1]
+
+        def _mask(c: np.ndarray) -> np.ndarray:
+            m = c.max()
+            return np.ma.masked_where(c < 0.25 * m if m > 0 else c >= 0, c)
+
+        ax.imshow(_mask(c_gt_img), cmap="Greens", alpha=0.9)
+        ax.imshow(_mask(c_pr_img), cmap="Reds", alpha=0.7)
+        ax.set_title("Overlay: GT (green)\npred (red)", fontsize=7)
+        ax.axis("off")
+        for col in range(2, n_cols):
+            axes[2, col].axis("off")
+
+        fig.suptitle(f"{heliostat_id} — contour extraction, train sample {i}", fontsize=10)
+        plt.tight_layout()
+        fig.savefig(plots_dir / f"contour_pipeline_sample{i}.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+
+def _plot_contour_terms(
+    comp_history: list[dict],
+    plots_dir: pathlib.Path,
+    heliostat_id: str,
+) -> None:
+    """Per-epoch curves of the three contour terms + val centroid mrad.
+
+    Epochs trained on the guardrail fallback (no contour terms) are shaded.
+    """
+    if not comp_history:
+        return
+    epochs = np.arange(1, len(comp_history) + 1)
+    guard = np.array([bool(c.get("guardrail")) for c in comp_history])
+
+    fig, axes = plt.subplots(2, 2, figsize=(11, 7), sharex=True)
+    panels = [
+        ("coarse", "Coarse (Σ C_P · D_G)  [px mass·dist]", axes[0, 0]),
+        ("fine", "Fine (1 − DICE)", axes[0, 1]),
+        ("gravity", "Gravity (‖ΔCOM‖)  [m]", axes[1, 0]),
+        ("val_centroid_mrad", "Val centroid error  [mrad]", axes[1, 1]),
+    ]
+    for key, title, ax in panels:
+        vals = np.array(
+            [c[key] if c.get(key) is not None else np.nan for c in comp_history],
+            dtype=float,
+        )
+        ax.plot(epochs, vals, lw=1.2)
+        for s, e in _contiguous_true_runs(guard):
+            ax.axvspan(epochs[s], epochs[e], color="orange", alpha=0.2,
+                       label="guardrail" if s == np.argmax(guard) else None)
+        ax.set_title(title, fontsize=9)
+        ax.grid(alpha=0.3)
+    axes[1, 0].set_xlabel("Stage-2 epoch")
+    axes[1, 1].set_xlabel("Stage-2 epoch")
+    if guard.any():
+        axes[0, 0].legend(fontsize=7)
+    fig.suptitle(f"{heliostat_id} — contour-loss components", fontsize=11)
+    plt.tight_layout()
+    fig.savefig(plots_dir / "contour_loss_terms.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _contiguous_true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """Index pairs (start, end) of contiguous True runs in a boolean array."""
+    runs, start = [], None
+    for i, v in enumerate(mask):
+        if v and start is None:
+            start = i
+        elif not v and start is not None:
+            runs.append((start, i - 1))
+            start = None
+    if start is not None:
+        runs.append((start, len(mask) - 1))
+    return runs
+
+
+# ---------------------------------------------------------------------------
 # Main training entry point
 # ---------------------------------------------------------------------------
 
@@ -1514,6 +1846,11 @@ def run(
     skip_stage2: bool = False,
     skip_stage1: bool = False,
     make_plots: bool = True,
+    stage1_checkpoint: pathlib.Path | str | None = None,
+    scenario_path: pathlib.Path | str | None = None,
+    blocking: bool = False,
+    blocking_fixed_tilt: tuple[list[str], float] | None = None,
+    sunshape_std_mrad: float | None = None,
 ) -> dict:
     """
     Run the two-stage training pipeline and save all outputs.
@@ -1525,6 +1862,28 @@ def run(
     output_dir    : where to write results, plots, histories
     cfg           : config module (or SimpleNamespace) with all hyperparameters
     device        : torch device
+    stage1_checkpoint : path to a ``stage1_checkpoint.pt`` from a previous run.
+        Loads the post-Stage-1 kinematic parameters and skips geometric init +
+        Stage 1 entirely, so different Stage-2 setups can be compared without
+        re-running Stage 1. The data split/config must match the original run.
+    scenario_path : explicit scenario file (overrides cfg.SCENARIO_PATH_TEMPLATE).
+        Used to train one heliostat of a multi-heliostat neighbourhood scenario;
+        the studied row is resolved via hg.names and all other rows stay passive.
+    blocking      : blocking-aware Stage 2 / evaluation (Experiment S). Neighbour
+        surfaces (aimed at each sample's own target) are injected into the ray
+        tracer per sample and every trace goes through the exact blocking filter.
+        Forces MINI_BATCH_SIZE = 1 (ARTIST blocking assumes one active instance
+        per heliostat row). ARTIST itself is never modified. Set
+        ``cfg.BLOCKER_TARGET_NAME`` (Experiment F) to aim the passive blockers
+        at one fixed target instead of each sample's own target.
+    blocking_fixed_tilt : (blocker_names, tilt) -- when ``blocking=True``, hold
+        these group members at the FIXED vertical(0)->horizontal(1) tilt used
+        by generate_occlusion_dataset.py, instead of "aimed normally at the
+        target" (the field's natural blocking). Required for a blocking-aware
+        run to reproduce the exact occlusion geometry a controlled dataset was
+        generated with; without it, "blocking on" would model a different
+        (weaker/differently-shaped) occlusion than what's actually baked into
+        the training targets. Ignored when ``blocking=False``.
 
     Returns
     -------
@@ -1534,7 +1893,8 @@ def run(
     output_dir  = pathlib.Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     plots_dir = output_dir / "plots"
-    plots_dir.mkdir(exist_ok=True)
+    if make_plots:
+        plots_dir.mkdir(exist_ok=True)   # else every heliostat gets an empty plots/
 
     t_start = time.time()
 
@@ -1549,15 +1909,91 @@ def run(
     # ------------------------------------------------------------------ #
     # 1. Load scenario                                                     #
     # ------------------------------------------------------------------ #
-    scenario, hg, hel_dist_m = _load_scenario(heliostat_id, cfg, device)
+    scenario, hg, hel_dist_m, hel_idx = _load_scenario(
+        heliostat_id, cfg, device, scenario_path=scenario_path
+    )
+    if sunshape_std_mrad is not None:
+        from artist.scene.sun import Sun
+        old_sun = scenario.light_sources.light_source_list[0]
+        old_cov = old_sun.distribution_parameters.get("covariance")
+        new_cov = (sunshape_std_mrad / 1000.0) ** 2
+        scenario.light_sources.light_source_list[0] = Sun(
+            number_of_rays=old_sun.number_of_rays,
+            distribution_parameters={"distribution_type": "normal", "mean": 0.0, "covariance": new_cov},
+            device=device,
+        )
+        log.info(
+            f"Sunshape override: covariance {old_cov} -> {new_cov} "
+            f"(std {(old_cov ** 0.5 * 1000) if old_cov else float('nan'):.3f} -> {sunshape_std_mrad:.3f} mrad)"
+        )
     kinematic = hg.kinematics
+    n_hel = hg.number_of_heliostats
+    _fixed_tilt_rows, _fixed_tilt = None, None  # overwritten below iff blocking=True
+
+    # Blocking-aware mode (Experiment S): per-sample neighbour surfaces are
+    # injected into the ray tracer; ARTIST's blocking assumes one active
+    # instance per heliostat row, so the mini-batch collapses to one sample.
+    if blocking:
+        if n_hel == 1:
+            raise ValueError(
+                "blocking=True requires a multi-heliostat neighbourhood scenario "
+                "(pass scenario_path=.../scenarios/neighbourhoods/<ID>/scenario.h5)."
+            )
+        if getattr(cfg, "MINI_BATCH_SIZE", 1) != 1:
+            log.info(
+                f"Blocking enabled: forcing MINI_BATCH_SIZE 1 "
+                f"(was {cfg.MINI_BATCH_SIZE}) — one active instance per row."
+            )
+            cfg.MINI_BATCH_SIZE = 1
+        from one_heliostat_demo.blocking_study.blocking_utils import (
+            aimed_neighbour_surfaces,
+            exact_blocking,
+            forward_pass_blocking,
+        )
+        log.info(f"Blocking-aware training: neighbours aimed at each sample's own "
+                 f"target, exact blocking filter, {n_hel - 1} passive neighbour(s)")
+        _bt_override = _blocker_target_override(cfg, scenario)
+        if blocking_fixed_tilt is not None:
+            _fixed_tilt_names, _fixed_tilt = blocking_fixed_tilt
+            _fixed_tilt_rows = [hg.names.index(n) for n in _fixed_tilt_names]
+            log.info(
+                f"Fixed-tilt occlusion: rows {_fixed_tilt_rows} ({_fixed_tilt_names}) "
+                f"held at tilt={_fixed_tilt:.2f} (0=vertical/max block, 1=horizontal/none), "
+                f"reproducing the dataset's own generation geometry"
+            )
+        if _bt_override is not None:
+            log.info(
+                f"Experiment F: blockers aimed at fixed target "
+                f"'{cfg.BLOCKER_TARGET_NAME}' (index {_bt_override}) instead of "
+                f"each sample's own target"
+            )
 
     # ------------------------------------------------------------------ #
     # 2. Load data                                                         #
     # ------------------------------------------------------------------ #
     _data_mode = getattr(cfg, "DATA_MODE", "synthetic")
+    _fixed_split_requested = getattr(cfg, "USE_FIXED_SPLIT", False)
+    use_fixed_split = _data_mode == "real" and _fixed_split_requested
+    use_fixed_split_synthetic = _data_mode != "real" and _fixed_split_requested
 
-    if _data_mode == "real":
+    if use_fixed_split:
+        # Honor the benchmark CSV's own train/validation/test assignment verbatim —
+        # no pooling, no DatasetSplitter re-split. See _load_fixed_split_real().
+        log.info("Data mode: real (PAINT benchmark, FIXED split — no re-pooling)")
+        train_data, val_data, test_data, _fixed_pool_rays = _load_fixed_split_real(
+            heliostat_id, cfg, hg, scenario, device, hel_idx=hel_idx, n_hel=n_hel
+        )
+        pert_tensors = None
+    elif use_fixed_split_synthetic:
+        # Same idea, but the dataset itself (not the real PAINT benchmark) already
+        # carries the fixed split -- e.g. generate_occlusion_dataset.py pools real
+        # sun positions from a fixed 50/20/20 CSV. See _load_fixed_split_synthetic().
+        log.info(f"Data mode: {_data_mode} (synthetic dataset, FIXED split — no re-pooling)")
+        train_data, val_data, test_data, _fixed_pool_rays = _load_fixed_split_synthetic(
+            heliostat_id, dataset_dir, cfg, hg, scenario, device, hel_idx=hel_idx, n_hel=n_hel
+        )
+        pert_tensors = _load_perturbations(dataset_dir, heliostat_id, device)
+    elif _data_mode == "real":
         log.info("Data mode: real (PAINT benchmark)")
         train_data = _load_split_real(heliostat_id, cfg, "train",      hg, scenario, device)
         val_data   = _load_split_real(heliostat_id, cfg, "validation", hg, scenario, device)
@@ -1582,16 +2018,21 @@ def run(
         )
 
     # ------------------------------------------------------------------ #
-    # 3. Pool all splits, re-split with DatasetSplitter                    #
+    # 3. Pool all splits, re-split with DatasetSplitter (skipped entirely  #
+    #    when the benchmark's own fixed split is being honored)            #
     # ------------------------------------------------------------------ #
     if train_size is None:
         train_size = getattr(cfg, "SPLITTER_TRAIN_SIZE", 100)
 
-    swap = getattr(cfg, "SWAP_VAL_TEST", True)
-    (train_data, val_data, test_data, full_train_rays) = _pool_and_split(
-        heliostat_id, train_data, val_data, test_data,
-        train_size, cfg, device, swap_val_test=swap,
-    )
+    if use_fixed_split or use_fixed_split_synthetic:
+        full_train_rays = _fixed_pool_rays
+    else:
+        swap = getattr(cfg, "SWAP_VAL_TEST", True)
+        (train_data, val_data, test_data, full_train_rays) = _pool_and_split(
+            heliostat_id, train_data, val_data, test_data,
+            train_size, cfg, device, swap_val_test=swap,
+            hel_idx=hel_idx, n_hel=n_hel,
+        )
     (train_flux, train_centroids, train_rays,
      train_motor_pos, train_active_mask, train_target_mask) = train_data
     (val_flux, val_centroids, val_rays,
@@ -1683,7 +2124,8 @@ def run(
     pre_eval = _eval_test(
         scenario, hg,
         test_rays, test_active_mask, test_target_mask, test_centroids, test_motor_pos,
-        hel_dist_m, cfg, device, "Pre-training",
+        hel_dist_m, cfg, device, "Pre-training", hel_idx=hel_idx, blocking=blocking,
+        fixed_tilt_rows=_fixed_tilt_rows, fixed_tilt=_fixed_tilt,
     )
 
     # ------------------------------------------------------------------ #
@@ -1759,7 +2201,8 @@ def run(
     # Stage 1 is skipped or disabled in config.
     if (getattr(cfg, "GEOMETRIC_INIT", False)
             and getattr(cfg, "STAGE1_LOSS", "forward_aim") == "forward_aim"
-            and not skip_stage1):
+            and not skip_stage1
+            and stage1_checkpoint is None):
         _geometric_init(
             kinematic, hg, train_motor_pos, train_rays, train_centroids,
             train_active_mask, _current_base_pos(), cfg, device,
@@ -1776,17 +2219,37 @@ def run(
     param_history:     list[dict] = []
     gt_normal_hits_holder: dict = {}   # filled once with the fixed true-normal pixels
     PLOT_EVERY = getattr(cfg, "PLOT_EVERY", 1)
+    # Ray-traced trail capture during STAGE 1 (diagnostics only — see the call
+    # site in the Stage-1 loop). Off by default; Stage 2 always captures.
+    _s1_trails = getattr(cfg, "STAGE1_TRAIL_PLOTS", False)
 
     # Centre-free diagnostics: orient from the recorded GT motors so the
     # training-progress mrad matches the final evaluation convention.
     def capture_trails(label: str, epoch: int) -> None:
         with torch.no_grad():
-            pred_cents, pred_flux = _forward_pass(
-                scenario, hg,
-                train_rays, train_active_mask, train_target_mask,
-                _current_base_pos(), device,
-                motor_positions=train_motor_pos,
-            )
+            if blocking:
+                # Per-sample blocking trace (one active instance per row). The
+                # full-batch active state is re-established afterwards so the
+                # normal diagnostics below still see all N instances.
+                pred_cents, pred_flux, _bf = forward_pass_blocking(
+                    scenario, hg, hel_idx, train_rays, train_target_mask, device,
+                    motor_positions=train_motor_pos,
+                    base_pos_delta=_current_base_pos(),
+                    target_index_override=_bt_override,
+                )
+                hg.activate_heliostats(active_heliostats_mask=train_active_mask, device=device)
+                _rep = _current_base_pos().repeat_interleave(train_active_mask, dim=0)
+                _pad = torch.zeros(_rep.shape[0], 1, device=device)
+                kinematic.active_heliostat_positions = (
+                    kinematic.active_heliostat_positions + torch.cat([_rep, _pad], dim=1)
+                )
+            else:
+                pred_cents, pred_flux = _forward_pass(
+                    scenario, hg,
+                    train_rays, train_active_mask, train_target_mask,
+                    _current_base_pos(), device,
+                    motor_positions=train_motor_pos,
+                )
             _bh, _bw = pred_flux.shape[-2], pred_flux.shape[-1]
 
             # Mirror-normal diagnostic (Stage-1 view).
@@ -1829,12 +2292,20 @@ def run(
         mrad_val_mean = float("nan")
         if val_flux is not None:
             with torch.no_grad():
-                val_cents, _ = _forward_pass(
-                    scenario, hg,
-                    val_rays, val_active_mask, val_target_mask,
-                    _current_base_pos(), device,
-                    motor_positions=val_motor_pos,
-                )
+                if blocking:
+                    val_cents, _, _bfv = forward_pass_blocking(
+                        scenario, hg, hel_idx, val_rays, val_target_mask, device,
+                        motor_positions=val_motor_pos,
+                        base_pos_delta=_current_base_pos(),
+                        target_index_override=_bt_override,
+                    )
+                else:
+                    val_cents, _ = _forward_pass(
+                        scenario, hg,
+                        val_rays, val_active_mask, val_target_mask,
+                        _current_base_pos(), device,
+                        motor_positions=val_motor_pos,
+                    )
             mrad_val_mean = float(
                 (torch.norm(val_cents[:, :3] - val_centroids[:, :3], dim=1)
                  / hel_dist_m * 1000).mean().item()
@@ -1870,19 +2341,19 @@ def run(
         angle_dev  = (
             kinematic.actuators.optimizable_parameters[:, indices.actuator_initial_angle, :]
             - init_angle
-        ).detach().cpu().squeeze().tolist()
+        ).detach().cpu()[hel_idx].tolist()
         offset_dev = (
             kinematic.actuators.non_optimizable_parameters[:, indices.actuator_offset, :]
             - init_offset
-        ).detach().cpu().squeeze().tolist()
+        ).detach().cpu()[hel_idx].tolist()
 
         param_history.append({
             "epoch":          abs_epoch,
-            "translation":    kinematic.translation_deviation_parameters.detach().cpu().squeeze().tolist(),
-            "rotation":       kinematic.rotation_deviation_parameters.detach().cpu().squeeze().tolist(),
+            "translation":    kinematic.translation_deviation_parameters.detach().cpu()[hel_idx].tolist(),
+            "rotation":       kinematic.rotation_deviation_parameters.detach().cpu()[hel_idx].tolist(),
             "actuator_angle": angle_dev  if isinstance(angle_dev,  list) else [angle_dev],
             "actuator_offset":offset_dev if isinstance(offset_dev, list) else [offset_dev],
-            "base_position":  kinematic._base_position_deviation.detach().cpu().squeeze().tolist()
+            "base_position":  kinematic._base_position_deviation.detach().cpu()[hel_idx].tolist()
                               if hasattr(kinematic, "_base_position_deviation") else [0.0, 0.0, 0.0],
         })
 
@@ -1898,8 +2369,29 @@ def run(
     # STAGE1_ALIGNMENT_LOSS_FINDINGS.md. All other branches use the inverse map and
     # are kept only for reproducing the (broken) motor-position formulation.
     _s1_forward = (_s1_loss_type == "forward_aim")
+
+    # Robust reduction of the per-sample Stage-1 residuals (forward_aim only).
+    # "l2" = the historical plain mean of the squared chord — least squares, so a
+    # few bad calibration samples dominate. The robust modes cap or discard that
+    # influence; they improve the MEDIAN pointing error at some cost to the mean
+    # and the (tail-sensitive) centroid metric. See robust_reduce().
+    _s1_reduction = getattr(cfg, "STAGE1_REDUCTION", "l2")
+    _s1_huber_delta = getattr(cfg, "STAGE1_HUBER_DELTA", 3.0)
+    _s1_trim_fraction = getattr(cfg, "STAGE1_TRIM_FRACTION", 0.25)
+
+    def _s1_reduce(per_sample: torch.Tensor) -> torch.Tensor:
+        return robust_reduce(
+            per_sample, mode=_s1_reduction,
+            delta_mrad=_s1_huber_delta, trim_fraction=_s1_trim_fraction,
+        )
+
     if _s1_forward:
         _s1_fwd_fn = ForwardAimLoss()
+        if _s1_reduction != "l2":
+            _detail = (f"δ={_s1_huber_delta} mrad" if _s1_reduction in ("huber", "soft_l1")
+                       else f"trim={_s1_trim_fraction:.0%}")
+            log.info(f"Stage 1 reduction: {_s1_reduction} ({_detail}) "
+                     f"— best-epoch selection follows the objective")
         _s1_loss_label, _s1_loss_units = "ForwardAimLoss", "chord²"
         log.info("Stage 1 loss: ForwardAimLoss [forward normal vs geometric desired normal]")
     elif _s1_loss_type == "normal_mrad":
@@ -1943,7 +2435,33 @@ def run(
     best_s1_mrad   = float("inf")
     best_s1_params = None
 
-    if skip_stage1:
+    if stage1_checkpoint is not None:
+        # Restart from a previous run's post-Stage-1 state: load the optimized
+        # kinematic parameters and go straight to Stage 2.
+        ckpt_path = pathlib.Path(stage1_checkpoint)
+        ckpt = torch.load(ckpt_path, map_location=device)
+        if ckpt.get("heliostat_id") not in (None, heliostat_id):
+            raise ValueError(
+                f"Stage-1 checkpoint {ckpt_path} belongs to heliostat "
+                f"{ckpt.get('heliostat_id')!r}, not {heliostat_id!r}"
+            )
+        kinematic.translation_deviation_parameters.data.copy_(ckpt["translation"].to(device))
+        kinematic.rotation_deviation_parameters.data.copy_(ckpt["rotation"].to(device))
+        kinematic.actuators.optimizable_parameters.data.copy_(ckpt["act_angle"].to(device))
+        kinematic.actuators.non_optimizable_parameters.data.copy_(ckpt["act_offset"].to(device))
+        kinematic._base_position_deviation = (
+            ckpt["base_pos"].clone().to(device).requires_grad_(True)
+        )
+        log.info(f"Loaded Stage-1 checkpoint {ckpt_path} — skipping Stage 1.")
+        capture_trails("S1/ckpt", cfg.STAGE1_EPOCHS)
+
+        s1_eval = _eval_test(
+            scenario, hg,
+            test_rays, test_active_mask, test_target_mask, test_centroids, test_motor_pos,
+            hel_dist_m, cfg, device, "After Stage 1", hel_idx=hel_idx, blocking=blocking,
+            fixed_tilt_rows=_fixed_tilt_rows, fixed_tilt=_fixed_tilt,
+        )
+    elif skip_stage1:
         log.info("--skip-stage1 set — skipping Stage 1 (AlignmentLoss).")
         s1_eval = pre_eval
     else:
@@ -1979,7 +2497,7 @@ def run(
                 lps  = _s1_fwd_fn(
                     train_motor_pos, train_rays, train_centroids, _origins, kinematic, device
                 )
-                loss = lps.mean()
+                loss = _s1_reduce(lps)
                 with torch.no_grad():
                     s1_train_mrad = _s1_fwd_fn(
                         train_motor_pos, train_rays, train_centroids, _origins,
@@ -2037,34 +2555,59 @@ def run(
                         s1_val_mrad = _s1_mrad_fn(
                             kinematic.active_motor_positions, val_motor_pos, kinematic, device
                         ).mean().item()
-                s1_val_loss = _val_lps.mean().item()
+                s1_val_loss = (
+                    _s1_reduce(_val_lps).item() if _s1_forward else _val_lps.mean().item()
+                )
                 stage1_val_history.append(s1_val_loss)
                 stage1_mrad_val_history.append(s1_val_mrad)
 
             scheduler_s1.step(s1_val_loss if s1_val_loss is not None else loss.item())
 
-            if epoch % PLOT_EVERY == 0:
+            # Ray-traced trail diagnostics — OPTIONAL, off by default.
+            # Stage 1 optimizes a purely kinematic objective (ForwardAimLoss:
+            # forward normal vs the sun<->c_gt bisector), so this capture never
+            # influences training; it only supplies points for the trail /
+            # flux-GIF plots. Its cost scales with SURFACE_POINTS_PER_FACET
+            # SQUARED (~0.3 s/epoch at 25x25 but ~5 s/epoch at 100x100, which
+            # made Stage 1 16x slower than the optimization itself warrants).
+            # Enable with --stage1-trail-plots when you want the animation.
+            if _s1_trails and epoch % PLOT_EVERY == 0:
                 capture_trails(f"S1/{epoch}", epoch)
-                # Select the best Stage-1 params on the STAGE-1 OBJECTIVE (the
-                # forward-aim alignment mrad), NOT the ray-traced focal-spot mrad.
-                # When the uncalibrated beam misses the target bitmap entirely
-                # (real data, high initial error) the predicted flux is empty and
-                # the focal-spot centroid — hence mrad_*_mean — is a frozen,
-                # degenerate constant. Keying on it makes "best" lock to epoch 1
-                # and the restore below discards all of Stage 1's progress. The
-                # alignment mrad is always well-defined, so use it.
+
+            # Best-params selection — every epoch, no ray tracing involved.
+            # Select on the STAGE-1 OBJECTIVE (the forward-aim alignment mrad),
+            # NOT the ray-traced focal-spot mrad. When the uncalibrated beam
+            # misses the target bitmap entirely (real data, high initial error)
+            # the predicted flux is empty and the focal-spot centroid — hence
+            # mrad_*_mean — is a frozen, degenerate constant. Keying on it makes
+            # "best" lock to epoch 1 and the restore below discards all of
+            # Stage 1's progress. The alignment mrad is always well-defined.
+            # Selection metric (cfg.STAGE1_SELECT_ON):
+            #   "mrad"      — mean alignment mrad (DEFAULT, and the safe choice).
+            #   "objective" — the training objective itself.
+            # "objective" looks more principled but is UNSAFE for trimmed: least-
+            # trimmed-squares does not penalize the discarded samples at all, so
+            # the optimizer can minimize it by abandoning that fraction entirely,
+            # and selecting on the same quantity then locks the degenerate result
+            # in. Measured on AA23: trimmed-40% diverges to 21.5 mrad under
+            # "objective" but reaches 3.4/1.7 under "mrad". The mean-mrad rule
+            # rejects those epochs, and applying one identical rule to every
+            # config also keeps the sweep a controlled comparison.
+            if getattr(cfg, "STAGE1_SELECT_ON", "mrad") == "objective":
+                metric = (s1_val_loss if s1_val_loss is not None else loss.item())
+            else:
                 metric = (stage1_mrad_val_history[-1]
                           if val_flux is not None and stage1_mrad_val_history
                           else stage1_mrad_history[-1])
-                if metric < best_s1_mrad:
-                    best_s1_mrad = metric
-                    best_s1_params = {
-                        "translation": kinematic.translation_deviation_parameters.clone().detach(),
-                        "rotation":    kinematic.rotation_deviation_parameters.clone().detach(),
-                        "act_angle":   kinematic.actuators.optimizable_parameters.clone().detach(),
-                        "act_offset":  kinematic.actuators.non_optimizable_parameters.clone().detach(),
-                        "base_pos":    kinematic._base_position_deviation.clone().detach(),
-                    }
+            if metric < best_s1_mrad:
+                best_s1_mrad = metric
+                best_s1_params = {
+                    "translation": kinematic.translation_deviation_parameters.clone().detach(),
+                    "rotation":    kinematic.rotation_deviation_parameters.clone().detach(),
+                    "act_angle":   kinematic.actuators.optimizable_parameters.clone().detach(),
+                    "act_offset":  kinematic.actuators.non_optimizable_parameters.clone().detach(),
+                    "base_pos":    kinematic._base_position_deviation.clone().detach(),
+                }
 
         if best_s1_params is not None:
             kinematic.translation_deviation_parameters.data.copy_(best_s1_params["translation"])
@@ -2074,13 +2617,53 @@ def run(
             kinematic._base_position_deviation = best_s1_params["base_pos"].clone().requires_grad_(True)
             log.info(f"Restored best Stage 1 params (align mrad={best_s1_mrad:.4f})")
 
+        if not _s1_trails:
+            # Trails were skipped during the loop: take ONE capture of the final
+            # (restored) state so the convergence/trail plots still have a
+            # post-Stage-1 point to connect Stage 2 to.
+            capture_trails("S1/final", cfg.STAGE1_EPOCHS)
+
+        # Persist the post-Stage-1 state so later runs can iterate on Stage 2
+        # alone (--stage1-checkpoint / run_all --stage1-checkpoint-dir).
+        torch.save(
+            {
+                "heliostat_id": heliostat_id,
+                "translation": kinematic.translation_deviation_parameters.detach().cpu(),
+                "rotation":    kinematic.rotation_deviation_parameters.detach().cpu(),
+                "act_angle":   kinematic.actuators.optimizable_parameters.detach().cpu(),
+                "act_offset":  kinematic.actuators.non_optimizable_parameters.detach().cpu(),
+                "base_pos":    kinematic._base_position_deviation.detach().cpu(),
+            },
+            output_dir / "stage1_checkpoint.pt",
+        )
+        log.info(f"Stage-1 checkpoint saved: {output_dir / 'stage1_checkpoint.pt'}")
+
         t_s1_min = (time.time() - t_s1) / 60.0
         log.info(f"Stage 1 done in {t_s1_min:.1f} min. Final loss={stage1_history[-1]:.6f}")
+
+        # Full-resolution per-epoch Stage-1 loss/mrad — always written (unlike the
+        # ray-traced trail captures gated behind STAGE1_TRAIL_PLOTS/make_plots),
+        # since these arrays are already computed every epoch at zero extra cost
+        # (no ray tracing: mrad here is the analytic forward-aim angle). This is
+        # what a convergence/LR diagnosis should read, not the sparse trail CSV.
+        with open(output_dir / "stage1_epoch_history.csv", "w", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["epoch", "train_loss", "val_loss", "train_mrad", "val_mrad", "lr"])
+            for i in range(len(stage1_history)):
+                writer.writerow([
+                    i + 1,
+                    stage1_history[i],
+                    stage1_val_history[i] if i < len(stage1_val_history) else "",
+                    stage1_mrad_history[i],
+                    stage1_mrad_val_history[i] if i < len(stage1_mrad_val_history) else "",
+                    stage1_lr_history[i] if i < len(stage1_lr_history) else "",
+                ])
 
         s1_eval = _eval_test(
             scenario, hg,
             test_rays, test_active_mask, test_target_mask, test_centroids, test_motor_pos,
-            hel_dist_m, cfg, device, "After Stage 1",
+            hel_dist_m, cfg, device, "After Stage 1", hel_idx=hel_idx, blocking=blocking,
+            fixed_tilt_rows=_fixed_tilt_rows, fixed_tilt=_fixed_tilt,
         )
 
     # ------------------------------------------------------------------ #
@@ -2090,6 +2673,14 @@ def run(
     stage2_val_history: list[float] = []
     stage2_lr_history:  list[float] = []
     stage2_lr_drop_epochs: list[int] = []
+    stage2_comp_history: list[dict] = []   # contour mode: per-epoch term components
+
+    _s2_loss_type = getattr(cfg, "STAGE2_LOSS", "focal_spot")
+    _s2_hybrid    = (_s2_loss_type == "hybrid")
+    # "hybrid" reuses ALL of the contour-mode scaffolding below (extractor,
+    # GT contour precompute, guardrail, empty-flux rescue) -- only the loss
+    # object constructed inside that scaffolding differs.
+    _s2_contour   = _s2_loss_type in ("contour", "hybrid")
 
     if skip_stage2:
         log.info("--skip-stage2 set — skipping Stage 2 (FocalSpotLoss).")
@@ -2101,6 +2692,29 @@ def run(
         # centroid them via centre-of-mass, which is not the same reference as the
         # UTIS centroid on real data. This local equivalent keeps the original
         # semantics: squared distance between predicted-flux centroid and c_gt.
+        # Robust aggregation of the Stage-2 focal-spot residuals. The residual is
+        # a miss distance in METRES on the target plane, so the angular tolerance
+        # is converted with this heliostat's own distance to the target — that
+        # keeps delta comparable across a field whose heliostats sit 60-250 m out.
+        # "l2" reproduces the historical mean-of-squared-metres exactly.
+        _s2_reduction = getattr(cfg, "STAGE2_REDUCTION", "l2")
+        _s2_delta_m = getattr(cfg, "STAGE2_HUBER_DELTA_MRAD", 3.0) * hel_dist_m / 1000.0
+        _s2_trim = getattr(cfg, "STAGE2_TRIM_FRACTION", 0.25)
+
+        def _s2_reduce(per_sample_squared: torch.Tensor) -> torch.Tensor:
+            return robust_reduce_squared(
+                per_sample_squared, mode=_s2_reduction,
+                delta=_s2_delta_m, trim_fraction=_s2_trim,
+            )
+
+        if _s2_reduction != "l2":
+            log.info(
+                f"Stage 2 reduction: {_s2_reduction} "
+                f"(delta={getattr(cfg, 'STAGE2_HUBER_DELTA_MRAD', 3.0)} mrad "
+                f"= {_s2_delta_m * 100:.1f} cm at {hel_dist_m:.0f} m)"
+            )
+        log.info(f"Stage 2 parameter set: {getattr(cfg, 'STAGE2_PARAM_SET', 'all')}")
+
         def focal_spot_loss_fn(prediction, ground_truth, target_area_indices, bitmap_resolution):
             bitmap_coords = get_center_of_mass(bitmaps=prediction, device=device)
             pred_coords = bitmap_coordinates_to_target_coordinates(
@@ -2113,6 +2727,91 @@ def run(
             return ((pred_coords[:, :3] - ground_truth[:, :3]) ** 2).sum(dim=-1)
 
         scenario.set_number_of_rays(cfg.TRAIN_RAYS)
+
+        # -------------------------------------------------------------- #
+        # Contour mode (STAGE2_LOSS == "contour"): Wortberg upper-contour  #
+        # loss on the measured flux IMAGES instead of the centroid c_gt.   #
+        # Stage 1 (forward-aim) is the alignment warm-up that put the beam #
+        # on target, so the contour loss runs from epoch 1. Safety nets:   #
+        # per-sample ForwardAimLoss rescue for empty predicted flux, and a #
+        # guardrail (eq. 4.45) that falls back to ForwardAimLoss while the #
+        # val centroid error exceeds θ_guard.                              #
+        # -------------------------------------------------------------- #
+        if _s2_contour:
+            _bitmap_res = torch.tensor(
+                [indices.bitmap_resolution, indices.bitmap_resolution], device=device
+            )
+            _extractor = ContourExtractor(
+                tau=cfg.CONTOUR_TAU,
+                eta=cfg.CONTOUR_ETA,
+                smoothing_rounds=cfg.CONTOUR_SMOOTHING_ROUNDS,
+                gaussian_sigma=cfg.CONTOUR_GAUSS_SIGMA,
+                gaussian_kernel_size=cfg.CONTOUR_GAUSS_KSIZE,
+                band_sigma=getattr(cfg, "CONTOUR_BAND_SIGMA", 0.0),
+            ).to(device)
+            _wortberg_loss = WortbergContourLoss(
+                _extractor,
+                weight_coarse=cfg.CONTOUR_BETA,
+                weight_gravity=cfg.CONTOUR_GAMMA,
+                coarse_scale=getattr(cfg, "CONTOUR_COARSE_SCALE", 1.0),
+                gravity_scale=getattr(cfg, "CONTOUR_GRAVITY_SCALE", 1.0),
+            )
+            if _s2_hybrid:
+                _hybrid_focal_weight = getattr(cfg, "HYBRID_FOCAL_WEIGHT", 0.5)
+                _hybrid_focal_scale = getattr(cfg, "HYBRID_FOCAL_SCALE", 1.0)
+                contour_loss_fn = HybridFocalContourLoss(
+                    _wortberg_loss,
+                    focal_weight=_hybrid_focal_weight,
+                    focal_scale=_hybrid_focal_scale,
+                )
+                log.info(f"Stage 2 loss: HybridFocalContourLoss  focal_weight={_hybrid_focal_weight}  "
+                         f"focal_scale={_hybrid_focal_scale}")
+            else:
+                contour_loss_fn = _wortberg_loss
+            # Constant GT side (contours, distance maps, ENU COMs) — built once.
+            gt_train_contour = build_contour_ground_truth(
+                train_flux, _extractor, _bitmap_res, scenario.solar_tower,
+                train_target_mask, device,
+            )
+            gt_val_contour = (
+                build_contour_ground_truth(
+                    val_flux, _extractor, _bitmap_res, scenario.solar_tower,
+                    val_target_mask, device,
+                )
+                if val_flux is not None else None
+            )
+            _s2_fallback_fn = ForwardAimLoss()
+            _guardrail_on = False
+            _theta_guard = None
+            if val_flux is not None:
+                # θ_guard anchored on the post-Stage-1 val centroid accuracy.
+                with torch.no_grad():
+                    _cents_v, _ = _forward_pass(
+                        scenario, hg,
+                        val_rays, val_active_mask, val_target_mask,
+                        _current_base_pos(), device,
+                        motor_positions=val_motor_pos,
+                    )
+                _post_s1_val_mrad = float(
+                    (torch.norm(_cents_v[:, :3] - val_centroids[:, :3], dim=1)
+                     / hel_dist_m * 1000).mean().item()
+                )
+                _theta_guard = max(
+                    cfg.CONTOUR_GUARDRAIL_MIN_MRAD,
+                    cfg.CONTOUR_GUARDRAIL_FACTOR * _post_s1_val_mrad,
+                )
+                log.info(
+                    f"Contour guardrail: θ_guard={_theta_guard:.2f} mrad "
+                    f"(post-S1 val {_post_s1_val_mrad:.2f} mrad, "
+                    f"factor {cfg.CONTOUR_GUARDRAIL_FACTOR}, release at 0.8·θ)"
+                )
+            else:
+                log.info("Contour guardrail disabled (no validation split).")
+            log.info(
+                f"Stage 2 loss: WortbergContourLoss  τ={cfg.CONTOUR_TAU}  "
+                f"η={cfg.CONTOUR_ETA}  q={cfg.CONTOUR_SMOOTHING_ROUNDS}  "
+                f"β={cfg.CONTOUR_BETA}  γ={cfg.CONTOUR_GAMMA}"
+            )
 
         # Forward map for Stage 2: orient the heliostat from the recorded motor
         # positions m_c and let the optics decide where the beam lands (compared
@@ -2130,7 +2829,8 @@ def run(
         best_s2_params = None
 
         log.info(
-            f"Stage 2: FocalSpotLoss  |  {cfg.STAGE2_EPOCHS} epochs  |  "
+            f"Stage 2: {'WortbergContourLoss' if _s2_contour else 'FocalSpotLoss'}  |  "
+            f"{cfg.STAGE2_EPOCHS} epochs  |  "
             f"{n_mb} mini-batches of ≤{cfg.MINI_BATCH_SIZE} samples"
         )
         t_s2 = time.time()
@@ -2143,6 +2843,13 @@ def run(
 
             optimizer_s2.zero_grad()
             loss_accum = None
+            # Contour bookkeeping: guardrail state used for THIS epoch's training,
+            # batch-weighted per-term component means, and empty-flux rescue count.
+            _guard_this_epoch = _s2_contour and _guardrail_on
+            comp_accum = {"coarse": 0.0, "fine": 0.0, "gravity": 0.0}
+            if _s2_hybrid:
+                comp_accum["focal"] = 0.0
+            n_empty_rescued = 0
 
             for mb in range(n_mb):
                 s  = mb * cfg.MINI_BATCH_SIZE
@@ -2153,8 +2860,20 @@ def run(
                 mb_target  = train_target_mask[s:e]
                 mb_gt      = train_centroids[s:e]
                 mb_motor   = train_motor_pos[s:e]
-                mb_active  = torch.tensor([mb_size], device=device, dtype=torch.long)
+                mb_active  = _one_hot_active(hel_idx, mb_size, n_hel, device)
 
+                # Blocking: compute aimed neighbour surfaces FIRST — the helper
+                # activates the whole group, so the one-hot activate + motor
+                # alignment below must run afterwards, leaving the studied
+                # heliostat aligned for trace_rays' mask assertion.
+                _nb_surfaces = (
+                    aimed_neighbour_surfaces(
+                        hg, scenario, mb_rays[0], int(mb_target[0].item()), device,
+                        target_index_override=_bt_override,
+                        fixed_tilt_rows=_fixed_tilt_rows, fixed_tilt=_fixed_tilt,
+                    )
+                    if blocking else None
+                )
                 hg.activate_heliostats(active_heliostats_mask=mb_active, device=device)
                 _bpd = kinematic._base_position_deviation
                 _rep = _bpd.repeat_interleave(mb_active, dim=0)
@@ -2173,22 +2892,76 @@ def run(
                     batch_size=max(8, mb_size),
                     random_seed=epoch * 1000 + mb,
                 )
-                flux, _, _, _ = ray_tracer.trace_rays(
-                    incident_ray_directions=mb_rays,
-                    active_heliostats_mask=mb_active,
-                    target_area_indices=mb_target,
-                    device=device,
-                )
+                if blocking:
+                    # Neighbours aimed at THIS sample's own target; surfaces are
+                    # constants computed above (no grad). mb_size == 1 is
+                    # enforced when blocking.
+                    ray_tracer.blocking_active = True
+                    ray_tracer.blocking_heliostat_surfaces_active = _nb_surfaces
+                    with exact_blocking():
+                        flux, _, _, _ = ray_tracer.trace_rays(
+                            incident_ray_directions=mb_rays,
+                            active_heliostats_mask=mb_active,
+                            target_area_indices=mb_target,
+                            device=device,
+                        )
+                else:
+                    flux, _, _, _ = ray_tracer.trace_rays(
+                        incident_ray_directions=mb_rays,
+                        active_heliostats_mask=mb_active,
+                        target_area_indices=mb_target,
+                        device=device,
+                    )
                 sample_idx = ray_tracer.get_sampler_indices()
-
-                lps = focal_spot_loss_fn(
-                    prediction=flux,
-                    ground_truth=mb_gt[sample_idx],
-                    target_area_indices=mb_target[sample_idx],
-                    bitmap_resolution=ray_tracer.bitmap_resolution,
-                )
                 weight = mb_size / N_TRAIN
-                (lps.mean() * weight).backward()
+
+                if _guard_this_epoch:
+                    # Guardrail tripped (eq. 4.45): whole epoch on the alignment
+                    # fallback until the val centroid error recovers.
+                    _origins_mb = kinematic.active_heliostat_positions[:, :3][sample_idx]
+                    lps = _s2_fallback_fn(
+                        mb_motor[sample_idx], mb_rays[sample_idx],
+                        mb_gt[sample_idx], _origins_mb, kinematic, device,
+                    )
+                elif _s2_contour:
+                    lps, comps = contour_loss_fn(
+                        prediction=flux,
+                        gt_contours=gt_train_contour.contours[s:e][sample_idx],
+                        gt_distance_maps=gt_train_contour.distance_maps[s:e][sample_idx],
+                        gt_com_enu=gt_train_contour.com_enu[s:e][sample_idx],
+                        target_area_indices=mb_target[sample_idx],
+                        bitmap_resolution=ray_tracer.bitmap_resolution,
+                        solar_tower=scenario.solar_tower,
+                        device=device,
+                        gt_centroid_full=mb_gt[sample_idx],
+                    )
+                    for k in comp_accum:
+                        comp_accum[k] += comps[k] * weight
+                    # Per-sample rescue: an empty predicted flux (beam off the
+                    # target) yields an empty contour and no useful gradient —
+                    # substitute the vector alignment loss for those samples.
+                    empty = flux.detach().sum(dim=(-2, -1)) < cfg.CONTOUR_EMPTY_FLUX_EPS
+                    if empty.any():
+                        n_empty_rescued += int(empty.sum())
+                        _origins_mb = kinematic.active_heliostat_positions[:, :3][sample_idx]
+                        lps_align = _s2_fallback_fn(
+                            mb_motor[sample_idx], mb_rays[sample_idx],
+                            mb_gt[sample_idx], _origins_mb, kinematic, device,
+                        )
+                        lps = torch.where(empty, lps_align, lps)
+                else:
+                    lps = focal_spot_loss_fn(
+                        prediction=flux,
+                        ground_truth=mb_gt[sample_idx],
+                        target_area_indices=mb_target[sample_idx],
+                        bitmap_resolution=ray_tracer.bitmap_resolution,
+                    )
+                # The robust reduction is defined on the focal-spot residual
+                # (squared METRES). The contour loss and the ForwardAimLoss
+                # guardrail fallback are different quantities entirely, so they
+                # keep a plain mean — applying a metre-scaled delta to them
+                # would be meaningless.
+                (( lps.mean() if _s2_contour else _s2_reduce(lps) ) * weight).backward()
                 mb_loss   = lps.detach().mean() * weight
                 loss_accum = mb_loss if loss_accum is None else loss_accum + mb_loss
 
@@ -2199,18 +2972,30 @@ def run(
             stage2_history.append(loss_accum.item())
 
             s2_val_loss = None
+            s2_val_mrad = None   # contour mode: ray-traced val centroid error [mrad]
             if val_flux is not None:
                 n_mb_v   = (N_VAL + cfg.MINI_BATCH_SIZE - 1) // cfg.MINI_BATCH_SIZE
                 val_accum = 0.0
+                val_mrad_accum = 0.0
                 with torch.no_grad():
                     for mbv in range(n_mb_v):
                         sv  = mbv * cfg.MINI_BATCH_SIZE
                         ev  = min(sv + cfg.MINI_BATCH_SIZE, N_VAL)
                         msv = ev - sv
                         mbr_v = val_rays[sv:ev];    mbt_v = val_target_mask[sv:ev]
-                        mbg_v = val_centroids[sv:ev]; mba_v = torch.tensor([msv], device=device, dtype=torch.long)
+                        mbg_v = val_centroids[sv:ev]; mba_v = _one_hot_active(hel_idx, msv, n_hel, device)
                         mbm_v = val_motor_pos[sv:ev]
 
+                        # Blocking: neighbour surfaces first (helper activates
+                        # the whole group), then one-hot activate + align.
+                        _nb_surfaces_v = (
+                            aimed_neighbour_surfaces(
+                                hg, scenario, mbr_v[0], int(mbt_v[0].item()), device,
+                                target_index_override=_bt_override,
+                                fixed_tilt_rows=_fixed_tilt_rows, fixed_tilt=_fixed_tilt,
+                            )
+                            if blocking else None
+                        )
                         hg.activate_heliostats(active_heliostats_mask=mba_v, device=device)
                         _bpd_v = kinematic._base_position_deviation
                         _rep_v = _bpd_v.repeat_interleave(mba_v, dim=0)
@@ -2224,26 +3009,108 @@ def run(
                             blocking_active=False, world_size=1, rank=0,
                             batch_size=max(8, msv), random_seed=42,
                         )
-                        fl_v, _, _, _ = rt_v.trace_rays(
-                            incident_ray_directions=mbr_v,
-                            active_heliostats_mask=mba_v,
-                            target_area_indices=mbt_v,
-                            device=device,
-                        )
+                        if blocking:
+                            rt_v.blocking_active = True
+                            rt_v.blocking_heliostat_surfaces_active = _nb_surfaces_v
+                            with exact_blocking():
+                                fl_v, _, _, _ = rt_v.trace_rays(
+                                    incident_ray_directions=mbr_v,
+                                    active_heliostats_mask=mba_v,
+                                    target_area_indices=mbt_v,
+                                    device=device,
+                                )
+                        else:
+                            fl_v, _, _, _ = rt_v.trace_rays(
+                                incident_ray_directions=mbr_v,
+                                active_heliostats_mask=mba_v,
+                                target_area_indices=mbt_v,
+                                device=device,
+                            )
                         sidx_v = rt_v.get_sampler_indices()
-                        lps_v  = focal_spot_loss_fn(
-                            prediction=fl_v,
-                            ground_truth=mbg_v[sidx_v],
-                            target_area_indices=mbt_v[sidx_v],
-                            bitmap_resolution=rt_v.bitmap_resolution,
-                        )
-                        val_accum += lps_v.mean().item() * (msv / N_VAL)
+                        if _s2_contour:
+                            lps_v, _ = contour_loss_fn(
+                                prediction=fl_v,
+                                gt_contours=gt_val_contour.contours[sv:ev][sidx_v],
+                                gt_distance_maps=gt_val_contour.distance_maps[sv:ev][sidx_v],
+                                gt_com_enu=gt_val_contour.com_enu[sv:ev][sidx_v],
+                                target_area_indices=mbt_v[sidx_v],
+                                bitmap_resolution=rt_v.bitmap_resolution,
+                                solar_tower=scenario.solar_tower,
+                                device=device,
+                                gt_centroid_full=mbg_v[sidx_v],
+                            )
+                            # COM-accuracy for monitoring / scheduler / guardrail
+                            # (thesis §5): centroid error of the same traced flux.
+                            lps_foc_v = focal_spot_loss_fn(
+                                prediction=fl_v,
+                                ground_truth=mbg_v[sidx_v],
+                                target_area_indices=mbt_v[sidx_v],
+                                bitmap_resolution=rt_v.bitmap_resolution,
+                            )
+                            val_mrad_accum += (
+                                (lps_foc_v.clamp(min=0).sqrt() / hel_dist_m * 1000.0)
+                                .mean().item() * (msv / N_VAL)
+                            )
+                        else:
+                            lps_v = focal_spot_loss_fn(
+                                prediction=fl_v,
+                                ground_truth=mbg_v[sidx_v],
+                                target_area_indices=mbt_v[sidx_v],
+                                bitmap_resolution=rt_v.bitmap_resolution,
+                            )
+                        val_accum += (
+                            lps_v.mean() if _s2_contour else _s2_reduce(lps_v)
+                        ).item() * (msv / N_VAL)
                 s2_val_loss = val_accum
+                if _s2_contour:
+                    s2_val_mrad = val_mrad_accum
                 stage2_val_history.append(s2_val_loss)
 
-            scheduler_s2.step(s2_val_loss if s2_val_loss is not None else loss_accum.item())
+            # Contour mode monitors the val COM-accuracy in mrad (thesis §5) —
+            # the raw contour loss is not comparable across guardrail switches.
+            if _s2_contour and s2_val_mrad is not None:
+                monitor = s2_val_mrad
+            elif s2_val_loss is not None:
+                monitor = s2_val_loss
+            else:
+                monitor = loss_accum.item()
+            scheduler_s2.step(monitor)
 
-            monitor = s2_val_loss if s2_val_loss is not None else loss_accum.item()
+            # Guardrail state update (with hysteresis to avoid flapping). On every
+            # transition the Adam state is reset: moments accumulated under the
+            # OTHER loss otherwise keep pushing its direction for ~1/(1-β₁)
+            # epochs and the fallback cannot actually rescue the heliostat.
+            if _s2_contour and _theta_guard is not None and s2_val_mrad is not None:
+                if not _guardrail_on and s2_val_mrad > _theta_guard:
+                    _guardrail_on = True
+                    optimizer_s2.state.clear()
+                    log.info(
+                        f"S2 epoch {epoch}: GUARDRAIL TRIPPED — val centroid "
+                        f"{s2_val_mrad:.2f} mrad > θ_guard {_theta_guard:.2f}; "
+                        f"falling back to ForwardAimLoss (optimizer state reset)"
+                    )
+                elif _guardrail_on and s2_val_mrad <= 0.8 * _theta_guard:
+                    _guardrail_on = False
+                    optimizer_s2.state.clear()
+                    log.info(
+                        f"S2 epoch {epoch}: guardrail released — val centroid "
+                        f"{s2_val_mrad:.2f} mrad ≤ 0.8·θ_guard; back to contour "
+                        f"loss (optimizer state reset)"
+                    )
+
+            if _s2_contour:
+                if n_empty_rescued:
+                    log.info(f"S2 epoch {epoch}: {n_empty_rescued} empty-flux "
+                             f"sample(s) rescued with ForwardAimLoss")
+                stage2_comp_history.append({
+                    "coarse":  comp_accum["coarse"] if not _guard_this_epoch else None,
+                    "fine":    comp_accum["fine"] if not _guard_this_epoch else None,
+                    "gravity": comp_accum["gravity"] if not _guard_this_epoch else None,
+                    "guardrail": int(_guard_this_epoch),
+                    "n_empty_rescued": n_empty_rescued,
+                    "val_centroid_mrad": s2_val_mrad,
+                })
+
             if monitor < best_s2_loss:
                 best_s2_loss = monitor
                 best_s2_params = {
@@ -2263,18 +3130,51 @@ def run(
             kinematic.actuators.optimizable_parameters.data.copy_(best_s2_params["act_angle"])
             kinematic.actuators.non_optimizable_parameters.data.copy_(best_s2_params["act_offset"])
             kinematic._base_position_deviation = best_s2_params["base_pos"].clone().requires_grad_(True)
-            log.info(f"Restored best Stage 2 params (loss={best_s2_loss:.6f})")
+            _mon_name = "val centroid mrad" if _s2_contour else "loss"
+            log.info(f"Restored best Stage 2 params ({_mon_name}={best_s2_loss:.6f})")
 
         t_s2_min = (time.time() - t_s2) / 60.0
         log.info(f"Stage 2 done in {t_s2_min:.1f} min. Final loss={stage2_history[-1]:.6f}")
 
+        # Full-resolution per-epoch Stage-2 loss/LR — always written (unlike the
+        # ray-traced TRAIN-set trail captures in convergence_history.csv, which are
+        # gated by PLOT_EVERY). val_accum above already ray-traces the val set every
+        # epoch for the scheduler, so this costs nothing extra to persist.
+        with open(output_dir / "stage2_epoch_history.csv", "w", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["epoch", "train_loss", "val_loss", "lr"])
+            for i in range(len(stage2_history)):
+                writer.writerow([
+                    i + 1,
+                    stage2_history[i],
+                    stage2_val_history[i] if i < len(stage2_val_history) else "",
+                    stage2_lr_history[i] if i < len(stage2_lr_history) else "",
+                ])
+
         s2_eval = _eval_test(
             scenario, hg,
             test_rays, test_active_mask, test_target_mask, test_centroids, test_motor_pos,
-            hel_dist_m, cfg, device, "After Stage 2",
+            hel_dist_m, cfg, device, "After Stage 2", hel_idx=hel_idx, blocking=blocking,
+            fixed_tilt_rows=_fixed_tilt_rows, fixed_tilt=_fixed_tilt,
         )
 
     total_min = (time.time() - t_start) / 60.0
+
+    # Cross-mode evaluation (multi-heliostat neighbourhood scenarios only): the
+    # SAME trained parameters scored with the OPPOSITE blocking setting. This
+    # separates "error the model could not fit" from "bias it never saw (A0) /
+    # never had to absorb (A1)" — the core Experiment-S comparison, at the cost
+    # of one extra test-set forward pass.
+    s2_eval_cross = None
+    if n_hel > 1:
+        s2_eval_cross = _eval_test(
+            scenario, hg,
+            test_rays, test_active_mask, test_target_mask, test_centroids, test_motor_pos,
+            hel_dist_m, cfg, device,
+            f"After Stage 2 (cross: blocking {'on' if not blocking else 'off'})",
+            hel_idx=hel_idx, blocking=not blocking,
+            fixed_tilt_rows=_fixed_tilt_rows, fixed_tilt=_fixed_tilt,
+        )
 
     # ------------------------------------------------------------------ #
     # 9. Save outputs                                                      #
@@ -2306,29 +3206,63 @@ def run(
         "n_val":           N_VAL,
         "n_test":          N_TEST,
         "total_time_min":  total_min,
+        # Whether Stage 2 actually executed. When it does not, ``after_stage2`` is a
+        # copy of ``after_stage1`` — which reads as "Stage 2 ran and achieved nothing"
+        # unless consumers can tell the difference. Downstream plots/tables label
+        # themselves from this flag.
+        "stage2_ran":      bool(s2_eval is not s1_eval),
+        "stage1_loss":     _s1_loss_label,
+        # Experiment-S context: whether THIS run traced with blocking, and the
+        # same final parameters scored under the opposite setting (multi-hel only).
+        "blocking":        bool(blocking),
         "pre_training":    _mrad_stats(pre_eval),
         "after_stage1":    _mrad_stats(s1_eval),
         "after_stage2":    _mrad_stats(s2_eval),
+        "after_stage2_cross_blocking": (
+            {"eval_blocking": not blocking, **_mrad_stats(s2_eval_cross)}
+            if s2_eval_cross is not None else None
+        ),
+        # Per-sample test errors — kept in JSON so plots (ECDFs, paired A0-vs-A1
+        # scatters, per-sample error-vs-blocked-fraction) never need a rerun.
+        "per_sample_test": {
+            "pre_centroid_mrad":    pre_eval["errs_centroid_mrad"].tolist(),
+            "pre_direction_mrad":   pre_eval["errs_direction_mrad"].tolist(),
+            "s1_centroid_mrad":     s1_eval["errs_centroid_mrad"].tolist(),
+            "s1_direction_mrad":    s1_eval["errs_direction_mrad"].tolist(),
+            "s2_centroid_mrad":     s2_eval["errs_centroid_mrad"].tolist(),
+            "s2_direction_mrad":    s2_eval["errs_direction_mrad"].tolist(),
+            "s2_cross_centroid_mrad": (
+                s2_eval_cross["errs_centroid_mrad"].tolist()
+                if s2_eval_cross is not None else None
+            ),
+            "s2_cross_direction_mrad": (
+                s2_eval_cross["errs_direction_mrad"].tolist()
+                if s2_eval_cross is not None else None
+            ),
+        },
     }
     with open(output_dir / "results.json", "w") as fh:
         json.dump(results, fh, indent=2)
 
-    # Metrics ASCII table — both named metrics side by side.
-    with open(output_dir / "metrics_table.txt", "w") as fh:
-        fh.write(f"Heliostat: {heliostat_id}  |  test samples: {N_TEST}\n")
-        fh.write("centroid = ray-traced focal-spot centroid landing (incl. surface); "
-                 "direction = kinematic pointing (excl. surface)\n\n")
-        fh.write(f"{'Stage':<22} {'centroid mean':>14} {'centroid median':>16} "
-                 f"{'direction mean':>16} {'direction median':>18}\n")
-        fh.write("-" * 90 + "\n")
-        for ev in [pre_eval, s1_eval, s2_eval]:
-            c_mn  = ev["errs_centroid_mrad"].mean()
-            c_med = float(np.median(ev["errs_centroid_mrad"]))
-            d_mn  = ev["errs_direction_mrad"].mean()
-            d_med = float(np.median(ev["errs_direction_mrad"]))
-            fh.write(
-                f"{ev['label']:<22} {c_mn:14.4f} {c_med:16.4f} {d_mn:16.4f} {d_med:18.4f}\n"
-            )
+    # Metrics ASCII table — both named metrics side by side. Human-facing only
+    # (results.json holds the same numbers), so it follows make_plots.
+    if make_plots:
+        with open(output_dir / "metrics_table.txt", "w") as fh:
+            fh.write(f"Heliostat: {heliostat_id}  |  test samples: {N_TEST}\n")
+            fh.write("centroid = ray-traced focal-spot centroid landing (incl. surface); "
+                     "direction = kinematic pointing (excl. surface)\n\n")
+            fh.write(f"{'Stage':<22} {'centroid mean':>14} {'centroid median':>16} "
+                     f"{'direction mean':>16} {'direction median':>18}\n")
+            fh.write("-" * 90 + "\n")
+            for ev in [pre_eval, s1_eval, s2_eval]:
+                c_mn  = ev["errs_centroid_mrad"].mean()
+                c_med = float(np.median(ev["errs_centroid_mrad"]))
+                d_mn  = ev["errs_direction_mrad"].mean()
+                d_med = float(np.median(ev["errs_direction_mrad"]))
+                fh.write(
+                    f"{ev['label']:<22} {c_mn:14.4f} {c_med:16.4f} "
+                    f"{d_mn:16.4f} {d_med:18.4f}\n"
+                )
 
     # Convergence CSV
     with open(output_dir / "convergence_history.csv", "w", newline="") as fh:
@@ -2336,6 +3270,9 @@ def run(
             "epoch", "stage", "train_loss", "val_loss",
             "mrad_train_mean", "mrad_train_median", "mrad_val_mean",
             "align_mrad_train", "align_mrad_val",
+            # Contour mode only (empty otherwise) — stable header for parsers.
+            "s2_loss_coarse", "s2_loss_fine", "s2_loss_gravity",
+            "s2_guardrail", "s2_val_centroid_mrad",
         ])
         writer.writeheader()
         for ckpt in trail_checkpoints:
@@ -2356,10 +3293,20 @@ def run(
                 v_loss = stage1_val_history[idx] if idx < len(stage1_val_history) else None
                 align_mrad_t = stage1_mrad_history[idx] if idx < len(stage1_mrad_history) else None
                 align_mrad_v = stage1_mrad_val_history[idx] if idx < len(stage1_mrad_val_history) else None
-            else:
+            s2_comp = {}
+            if stage == "stage2":
                 idx = ep - cfg.STAGE1_EPOCHS - 1
                 t_loss = stage2_history[idx] if idx < len(stage2_history) else None
                 v_loss = stage2_val_history[idx] if idx < len(stage2_val_history) else None
+                if idx < len(stage2_comp_history):
+                    _c = stage2_comp_history[idx]
+                    s2_comp = {
+                        "s2_loss_coarse":       _c["coarse"],
+                        "s2_loss_fine":         _c["fine"],
+                        "s2_loss_gravity":      _c["gravity"],
+                        "s2_guardrail":         _c["guardrail"],
+                        "s2_val_centroid_mrad": _c["val_centroid_mrad"],
+                    }
 
             writer.writerow({
                 "epoch":             ep,
@@ -2371,49 +3318,53 @@ def run(
                 "mrad_val_mean":     ckpt["mrad_val_mean"],
                 "align_mrad_train":  align_mrad_t,
                 "align_mrad_val":    align_mrad_v,
+                **s2_comp,
             })
 
-    # Kinematic parameters (final)
+    # Kinematic parameters (final) — the studied heliostat's row only.
     kin_params = {
-        "rotation_dev_rad":       kinematic.rotation_deviation_parameters.detach().cpu().tolist(),
+        "rotation_dev_rad":       kinematic.rotation_deviation_parameters.detach().cpu()[hel_idx].tolist(),
         "actuator_angle_dev_rad": (
             kinematic.actuators.optimizable_parameters[:, indices.actuator_initial_angle, :]
             - init_angle
-        ).detach().cpu().tolist(),
+        ).detach().cpu()[hel_idx].tolist(),
         "actuator_offset_dev_m":  (
             kinematic.actuators.non_optimizable_parameters[:, indices.actuator_offset, :]
             - init_offset
-        ).detach().cpu().tolist(),
+        ).detach().cpu()[hel_idx].tolist(),
         "actuator_stroke_dev_m":  (
             kinematic.actuators.optimizable_parameters[:, indices.actuator_initial_stroke_length, :]
             - init_stroke
-        ).detach().cpu().tolist(),
+        ).detach().cpu()[hel_idx].tolist(),
         "pivot_radius_dev_m":     (
             kinematic.actuators.non_optimizable_parameters[:, indices.actuator_pivot_radius, :]
             - init_pivot
-        ).detach().cpu().tolist(),
-        "translation_dev_m":      kinematic.translation_deviation_parameters.detach().cpu().tolist(),
-        "base_position_dev_m":    kinematic._base_position_deviation.detach().cpu().tolist()
+        ).detach().cpu()[hel_idx].tolist(),
+        "translation_dev_m":      kinematic.translation_deviation_parameters.detach().cpu()[hel_idx].tolist(),
+        "base_position_dev_m":    kinematic._base_position_deviation.detach().cpu()[hel_idx].tolist()
                                   if hasattr(kinematic, "_base_position_deviation") else [0.0, 0.0, 0.0],
     }
     with open(output_dir / "kinematic_parameters.json", "w") as fh:
         json.dump(kin_params, fh, indent=2)
 
-    # Per-epoch kinematic history
-    with open(output_dir / "kinematic_history.json", "w") as fh:
-        json.dump(param_history, fh, indent=2)
+    # Per-epoch diagnostic histories. Nothing reads these programmatically — they are
+    # for inspecting ONE heliostat by hand, the same audience as the plots — but across
+    # a 63-heliostat sweep they were 22.6 MB of a 26 MB run. Tied to make_plots so a
+    # field run stays lean and a single-heliostat debug run keeps everything.
+    if make_plots:
+        with open(output_dir / "kinematic_history.json", "w") as fh:
+            json.dump(param_history, fh, indent=2)
 
-    # Gradient history
-    with open(output_dir / "gradient_history.json", "w") as fh:
-        json.dump(grad_history, fh, indent=2)
+        with open(output_dir / "gradient_history.json", "w") as fh:
+            json.dump(grad_history, fh, indent=2)
 
-    # Trail checkpoints (excludes per-flux data to keep file small)
-    trail_json = [
-        {k: v for k, v in ckpt.items() if k not in ("centroids", "flux_sample0", "normals")}
-        for ckpt in trail_checkpoints
-    ]
-    with open(output_dir / "trail_checkpoints.json", "w") as fh:
-        json.dump(trail_json, fh, indent=2)
+        # Trail checkpoints (excludes per-flux data to keep file small)
+        trail_json = [
+            {k: v for k, v in ckpt.items() if k not in ("centroids", "flux_sample0", "normals")}
+            for ckpt in trail_checkpoints
+        ]
+        with open(output_dir / "trail_checkpoints.json", "w") as fh:
+            json.dump(trail_json, fh, indent=2)
 
     log.info(f"Outputs saved to {output_dir}")
 
@@ -2427,7 +3378,8 @@ def run(
 
     log.info("Generating plots...")
 
-    _plot_mrad_convergence(trail_checkpoints, cfg.STAGE1_EPOCHS, plots_dir, heliostat_id)
+    _plot_mrad_convergence(trail_checkpoints, cfg.STAGE1_EPOCHS, plots_dir, heliostat_id,
+                           stage1_label=_s1_loss_label)
     _plot_mrad_convergence_optimized(
         trail_checkpoints, stage1_mrad_history, stage1_mrad_val_history,
         cfg.STAGE1_EPOCHS, plots_dir, heliostat_id,
@@ -2463,6 +3415,22 @@ def run(
     _save_flux_gif(trail_checkpoints, train_flux[0], plots_dir, heliostat_id)
     _plot_test_flux(s2_eval, test_flux, test_rays, hel_dist_m, plots_dir, heliostat_id)
     _plot_sun_positions_split(train_rays, val_rays, test_rays, plots_dir, heliostat_id)
+
+    if _s2_contour and not skip_stage2:
+        # Contour diagnostics: extraction walkthrough on the FINAL (restored
+        # best) parameters + per-term component curves.
+        with torch.no_grad():
+            _, _pred_flux_final = _forward_pass(
+                scenario, hg,
+                train_rays, train_active_mask, train_target_mask,
+                _current_base_pos(), device,
+                motor_positions=train_motor_pos,
+            )
+        _plot_contour_pipeline(
+            _extractor, _pred_flux_final, train_flux, gt_train_contour,
+            plots_dir, heliostat_id,
+        )
+        _plot_contour_terms(stage2_comp_history, plots_dir, heliostat_id)
 
     log.info(f"All plots saved to {plots_dir}")
     log.info(f"Total time: {total_min:.1f} min")

@@ -19,14 +19,15 @@ Output layout
                 train/{idx:04d}/...
                 val/{idx:04d}/...
                 test/{idx:04d}/...
-            results.json                (pre/s1/s2 mrad metrics)
+            results.json                (pre/s1/s2 metrics, both direction and centroid)
             convergence_history.csv
             kinematic_parameters.json   (final optimized kinematic parameters)
-            kinematic_history.json
+            stage1_checkpoint.pt
+            -- only with plots enabled (diagnostics for inspecting one heliostat) --
             metrics_table.txt
+            kinematic_history.json, gradient_history.json, trail_checkpoints.json
             plots/...
-        all_perturbations.json          (GT perturbations for all heliostats combined)
-        all_kinematic_parameters.json   (final optimized params for all heliostats combined)
+        all_perturbations.json          (synthetic runs ONLY — real data has no GT)
         summary.json
         run.log
         aggregated/
@@ -106,7 +107,30 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--heliostat-ids", nargs="+", default=None, metavar="ID",
-        help="Subset of heliostat IDs to process (default: all 63)",
+        help="Subset of heliostat IDs to process (default: all 63). Pass the single "
+             "token 'all-in-benchmark' to use every unique HeliostatId in "
+             "cfg.BENCHMARK_CSV (after --benchmark, if given) instead of an explicit list.",
+    )
+    p.add_argument(
+        "--benchmark", default=None, metavar="NAME",
+        help="Override cfg.BENCHMARK_NAME (and the derived BENCHMARK_CSV/"
+             "CALIBRATION_DIR/REAL_FLUX_DIR), e.g. "
+             "benchmark_split-balanced_train-50_validation-20 for the field-wide "
+             "1277-heliostat 50/20/20 split.",
+    )
+    p.add_argument(
+        "--scenario-template", default=None, metavar="PATH_TEMPLATE",
+        help="Override cfg.SCENARIO_PATH_TEMPLATE, a str.format template with a "
+             "{heliostat_id} placeholder, e.g. "
+             "'<repo>/scenarios/full_field_one_heliostat_scenarios/ideal/{heliostat_id}/scenario_ideal.h5'.",
+    )
+    p.add_argument(
+        "--use-fixed-split", action="store_true",
+        help="Real-data mode only: use the benchmark CSV's own train/validation/test "
+             "assignment verbatim (no pooling, no DatasetSplitter re-split). For a "
+             "benchmark whose split is already a fixed size (e.g. 50/20/20 field-wide), "
+             "this is what 'the dataset has a 50-20-20 split' means: use it, don't "
+             "recompute one. Ignores --train-size/--val-size/--split-type.",
     )
     p.add_argument(
         "--output-dir", type=pathlib.Path, default=None,
@@ -123,6 +147,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--skip-aggregation", action="store_true",
         help="Skip calling aggregate_results after training",
+    )
+    p.add_argument(
+        "--no-plots", action="store_true",
+        help="Skip per-heliostat plot generation (results.json, checkpoints and "
+             "kinematic parameters are still written). Saves ~1 min/heliostat on "
+             "large batches, most of it the per-test-sample flux PNGs.",
     )
     p.add_argument(
         "--daic", action="store_true",
@@ -171,6 +201,46 @@ def _parse_args() -> argparse.Namespace:
                    help="Stage 1 loss: 'motor_steps' (increment-normalized motor steps, "
                         "no angle conversion, default), 'motor_mse' (AlignmentLoss, angle space), "
                         "or 'normal_mrad' (NormalAlignmentLoss)")
+    p.add_argument("--stage1-reduction",
+                   choices=["l2", "huber", "soft_l1", "trimmed"], default=None,
+                   help="How Stage-1 per-sample residuals are aggregated (forward_aim "
+                        "only): 'l2' least squares (default), 'huber'/'soft_l1' cap "
+                        "outlier influence at delta, 'trimmed' discards the worst "
+                        "fraction. Robust modes improve the median at some cost to "
+                        "mean/centroid. Overrides cfg.STAGE1_REDUCTION.")
+    p.add_argument("--huber-delta", type=float, default=None,
+                   help="delta in mrad for --stage1-reduction huber/soft_l1 (cfg.STAGE1_HUBER_DELTA)")
+    p.add_argument("--trim-fraction", type=float, default=None,
+                   help="fraction discarded by --stage1-reduction trimmed (cfg.STAGE1_TRIM_FRACTION)")
+    p.add_argument("--stage2-loss", choices=["focal_spot", "contour"], default=None,
+                   help="Stage 2 loss: 'focal_spot' (predicted-flux COM vs c_gt, "
+                        "default) or 'contour' (Wortberg upper-contour loss on the "
+                        "measured flux images; overrides cfg.STAGE2_LOSS)")
+    p.add_argument("--stage2-param-set", choices=["all", "orientation_only"], default=None,
+                   help="Which parameters Stage 2 may move: 'all' (default, incl. "
+                        "translation/base/offset/pivot — the only stage that trains "
+                        "them) or 'orientation_only' (the same frozen set Stage 1 "
+                        "uses). Overrides cfg.STAGE2_PARAM_SET.")
+    p.add_argument("--stage2-reduction",
+                   choices=["l2", "huber", "soft_l1", "trimmed"], default=None,
+                   help="Robust aggregation of the Stage-2 focal-spot residual "
+                        "(cfg.STAGE2_REDUCTION)")
+    p.add_argument("--stage2-huber-delta-mrad", type=float, default=None,
+                   help="delta in mrad for --stage2-reduction huber/soft_l1 "
+                        "(converted per heliostat to metres; cfg.STAGE2_HUBER_DELTA_MRAD)")
+    p.add_argument("--stage1-trail-plots", action="store_true",
+                   help="Capture ray-traced trail snapshots every epoch during "
+                        "Stage 1 (for the trail plots / flux GIF). Off by default: "
+                        "Stage 1 is a purely kinematic objective, so these are "
+                        "diagnostics only and cost ~5 s/epoch at 100x100 surface "
+                        "points. Stage 2 always captures.")
+    p.add_argument("--stage1-checkpoint-dir", type=pathlib.Path, default=None, metavar="DIR",
+                   help="Directory of a previous run (e.g. outputs/.../ay_three_contour): "
+                        "for each heliostat, load DIR/<ID>/stage1_checkpoint.pt and skip "
+                        "geometric init + Stage 1, so Stage-2 setups can be iterated "
+                        "without re-running Stage 1. Heliostats without a checkpoint "
+                        "run Stage 1 normally. Data split/config must match the "
+                        "original run.")
 
     return p.parse_args()
 
@@ -238,6 +308,16 @@ def main() -> None:
         )
         cfg.SYNTHETIC_DATASET_DIR = cfg.PAINT_DIR / "synthetic" / "balanced_dataset" / "dataset"
 
+    if args.benchmark is not None:
+        cfg.BENCHMARK_NAME  = args.benchmark
+        cfg.BENCHMARK_CSV   = cfg.PAINT_DIR / "splits" / f"{args.benchmark}.csv"
+        cfg.CALIBRATION_DIR = cfg.PAINT_DIR / args.benchmark / "calibration_properties"
+        cfg.REAL_FLUX_DIR   = cfg.PAINT_DIR / args.benchmark / "flux_image"
+    if args.scenario_template is not None:
+        cfg.SCENARIO_PATH_TEMPLATE = args.scenario_template
+    if args.use_fixed_split:
+        cfg.USE_FIXED_SPLIT = True
+
     if args.split_type is not None:
         cfg.SPLITTER_TYPE = args.split_type
     if args.train_size is not None:
@@ -260,12 +340,34 @@ def main() -> None:
         cfg.SURFACE_POINTS_PER_FACET = args.surface_points
     if args.stage1_loss is not None:
         cfg.STAGE1_LOSS = args.stage1_loss
+    if args.stage1_reduction is not None:
+        cfg.STAGE1_REDUCTION = args.stage1_reduction
+    if args.huber_delta is not None:
+        cfg.STAGE1_HUBER_DELTA = args.huber_delta
+    if args.trim_fraction is not None:
+        cfg.STAGE1_TRIM_FRACTION = args.trim_fraction
+    if args.stage2_loss is not None:
+        cfg.STAGE2_LOSS = args.stage2_loss
+    if args.stage2_param_set is not None:
+        cfg.STAGE2_PARAM_SET = args.stage2_param_set
+    if args.stage2_reduction is not None:
+        cfg.STAGE2_REDUCTION = args.stage2_reduction
+    if args.stage2_huber_delta_mrad is not None:
+        cfg.STAGE2_HUBER_DELTA_MRAD = args.stage2_huber_delta_mrad
+    if args.stage1_trail_plots:
+        cfg.STAGE1_TRAIL_PLOTS = True
 
     # Real-data mode never needs a generation step.
     if cfg.DATA_MODE == "real":
         args.skip_dataset_gen = True
 
-    heliostat_ids = args.heliostat_ids or ALL_HELIOSTAT_IDS
+    if args.heliostat_ids == ["all-in-benchmark"]:
+        import pandas as pd
+        heliostat_ids = sorted(pd.read_csv(cfg.BENCHMARK_CSV)["HeliostatId"].unique())
+        log.info(f"--heliostat-ids all-in-benchmark: {len(heliostat_ids)} heliostats "
+                 f"from {cfg.BENCHMARK_CSV}")
+    else:
+        heliostat_ids = args.heliostat_ids or ALL_HELIOSTAT_IDS
     if args.smoke_test:
         heliostat_ids             = heliostat_ids[:5]
         cfg.STAGE1_EPOCHS         = 2
@@ -324,7 +426,6 @@ def main() -> None:
     summary: list[dict]         = []
     succeeded_ids: list[str]    = []
     all_perturbations: dict     = {}
-    all_kinematic_params: dict  = {}
     t_total_start = time.time()
 
     with setup_distributed_environment(
@@ -356,6 +457,16 @@ def main() -> None:
                     log.info(f"  Dataset ready (attempt {gen_result['attempt_used'] + 1})")
 
                 # Step 2: train
+                s1_ckpt = None
+                if args.stage1_checkpoint_dir is not None:
+                    cand = args.stage1_checkpoint_dir / hid / "stage1_checkpoint.pt"
+                    if cand.exists():
+                        s1_ckpt = cand
+                    else:
+                        log.warning(
+                            f"  No Stage-1 checkpoint for {hid} at {cand} — "
+                            f"running Stage 1 normally."
+                        )
                 results = tr.run(
                     heliostat_id=hid,
                     dataset_dir=dataset_dir,
@@ -364,6 +475,8 @@ def main() -> None:
                     device=device,
                     skip_stage1=args.skip_stage1,
                     skip_stage2=args.skip_stage2,
+                    stage1_checkpoint=s1_ckpt,
+                    make_plots=not args.no_plots,
                 )
 
                 elapsed_min = (time.time() - t_hel) / 60.0
@@ -389,15 +502,16 @@ def main() -> None:
                 succeeded_ids.append(hid)
 
                 # Collect per-heliostat data for combined output files.
-                pfile = dataset_dir / "perturbations.json"
-                if pfile.exists():
-                    with open(pfile) as f:
-                        all_perturbations.update(json.load(f))
-
-                kfile = hid_dir / "kinematic_parameters.json"
-                if kfile.exists():
-                    with open(kfile) as f:
-                        all_kinematic_params[hid] = json.load(f)
+                # Real PAINT data has NO known ground-truth perturbation. Reading the
+                # synthetic dataset's perturbations.json here and shipping it as "GT"
+                # produced a full 63-heliostat file of values that were never applied
+                # to the data being fitted — a reader would conclude we know the true
+                # parameter error. Synthetic runs only.
+                if cfg.DATA_MODE != "real":
+                    pfile = dataset_dir / "perturbations.json"
+                    if pfile.exists():
+                        with open(pfile) as f:
+                            all_perturbations.update(json.load(f))
 
             except Exception as exc:
                 elapsed_min = (time.time() - t_hel) / 60.0
@@ -413,21 +527,22 @@ def main() -> None:
     # --------------------------------------------------------------------- #
     # Save combined files                                                     #
     # --------------------------------------------------------------------- #
-    all_pert_path = output_dir / "all_perturbations.json"
-    with open(all_pert_path, "w") as f:
-        json.dump(all_perturbations, f, indent=2)
-    log.info(
-        f"Combined perturbations    → {all_pert_path} "
-        f"({len(all_perturbations)} heliostats)"
-    )
+    # Written only when it means something: on a real-data run there is no ground
+    # truth, and an absent file is clearer than an empty or a fabricated one.
+    if all_perturbations:
+        all_pert_path = output_dir / "all_perturbations.json"
+        with open(all_pert_path, "w") as f:
+            json.dump(all_perturbations, f, indent=2)
+        log.info(
+            f"Combined perturbations    → {all_pert_path} "
+            f"({len(all_perturbations)} heliostats)"
+        )
+    elif cfg.DATA_MODE == "real":
+        log.info("Combined perturbations    → skipped (real data has no ground truth)")
 
-    all_kin_path = output_dir / "all_kinematic_parameters.json"
-    with open(all_kin_path, "w") as f:
-        json.dump(all_kinematic_params, f, indent=2)
-    log.info(
-        f"Combined kinematic params → {all_kin_path} "
-        f"({len(all_kinematic_params)} heliostats)"
-    )
+    # all_kinematic_parameters.json dropped: it duplicated the 63 per-heliostat
+    # kinematic_parameters.json files verbatim and was read only by src/too_old code.
+    # Rebuild on demand from the per-heliostat files if ever needed.
 
     # --------------------------------------------------------------------- #
     # Write summary.json                                                      #

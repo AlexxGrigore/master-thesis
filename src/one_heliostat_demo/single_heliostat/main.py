@@ -89,6 +89,22 @@ def _parse_args() -> argparse.Namespace:
                    help="Override cfg.STAGE1_EPOCHS (default: 20)")
     p.add_argument("--stage2-epochs", type=int, default=None,
                    help="Override cfg.STAGE2_EPOCHS")
+    p.add_argument("--stage2-loss", choices=["focal_spot", "contour"], default=None,
+                   help="Stage 2 loss: 'focal_spot' (predicted-flux COM vs c_gt, "
+                        "default) or 'contour' (Wortberg upper-contour loss on the "
+                        "measured flux images; overrides cfg.STAGE2_LOSS)")
+    p.add_argument("--stage1-trail-plots", action="store_true",
+                   help="Capture ray-traced trail snapshots every epoch during "
+                        "Stage 1 (for the trail plots / flux GIF). Off by default: "
+                        "Stage 1 is a purely kinematic objective, so these are "
+                        "diagnostics only and cost ~5 s/epoch at 100x100 surface "
+                        "points. Stage 2 always captures.")
+    p.add_argument("--stage1-checkpoint", type=pathlib.Path, default=None,
+                   help="Path to a stage1_checkpoint.pt from a previous run: load "
+                        "the post-Stage-1 parameters and skip geometric init + "
+                        "Stage 1, so different Stage-2 setups can be iterated "
+                        "without re-running Stage 1. Data split/config must match "
+                        "the original run.")
     p.add_argument("--base-lr", type=float, default=None,
                    help="Override cfg.BASE_LR (Adam step ≈ lr, so this caps how far "
                         "a parameter can travel per epoch — relevant when unfreezing b_i)")
@@ -153,6 +169,10 @@ def main() -> None:
         cfg.STAGE1_EPOCHS = args.stage1_epochs
     if args.stage2_epochs is not None:
         cfg.STAGE2_EPOCHS = args.stage2_epochs
+    if args.stage2_loss is not None:
+        cfg.STAGE2_LOSS = args.stage2_loss
+    if args.stage1_trail_plots:
+        cfg.STAGE1_TRAIL_PLOTS = True
     if args.base_lr is not None:
         cfg.BASE_LR = args.base_lr
     if args.auto_motor_offset:
@@ -271,6 +291,7 @@ def main() -> None:
             cfg=cfg,
             device=device,
             skip_stage2=args.skip_stage2,
+            stage1_checkpoint=args.stage1_checkpoint,
         )
 
     _print_summary(results)

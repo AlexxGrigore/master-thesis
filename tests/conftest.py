@@ -17,7 +17,13 @@ os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 import torch
 
-from artist.util import config_dictionary
+try:
+    from artist.util import config_dictionary
+except ImportError:
+    # Newer ARTIST versions refactored artist.util.config_dictionary away.
+    # Tests that need the DDP config dict are skipped below; everything else
+    # (device fixture, determinism) is unaffected.
+    config_dictionary = None
 
 # Resolve the ARTIST test-data root so we can reuse the toy scenarios and
 # calibration files that ship with ARTIST.
@@ -43,6 +49,8 @@ def device(request: pytest.FixtureRequest) -> torch.device:
 @pytest.fixture
 def ddp_setup_for_testing() -> dict:
     """Single-process DDP setup used in all reconstructor tests."""
+    if config_dictionary is None:
+        pytest.skip("artist.util.config_dictionary not available in this ARTIST version")
     return {
         config_dictionary.device: None,
         config_dictionary.is_distributed: False,

@@ -1,15 +1,21 @@
 """
 Aggregate training results across all heliostats in a run_all.py output directory.
 
+Every accuracy output reports BOTH metrics — direction (kinematic pointing, excludes
+mirror-surface spread) and centroid (ray-traced landing, includes it). They answer
+different questions and either one alone is misleading; that is also how a metric
+mismatch once turned into a phantom accuracy gap.
+
 Reads per-heliostat results.json and convergence_history.csv and saves:
     aggregated/
         field_mrad_convergence.png   — mean ± 1 std train/val mrad over S1+S2 epochs
         field_loss_curves.png        — mean ± 1 std Stage-1 and Stage-2 loss curves
-        accuracy_sorted.png          — sorted bar chart of per-heliostat test mrad
-        accuracy_distribution.png    — frequency histogram of test mrad
-        field_view.png               — scatter of heliostat positions colored by accuracy
-        summary_table.txt            — ASCII table: per-heliostat pre/s1/s2 mrad + mean/median
-        summary_table.csv            — same as CSV
+        accuracy_sorted.png          — per-heliostat bars, one panel per metric
+        accuracy_distribution.png    — histograms, one panel per metric
+        field_view_detailed.png      — field map coloured by centroid error
+        summary_table.txt            — ASCII table, both metrics side by side
+        summary_table.csv            — per-heliostat data ONLY (no summary rows)
+        summary_field.csv            — field mean/median of every column
 
 Can also be run standalone on any run_all output directory.
 
@@ -46,6 +52,54 @@ def _safe_float(s) -> float:
         return float(s)
     except (TypeError, ValueError):
         return float("nan")
+
+
+# The two metrics, always reported together. `mrad_mean`/`mrad_median` in results.json
+# are LEGACY ALIASES of the centroid metric; asking for them by that name is what let
+# every aggregated plot show the centroid error labelled with the neutral word "mrad",
+# with the direction error absent entirely. Never read the alias — go through _metric.
+METRICS = [
+    ("direction", "direction_mrad", "direction — kinematic pointing (excl. surface)",
+     "tab:blue"),
+    ("centroid",  "centroid_mrad",  "centroid — ray-traced landing (incl. surface)",
+     "tab:orange"),
+]
+
+
+def _metric(r: dict, stage: str, key: str, stat: str) -> float:
+    """results[hid][stage]["<key>_<stat>"], falling back to the legacy alias.
+
+    Old runs on disk predate the explicit names and only carry `mrad_*`, which is the
+    centroid metric — so the fallback is valid for centroid and correctly yields NaN
+    for direction rather than silently substituting the wrong quantity.
+    """
+    block = r.get(stage, {})
+    if f"{key}_{stat}" in block:
+        return float(block[f"{key}_{stat}"])
+    if key == "centroid_mrad" and f"mrad_{stat}" in block:
+        return float(block[f"mrad_{stat}"])
+    return float("nan")
+
+
+def _stage2_ran(results: dict) -> bool:
+    """Did Stage 2 actually execute for any heliostat in this run?
+
+    When it did not, `after_stage2` is a copy of `after_stage1`, and labelling plots
+    "after Stage 2" tells the reader Stage 2 ran and achieved nothing — a materially
+    different claim from "Stage 2 was not run". Older runs have no flag, so fall back
+    to comparing the two blocks.
+    """
+    for r in results.values():
+        if "stage2_ran" in r:
+            if r["stage2_ran"]:
+                return True
+        elif r.get("after_stage2") != r.get("after_stage1"):
+            return True
+    return False
+
+
+def _post_label(results: dict) -> str:
+    return "Stage 2" if _stage2_ran(results) else "Stage 1"
 
 
 def _load_results(output_dir: pathlib.Path, heliostat_ids: list[str]) -> dict:
@@ -306,11 +360,16 @@ def _plot_mrad_convergence(conv_data: dict, agg_dir: pathlib.Path) -> None:
 # Plot 2: field-wide loss curves (S1 and S2 separately)
 # ---------------------------------------------------------------------------
 
-def _plot_loss_curves(conv_data: dict, agg_dir: pathlib.Path) -> None:
+def _plot_loss_curves(conv_data: dict, agg_dir: pathlib.Path,
+                      stage1_loss: str = "Stage-1 loss") -> None:
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
+    # The Stage-1 loss name comes from the run (results.json["stage1_loss"]). It was
+    # hardcoded to "AlignmentLoss", which has not been the default since the
+    # inverse-kinematics fix and is documented as theoretically broken — so every
+    # field loss plot named a loss that did not run.
     stage_meta = [
-        ("stage1", "Stage 1 — AlignmentLoss [mrad]",   axes[0]),
+        ("stage1", f"Stage 1 — {stage1_loss}",   axes[0]),
         ("stage2", "Stage 2 — FocalSpotLoss",    axes[1]),
     ]
     for stage, title, ax in stage_meta:
@@ -347,51 +406,59 @@ def _plot_accuracy_sorted(results: dict, agg_dir: pathlib.Path) -> None:
     if not results:
         return
 
-    hids     = sorted(results, key=lambda h: results[h]["after_stage2"]["mrad_mean"])
-    s2_mrad  = np.array([results[h]["after_stage2"]["mrad_mean"] for h in hids])
-    pre_mrad = np.array([results[h]["pre_training"]["mrad_mean"] for h in hids])
-
-    field_mean   = float(np.mean(s2_mrad))
-    field_median = float(np.median(s2_mrad))
-
-    fig, ax = plt.subplots(figsize=(max(10, len(hids) * 0.22), 5))
-
+    post = _post_label(results)
+    hids = sorted(results, key=lambda h: _metric(results[h], "after_stage2",
+                                                 "centroid_mrad", "mean"))
     x = np.arange(len(hids))
-    # Pre-training accuracy as a translucent grey bar behind each heliostat's
-    # post-training (Stage-2) coloured bar — the visible grey above each bar is
-    # the improvement training achieved.
-    ax.bar(x, pre_mrad, color="grey", alpha=0.35, width=0.7, zorder=1,
-           label="Before training (pre)")
-    colors = [_band_color(v) for v in s2_mrad]
-    ax.bar(x, s2_mrad, color=colors, width=0.7, zorder=2)
-    ax.axhline(field_mean,   color="navy",   ls="--", lw=1.5,
-               label=f"Mean = {field_mean:.1f} mrad")
-    ax.axhline(field_median, color="black",  ls=":",  lw=1.5,
-               label=f"Median = {field_median:.1f} mrad")
-    # Real geometric pre-miss can span 2 mrad to ~1000 mrad; use a log axis so the
-    # post-training bars stay readable next to the tall before-training bars.
-    big_range = float(np.nanmax(pre_mrad)) > 150 and float(np.nanmin(s2_mrad)) > 0
-    if big_range:
-        ax.set_yscale("log")
-        ymin = max(0.5, float(np.nanmin(s2_mrad)) * 0.6)
-        ymax = float(np.nanmax(pre_mrad)) * 1.3
-        ax.set_ylim(ymin, ymax)
-        _log_actual_ticks(ax.yaxis, ymin, ymax)
-    ax.set_xticks(x)
-    ax.set_xticklabels(hids, rotation=90, fontsize=7)
-    ax.set_ylabel("Test mrad (mean per heliostat)" + ("  [log scale]" if big_range else ""))
-    ax.set_title("Per-heliostat test accuracy — sorted (after Stage 2)"
-                 + ("\nbefore = true geometric miss (unbounded)" if big_range else ""))
+    pre_mrad = np.array([_metric(results[h], "pre_training", "centroid_mrad", "mean")
+                         for h in hids])
 
-    # Legend: mean/median lines plus the accuracy-band colour key.
-    from matplotlib.patches import Patch
-    band_handles = [Patch(facecolor=c, label=lbl) for _, c, lbl in _ACCURACY_BANDS]
-    line_handles, line_labels = ax.get_legend_handles_labels()
-    ax.legend(line_handles + band_handles,
-              line_labels + [lbl for _, _, lbl in _ACCURACY_BANDS],
-              fontsize=8, ncol=2)
-    ax.grid(True, axis="y", alpha=0.3, zorder=1)
+    # One panel per metric. Both are always drawn: the direction metric excludes
+    # mirror-surface spread and the centroid metric includes it, so they answer
+    # different questions and either alone is misleading.
+    fig, axes = plt.subplots(len(METRICS), 1, sharex=True,
+                             figsize=(max(10, len(hids) * 0.22), 4.4 * len(METRICS)))
+    for ax, (_, key, desc, _c) in zip(np.atleast_1d(axes), METRICS):
+        vals = np.array([_metric(results[h], "after_stage2", key, "mean") for h in hids])
+        if np.all(np.isnan(vals)):
+            ax.set_title(f"{desc} — not present in these results.json files")
+            continue
+        field_mean, field_median = float(np.nanmean(vals)), float(np.nanmedian(vals))
 
+        # Pre-training as a translucent grey bar behind each post-training bar; the
+        # visible grey above each bar is the improvement training achieved.
+        ax.bar(x, pre_mrad, color="grey", alpha=0.35, width=0.7, zorder=1,
+               label="Before training (pre, centroid)")
+        ax.bar(x, vals, color=[_band_color(v) for v in vals], width=0.7, zorder=2)
+        ax.axhline(field_mean, color="navy", ls="--", lw=1.5,
+                   label=f"Mean = {field_mean:.2f} mrad")
+        ax.axhline(field_median, color="black", ls=":", lw=1.5,
+                   label=f"Median = {field_median:.2f} mrad")
+
+        # The real geometric pre-miss spans ~2 to ~1000 mrad; a log axis keeps the
+        # post-training bars readable next to the tall before-training ones.
+        big_range = float(np.nanmax(pre_mrad)) > 150 and float(np.nanmin(vals)) > 0
+        if big_range:
+            ax.set_yscale("log")
+            ymin = max(0.5, float(np.nanmin(vals)) * 0.6)
+            ymax = float(np.nanmax(pre_mrad)) * 1.3
+            ax.set_ylim(ymin, ymax)
+            _log_actual_ticks(ax.yaxis, ymin, ymax)
+        ax.set_ylabel(f"{key.replace('_mrad', '')} [mrad]"
+                      + ("  [log]" if big_range else ""))
+        ax.set_title(f"{desc}   —   mean per heliostat, after {post}", fontsize=10)
+
+        from matplotlib.patches import Patch
+        band_handles = [Patch(facecolor=c, label=lbl) for _, c, lbl in _ACCURACY_BANDS]
+        lh, ll = ax.get_legend_handles_labels()
+        ax.legend(lh + band_handles, ll + [lbl for _, _, lbl in _ACCURACY_BANDS],
+                  fontsize=7.5, ncol=2)
+        ax.grid(True, axis="y", alpha=0.3, zorder=1)
+
+    axes[-1].set_xticks(x)
+    axes[-1].set_xticklabels(hids, rotation=90, fontsize=7)
+    fig.suptitle(f"Per-heliostat test accuracy — sorted by centroid error, after {post}",
+                 fontsize=12)
     fig.tight_layout()
     out = agg_dir / "accuracy_sorted.png"
     fig.savefig(out, dpi=150)
@@ -407,46 +474,50 @@ def _plot_accuracy_distribution(results: dict, agg_dir: pathlib.Path) -> None:
     if not results:
         return
 
-    s2_mrad  = np.array([results[h]["after_stage2"]["mrad_mean"] for h in results])
-    pre_mrad = np.array([results[h]["pre_training"]["mrad_mean"] for h in results])
+    post = _post_label(results)
+    hids = list(results)
+    pre_mrad = np.array([_metric(results[h], "pre_training", "centroid_mrad", "mean")
+                         for h in hids])
 
-    s2_mean,  s2_median  = float(np.mean(s2_mrad)),  float(np.median(s2_mrad))
-    pre_mean, pre_median = float(np.mean(pre_mrad)), float(np.median(pre_mrad))
+    fig, axes = plt.subplots(1, len(METRICS), figsize=(7.5 * len(METRICS), 5.5))
+    for ax, (_, key, desc, _c) in zip(np.atleast_1d(axes), METRICS):
+        vals = np.array([_metric(results[h], "after_stage2", key, "mean") for h in hids])
+        if np.all(np.isnan(vals)):
+            ax.set_title(f"{desc} — not present in these results.json files")
+            continue
 
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+        # Shared bins over the combined range so the two histograms are comparable;
+        # log-spaced when the (real, unbounded) pre values span a wide range.
+        n_bins = max(8, len(vals) // 5)
+        hi = float(np.nanmax([np.nanmax(pre_mrad), np.nanmax(vals)]))
+        if hi > 150:
+            lo = max(0.5, float(np.nanmin([np.nanmin(pre_mrad), np.nanmin(vals)])))
+            bins = np.logspace(np.log10(lo), np.log10(hi), n_bins + 1)
+            ax.set_xscale("log")
+            _log_actual_ticks(ax.xaxis, lo, hi)
+        else:
+            bins = np.linspace(0.0, hi, n_bins + 1)
 
-    # Shared bins over the combined range so the two histograms are comparable.
-    # Use log-spaced bins when the (real, unbounded) pre values span a wide range.
-    n_bins = max(8, len(s2_mrad) // 5)
-    hi = float(max(pre_mrad.max(), s2_mrad.max()))
-    if hi > 150:
-        lo = max(0.5, float(min(pre_mrad.min(), s2_mrad.min())))
-        bins = np.logspace(np.log10(lo), np.log10(hi), n_bins + 1)
-        ax.set_xscale("log")
-        _log_actual_ticks(ax.xaxis, lo, hi)
-    else:
-        bins = np.linspace(0.0, hi, n_bins + 1)
+        ax.hist(pre_mrad, bins=bins, color="firebrick", edgecolor="white", alpha=0.55,
+                zorder=2, label="Before training (pre, centroid)")
+        ax.hist(vals, bins=bins, color="steelblue", edgecolor="white", alpha=0.75,
+                zorder=3, label=f"After training ({post})")
+        for v, c, ls, lab in [
+            (float(np.nanmean(pre_mrad)),   "firebrick", "--", "Pre mean"),
+            (float(np.nanmedian(pre_mrad)), "firebrick", ":",  "Pre median"),
+            (float(np.nanmean(vals)),       "navy",      "--", "Post mean"),
+            (float(np.nanmedian(vals)),     "purple",    ":",  "Post median"),
+        ]:
+            ax.axvline(v, color=c, ls=ls, lw=1.5, label=f"{lab} = {v:.2f} mrad")
 
-    ax.hist(pre_mrad, bins=bins, color="firebrick",  edgecolor="white", alpha=0.55,
-            zorder=2, label="Before training (pre)")
-    ax.hist(s2_mrad,  bins=bins, color="steelblue",  edgecolor="white", alpha=0.75,
-            zorder=3, label="After training (Stage 2)")
+        ax.set_xlabel(f"{desc}  [mrad], mean per heliostat")
+        ax.set_ylabel("Count")
+        ax.set_title(desc, fontsize=10)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3, zorder=1)
 
-    ax.axvline(pre_mean,   color="firebrick", ls="--", lw=1.5,
-               label=f"Pre mean = {pre_mean:.1f} mrad")
-    ax.axvline(pre_median, color="firebrick", ls=":",  lw=1.5,
-               label=f"Pre median = {pre_median:.1f} mrad")
-    ax.axvline(s2_mean,    color="navy",      ls="--", lw=1.5,
-               label=f"Post mean = {s2_mean:.1f} mrad")
-    ax.axvline(s2_median,  color="purple",    ls=":",  lw=1.5,
-               label=f"Post median = {s2_median:.1f} mrad")
-
-    ax.set_xlabel("Focal-spot error [mrad] (mean per heliostat)")
-    ax.set_ylabel("Count")
-    ax.set_title(f"Accuracy distribution — before vs after training  (N = {len(s2_mrad)} heliostats)")
-    ax.legend(fontsize=8.5)
-    ax.grid(True, alpha=0.3, zorder=1)
-
+    fig.suptitle("Accuracy distribution — before vs after training  "
+                 f"(N = {len(hids)} heliostats, after {post})", fontsize=12)
     fig.tight_layout()
     out = agg_dir / "accuracy_distribution.png"
     fig.savefig(out, dpi=150)
@@ -464,95 +535,11 @@ _SCENARIO_H5 = (
 )
 
 
-def _plot_field_view(results: dict, agg_dir: pathlib.Path) -> None:
-    if not _SCENARIO_H5.exists():
-        log.warning(f"Field view skipped — scenario not found: {_SCENARIO_H5}")
-        return
-
-    # Load all heliostat ENU positions from the scenario file.
-    field_E: dict[str, float] = {}
-    field_N: dict[str, float] = {}
-    tower_E = tower_N = None
-
-    try:
-        with h5py.File(_SCENARIO_H5, "r") as f:
-            for hid, hgrp in f["heliostats"].items():
-                pos = hgrp["position"][:]   # [E, N, U, 1] or [E, N, U]
-                field_E[hid] = float(pos[0])
-                field_N[hid] = float(pos[1])
-            # Mirror the notebook: use the mean of planar target area centers
-            # (solar_tower_juelich_lower/upper) as the tower reference point.
-            # power_plant/position is the physical tower structure — at a different ENU.
-            ta_centers = []
-            if "target_areas_planar" in f:
-                for name, grp in f["target_areas_planar"].items():
-                    if "solar_tower" in name.lower() and "position_center" in grp:
-                        pc = grp["position_center"][()]
-                        ta_centers.append((float(pc[0]), float(pc[1])))
-            if ta_centers:
-                tower_E = float(np.mean([c[0] for c in ta_centers]))
-                tower_N = float(np.mean([c[1] for c in ta_centers]))
-    except Exception as exc:
-        log.warning(f"Field view: failed to read scenario: {exc}")
-        return
-
-    # Color each heliostat by Stage-2 accuracy.
-    def _color(hid: str) -> str:
-        if hid not in results:
-            return "#aaaaaa"
-        v = results[hid]["after_stage2"]["mrad_mean"]
-        if v < 1.0:
-            return "#2ca02c"
-        if v < 2.0:
-            return "#ff7f0e"
-        return "#d62728"
-
-    all_hids = sorted(field_E.keys())
-    colors   = [_color(h) for h in all_hids]
-    xs       = [field_E[h] for h in all_hids]
-    ys       = [field_N[h] for h in all_hids]
-
-    fig, ax = plt.subplots(figsize=(9, 9))
-    gray_x  = [x for x, c in zip(xs, colors) if c == "#aaaaaa"]
-    gray_y  = [y for y, c in zip(ys, colors) if c == "#aaaaaa"]
-    color_x = [x for x, c in zip(xs, colors) if c != "#aaaaaa"]
-    color_y = [y for y, c in zip(ys, colors) if c != "#aaaaaa"]
-    color_c = [c for c in colors if c != "#aaaaaa"]
-
-    if gray_x:
-        ax.scatter(gray_x, gray_y, c="#aaaaaa", s=60, zorder=2, label="No result")
-    if color_x:
-        ax.scatter(color_x, color_y, c=color_c, s=60, zorder=3)
-
-    if tower_E is not None:
-        ax.scatter([tower_E], [tower_N], marker="^", c="red", s=200, zorder=4, label="Tower")
-
-    # Legend patches for accuracy bands.
-    from matplotlib.patches import Patch
-    legend_elements = [
-        Patch(facecolor="#2ca02c", label="< 1 mrad"),
-        Patch(facecolor="#ff7f0e", label="1 – 2 mrad"),
-        Patch(facecolor="#d62728", label="> 2 mrad"),
-        Patch(facecolor="#aaaaaa", label="No result"),
-    ]
-    if tower_E is not None:
-        from matplotlib.lines import Line2D
-        legend_elements.append(
-            Line2D([0], [0], marker="^", color="w", markerfacecolor="red",
-                   markersize=10, label="Tower")
-        )
-    ax.legend(handles=legend_elements, fontsize=9, loc="best")
-
-    ax.set_xlabel("East (m)")
-    ax.set_ylabel("North (m)")
-    ax.set_title(f"Heliostat field — Stage-2 accuracy  ({len(results)} heliostats evaluated)")
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-
-    out = agg_dir / "field_view.png"
-    fig.savefig(out, dpi=150)
-    plt.close(fig)
-    log.info(f"  → {out}")
+# NOTE: the coarse `_plot_field_view` (field_view.png) was removed. It plotted the
+# same data as the detailed view but with obsolete <1 / 1-2 / >2 mrad bands, which
+# on real data colour almost the whole field red and disagree with _ACCURACY_BANDS
+# used everywhere else. Two field maps of one quantity with different thresholds is
+# a correctness hazard, not a convenience.
 
 
 # ---------------------------------------------------------------------------
@@ -603,11 +590,14 @@ def _plot_field_view_detailed(results: dict, agg_dir: pathlib.Path) -> None:
         log.warning(f"Field view (detailed): failed to read scenario: {exc}")
         return
 
+    post = _post_label(results)
     all_hids = sorted(field_E.keys())
-    colors   = [
-        _band_color(results[h]["after_stage2"]["mrad_mean"]) if h in results else "#aaaaaa"
-        for h in all_hids
-    ]
+    # Coloured by the CENTROID metric — what actually lands on the target, which is the
+    # question a field map answers. Named in the title so it cannot be mistaken for the
+    # direction metric; the per-heliostat breakdown of both is in accuracy_sorted.png.
+    vals = {h: _metric(results[h], "after_stage2", "centroid_mrad", "mean")
+            for h in all_hids if h in results}
+    colors = [_band_color(vals[h]) if h in vals else "#aaaaaa" for h in all_hids]
     xs = [field_E[h] for h in all_hids]
     ys = [field_N[h] for h in all_hids]
 
@@ -634,10 +624,9 @@ def _plot_field_view_detailed(results: dict, agg_dir: pathlib.Path) -> None:
 
     # Label each evaluated heliostat with its mrad value.
     for hid, x, y in zip(all_hids, xs, ys):
-        if hid in results:
-            v = results[hid]["after_stage2"]["mrad_mean"]
+        if hid in vals:
             ax.annotate(
-                f"{v:.2f}",
+                f"{vals[hid]:.2f}",
                 (x, y),
                 textcoords="offset points", xytext=(4, 4),
                 fontsize=5.5, color="#333333",
@@ -646,7 +635,8 @@ def _plot_field_view_detailed(results: dict, agg_dir: pathlib.Path) -> None:
     ax.set_xlabel("East (m)")
     ax.set_ylabel("North (m)")
     ax.set_title(
-        f"Heliostat field — Stage-2 accuracy  ({len(results)} heliostats evaluated)"
+        f"Heliostat field — CENTROID error after {post}, mean per heliostat [mrad]"
+        f"  ({len(results)} heliostats evaluated)"
     )
     ax.legend(fontsize=9, loc="best")
     ax.grid(True, alpha=0.3)
@@ -663,90 +653,115 @@ def _plot_field_view_detailed(results: dict, agg_dir: pathlib.Path) -> None:
 # ---------------------------------------------------------------------------
 
 def _write_summary_table(results: dict, agg_dir: pathlib.Path) -> None:
+    """Per-heliostat table with BOTH metrics, plus a separate field-summary file.
+
+    Three things this deliberately does differently from the previous version:
+
+    * Both metrics are tabulated. It used to emit only `mrad_*` — the legacy alias of
+      the centroid metric — under column names that named neither.
+    * MEAN/MEDIAN are NOT appended as extra data rows. They used to occupy the
+      `heliostat_id` column, so the CSV had 65 rows for 63 heliostats and any naive
+      `.mean()` or merge silently swallowed them. They now go to their own file.
+    * Every column is summarised, not just the means. The old summary rows left all
+      median columns blank — dropping exactly the robust statistic we rely on.
+    """
     if not results:
         return
 
-    rows = sorted(
-        [
-            (
-                hid,
-                r.get("hel_dist_m", float("nan")),
-                r["pre_training"]["mrad_mean"],  r["pre_training"]["mrad_median"],
-                r["after_stage1"]["mrad_mean"],  r["after_stage1"]["mrad_median"],
-                r["after_stage2"]["mrad_mean"],  r["after_stage2"]["mrad_median"],
-            )
-            for hid, r in results.items()
-        ],
-        key=lambda t: t[6],
-    )
+    post = _post_label(results)
+    pre_is_geometric = any("pre_training_saturated" in r for r in results.values())
+    # Name each pre column for what it actually holds. The geometric substitution
+    # replaces the CENTROID pre-value only (it is the ray-traced one that saturates
+    # against the target bitmap); the direction pre-value is untouched. Tagging both
+    # `pre_geom` would claim a substitution that never happened to direction.
+    def _pre_tag(key: str) -> str:
+        return "pre_geom" if (pre_is_geometric and key == "centroid_mrad") else "pre"
 
-    pre_means = np.array([t[2] for t in rows])
-    s1_means  = np.array([t[4] for t in rows])
-    s2_means  = np.array([t[6] for t in rows])
+    cols = ["heliostat_id", "dist_m"]
+    for _, key, _, _ in METRICS:
+        short = key.replace("_mrad", "")
+        for stage, tag in (("pre_training", _pre_tag(key)), ("after_stage1", "s1"),
+                           ("after_stage2", "s2")):
+            cols += [f"{tag}_{short}_mean", f"{tag}_{short}_median"]
+    cols.append("improvement_pct_centroid")
 
-    header = (
-        f"  {'Heliostat':<10} {'Dist(m)':>7}"
-        f"  {'Pre mean':>9} {'Pre med':>8}"
-        f"  {'S1 mean':>8} {'S1 med':>7}"
-        f"  {'S2 mean':>8} {'S2 med':>7}"
-        f"  {'Improv%':>7}"
-    )
-    sep = "  " + "-" * (len(header) - 2)
+    rows = []
+    for hid, r in results.items():
+        row = [hid, round(r.get("hel_dist_m", float("nan")), 1)]
+        for _, key, _, _ in METRICS:
+            for stage in ("pre_training", "after_stage1", "after_stage2"):
+                row += [_metric(r, stage, key, "mean"), _metric(r, stage, key, "median")]
+        pre_c = _metric(r, "pre_training", "centroid_mrad", "mean")
+        post_c = _metric(r, "after_stage2", "centroid_mrad", "mean")
+        row.append(round((pre_c - post_c) / pre_c * 100, 2) if pre_c > 0 else 0.0)
+        rows.append(row)
+    rows.sort(key=lambda t: (np.isnan(t[cols.index("s2_centroid_mean")]),
+                             t[cols.index("s2_centroid_mean")]))
 
+    csv_path = agg_dir / "summary_table.csv"
+    with open(csv_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(cols)
+        w.writerows(rows)
+
+    # Field summary — its own file, so the per-heliostat table stays pure data.
+    arr = np.array([[v if isinstance(v, (int, float)) else np.nan for v in r[2:-1]]
+                    for r in rows], dtype=float)
+    summ_path = agg_dir / "summary_field.csv"
+    with open(summ_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["statistic"] + cols[2:-1])
+        with np.errstate(all="ignore"):
+            w.writerow(["field_mean"] + [float(np.nanmean(arr[:, i])) for i in range(arr.shape[1])])
+            w.writerow(["field_median"] + [float(np.nanmedian(arr[:, i])) for i in range(arr.shape[1])])
+
+    # ASCII view — centroid and direction side by side, sorted by centroid.
+    hdr = (f"  {'Heliostat':<10} {'Dist':>5}"
+           f"  {'preC mean':>10} {'S1C mean':>9} {'S1C med':>8} {'S2C mean':>9} {'S2C med':>8}"
+           f"  {'S1D mean':>9} {'S1D med':>8} {'S2D mean':>9} {'S2D med':>8}")
+    sep = "  " + "-" * (len(hdr) - 2)
     lines = [
-        f"  Heliostat accuracy summary  ({len(rows)} heliostats)\n",
-        header, sep,
+        f"  Heliostat accuracy summary  ({len(rows)} heliostats, post = after {post})",
+        f"  C = centroid (ray-traced, incl. surface)   D = direction (kinematic, excl. surface)",
+        f"  preC = {'GEOMETRIC unbounded miss — NOT the same quantity as S1/S2' if pre_is_geometric else 'ray-traced, same quantity as S1/S2'}",
+        "", hdr, sep,
     ]
-    for hid, dist, pre_mn, pre_md, s1_mn, s1_md, s2_mn, s2_md in rows:
-        improv = (pre_mn - s2_mn) / pre_mn * 100 if pre_mn > 0 else 0.0
+    idx = {c: i for i, c in enumerate(cols)}
+    pre_c_key = f'{_pre_tag("centroid_mrad")}_centroid_mean'
+    def _g(r, c):
+        v = r[idx[c]]
+        return f"{v:.4f}" if isinstance(v, float) and not np.isnan(v) else "—"
+    for r in rows:
         lines.append(
-            f"  {hid:<10} {dist:>7.0f}"
-            f"  {pre_mn:>9.4f} {pre_md:>8.4f}"
-            f"  {s1_mn:>8.4f} {s1_md:>7.4f}"
-            f"  {s2_mn:>8.4f} {s2_md:>7.4f}"
-            f"  {improv:>6.1f}%"
+            f"  {r[0]:<10} {r[1]:>5.0f}"
+            f"  {_g(r, pre_c_key):>10} {_g(r, 's1_centroid_mean'):>9}"
+            f" {_g(r, 's1_centroid_median'):>8} {_g(r, 's2_centroid_mean'):>9}"
+            f" {_g(r, 's2_centroid_median'):>8}"
+            f"  {_g(r, 's1_direction_mean'):>9} {_g(r, 's1_direction_median'):>8}"
+            f" {_g(r, 's2_direction_mean'):>9} {_g(r, 's2_direction_median'):>8}"
         )
     lines.append(sep)
-    lines.append(
-        f"  {'MEAN':<10} {'':>7}"
-        f"  {float(np.mean(pre_means)):>9.4f} {'':>8}"
-        f"  {float(np.mean(s1_means)):>8.4f} {'':>7}"
-        f"  {float(np.mean(s2_means)):>8.4f} {'':>7}"
-        f"  {'':>7}"
-    )
-    lines.append(
-        f"  {'MEDIAN':<10} {'':>7}"
-        f"  {float(np.median(pre_means)):>9.4f} {'':>8}"
-        f"  {float(np.median(s1_means)):>8.4f} {'':>7}"
-        f"  {float(np.median(s2_means)):>8.4f} {'':>7}"
-        f"  {'':>7}"
-    )
+    for stat, fn in (("MEAN", np.nanmean), ("MEDIAN", np.nanmedian)):
+        with np.errstate(all="ignore"):
+            g = lambda c: fn(arr[:, idx[c] - 2])  # noqa: E731
+            lines.append(
+                f"  {stat:<10} {'':>5}"
+                f"  {g(pre_c_key):>10.4f} {g('s1_centroid_mean'):>9.4f}"
+                f" {g('s1_centroid_median'):>8.4f} {g('s2_centroid_mean'):>9.4f}"
+                f" {g('s2_centroid_median'):>8.4f}"
+                f"  {g('s1_direction_mean'):>9.4f} {g('s1_direction_median'):>8.4f}"
+                f" {g('s2_direction_mean'):>9.4f} {g('s2_direction_median'):>8.4f}"
+            )
 
     txt = "\n".join(lines) + "\n"
-
     txt_path = agg_dir / "summary_table.txt"
     with open(txt_path, "w") as f:
         f.write(txt)
     print(txt)
 
-    csv_path = agg_dir / "summary_table.csv"
-    with open(csv_path, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow([
-            "heliostat_id", "dist_m",
-            "pre_mrad_mean", "pre_mrad_median",
-            "s1_mrad_mean",  "s1_mrad_median",
-            "s2_mrad_mean",  "s2_mrad_median",
-            "improvement_pct",
-        ])
-        for hid, dist, pre_mn, pre_md, s1_mn, s1_md, s2_mn, s2_md in rows:
-            improv = (pre_mn - s2_mn) / pre_mn * 100 if pre_mn > 0 else 0.0
-            w.writerow([hid, round(dist, 1), pre_mn, pre_md, s1_mn, s1_md, s2_mn, s2_md, round(improv, 2)])
-        w.writerow(["MEAN",   "", float(np.mean(pre_means)),   "", float(np.mean(s1_means)),   "", float(np.mean(s2_means)),   "", ""])
-        w.writerow(["MEDIAN", "", float(np.median(pre_means)), "", float(np.median(s1_means)), "", float(np.median(s2_means)), "", ""])
-
     log.info(f"  → {txt_path}")
     log.info(f"  → {csv_path}")
+    log.info(f"  → {summ_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -796,16 +811,22 @@ def aggregate(
         real = _compute_real_pre_mrad(list(results.keys()))
         for hid, (mn, md) in real.items():
             results[hid].setdefault("pre_training_saturated", dict(results[hid]["pre_training"]))
-            results[hid]["pre_training"]["mrad_mean"] = mn
-            results[hid]["pre_training"]["mrad_median"] = md
+            # Substitute under BOTH spellings, so consumers that read the explicit
+            # centroid keys see the same value as those still reading the alias.
+            for k, v in (("mrad_mean", mn), ("mrad_median", md),
+                         ("centroid_mrad_mean", mn), ("centroid_mrad_median", md)):
+                results[hid]["pre_training"][k] = v
         if real:
-            log.info(f"  real geometric pre-miss applied to {len(real)}/{len(results)} heliostats")
+            log.info(f"  real geometric pre-miss applied to {len(real)}/{len(results)} "
+                     f"heliostats — pre columns are now a GEOMETRIC miss, not the "
+                     f"ray-traced quantity in s1/s2 (column names say so)")
 
+    stage1_loss = next((r["stage1_loss"] for r in results.values() if "stage1_loss" in r),
+                       "Stage-1 loss")
     _plot_mrad_convergence(conv_data, agg_dir)
-    _plot_loss_curves(conv_data, agg_dir)
+    _plot_loss_curves(conv_data, agg_dir, stage1_loss=stage1_loss)
     _plot_accuracy_sorted(results, agg_dir)
     _plot_accuracy_distribution(results, agg_dir)
-    _plot_field_view(results, agg_dir)
     _plot_field_view_detailed(results, agg_dir)
     _write_summary_table(results, agg_dir)
 

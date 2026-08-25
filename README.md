@@ -16,8 +16,13 @@ inverse problem).
 | Run the primary KR experiment | [`src/full_63_heli_kin_reconstruct/`](#experiment-3--full_63_heli_kin_reconstruct--primary) |
 | Sweep training data sizes per heliostat | [`src/one_heliostat_train_sizes/`](#experiment-1--one_heliostat_train_sizes) |
 | Run the coarse-to-fine residual pipeline | [`src/full_training_pipeline/`](#experiment-2--full_training_pipeline) |
+| Run Fine Error Learning (FEL transformer) | [`src/fine_error_learning/`](#experiment-4--fine_error_learning--fine-error-learning) |
 | Understand ARTIST extensions | [`src/artist_extensions/`](#artist-extensions) |
 | Submit to DAIC cluster | [`src/sbatch_files/`](#daic--sbatch-files) |
+
+> **Note:** the live training loop now lives in `src/one_heliostat_demo/single_heliostat/train.py`;
+> Experiments 1–3 below are referenced at their historical paths but currently run from
+> `src/too_old/` — the README experiment map is partially stale.
 
 ---
 
@@ -242,6 +247,64 @@ sbatch sbatch_files/run_full63_synth_focal.sh    # DAIC (2 h, A40 GPU)
 
 ---
 
+## Experiment 4 — `fine_error_learning` *(Fine Error Learning)*
+
+A shared transformer ("Helioformer"-style) trained **on top of the coarse stage-1
+parameters**: per heliostat, K calibration measurements (flux image + sun direction +
+motor position) become tokens → CNN + pre-norm transformer encoder (no positional
+encoding, permutation-invariant) → masked mean pooling → concat frozen θ_KR (24D) +
+heliostat position → MLP head predicts **Δθ (24D)**. θ_final = θ_KR + Δθ is written
+functionally into the ARTIST kinematics and trained end-to-end through the ray tracer
+with the focal-spot centroid loss. Zero-init head → training starts exactly at θ_KR.
+
+**Foundation:** stage-1 checkpoints on the synthetic balanced dataset, generated once with:
+```bash
+cd src
+python one_heliostat_demo/run_all.py --data-mode synthetic --skip-dataset-gen \
+    --skip-stage2 --no-plots --output-dir ../outputs/fine_error_learning/all63_stage1_synth
+```
+
+**Key config** (`src/fine_error_learning/config.py`):
+```python
+K_TOKENS   = 50          # measurements per heliostat sample (subsample/pad + mask)
+D_MODEL    = 128         # N_HEADS=4, N_LAYERS=2, D_FF=512, pre-norm
+USE_FLUX   = True        # False → images-off ablation (CNN skipped)
+BOUNDED_HEAD = False     # False → unbounded zero-init head; True → tanh × bounds
+WARM_START = "stage1"    # "stage1" | "nominal"
+EPOCHS = 100; BASE_LR = 1e-3; RESIDUAL_L2_WEIGHT = 1e-4
+```
+
+**Run:**
+```bash
+cd src
+python fine_error_learning/main.py --smoke-test          # 2 heliostats, 2 epochs (local)
+python fine_error_learning/main.py                       # full 63-heliostat run
+python fine_error_learning/main.py --evaluate outputs/fine_error_learning/<run> \
+    --eval-split test                                    # before/after Δθ evaluation
+sbatch sbatch_files/run_fel_synth.sh                     # DAIC (checkpoints + train + eval)
+```
+
+**Outputs** (`outputs/fine_error_learning/<run>/`): `fel_model_best.pt`, `history.csv`,
+`loss_curves.png`, `on_target.json` (per-heliostat on-target fraction under θ_KR),
+`summary.md`; evaluation adds `evaluation_<split>.json/.md` and
+`mrad_before_after_<split>.png` (plus parameter recovery vs `perturbations.json`).
+
+**Held-out generalization test:** 12 non-benchmark heliostats (deflectometry, 25–273 m
+from the tower, fresh perturbation seed 4242). One-time setup:
+```bash
+cd src && python fine_error_learning/prepare_heldout.py    # scenarios + data + stage-1
+```
+Then evaluate a trained run on unseen heliostats:
+```bash
+python fine_error_learning/main.py --evaluate outputs/fine_error_learning/<run> \
+    --eval-split test --heliostats AA36 AA29 AF32 AG29 AJ46 AP32 AW39 AZ33 BB28 BE40 BA70 BH65 \
+    --checkpoint-dir outputs/fine_error_learning/heldout_stage1_synth \
+    --data-dir datasets/synthetic/heldout_dataset/dataset \
+    --scenario-template 'scenarios/heldout_heliostat_scenarios/{heliostat_id}/scenario.h5'
+```
+
+---
+
 ## ARTIST extensions (`src/artist_extensions/`)
 
 Custom subclasses that keep ARTIST a clean dependency.
@@ -284,6 +347,7 @@ All scripts use one A40 GPU, 16 GB RAM, 4 CPU cores, Apptainer image at
 | `run_full63_synth_pixel.sh` | Exp 3 | synthetic  | pixel      | 50+500 | 2 h |
 | `run_full63_real_pixel.sh`  | Exp 3 | real       | pixel      | 50+500 | 2 h |
 | `run_one_hel_all.sh`        | Exp 1 | synthetic  | focal_spot | 20+200 | 10 h |
+| `run_fel_synth.sh`          | Exp 4 | synthetic  | focal_spot | 100 FEL epochs (+ stage-1 checkpoint gen) | 8 h |
 
 ```bash
 # Submit from DAIC login node

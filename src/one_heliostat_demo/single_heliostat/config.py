@@ -146,6 +146,142 @@ STAGE1_LOSS     = "forward_aim"  # "forward_aim" (DEFAULT — forward normal vs 
 MINI_BATCH_SIZE = 25             # Stage 2: samples per mini-batch
 
 # ----------------------------------------------------------------------------
+# Stage-1 robust reduction  (forward_aim only)
+# ----------------------------------------------------------------------------
+# How the per-sample residuals are AGGREGATED — not what is measured. "l2" is
+# the plain mean of the squared chord (least squares), so a handful of bad
+# calibration samples dominate the fit. Robust modes cap or discard that
+# influence: they improve the MEDIAN pointing error but cost mean and centroid
+# accuracy, because they buy the bulk of the distribution by sacrificing the
+# tail (and the centroid metric is tail-sensitive). Always report both.
+#   "l2"      — mean of squared residuals (DEFAULT, historical behaviour)
+#   "huber"   — quadratic within δ, linear beyond (δ = STAGE1_HUBER_DELTA, mrad)
+#   "soft_l1" — pseudo-Huber, smooth everywhere
+#   "trimmed" — drop the worst STAGE1_TRIM_FRACTION of samples, mean the rest
+# When != "l2" the best-epoch selection follows the objective instead of the
+# mean alignment mrad (otherwise it would reject the epochs robustness buys).
+# DEFAULT since the 63-heliostat sweep (outputs/new_mapping_function/robust_loss_sweep/):
+# soft_l1 improves ALL FOUR metrics vs l2 field-wide — dir median 3.34 -> 2.84,
+# centroid median 4.21 -> 3.55 — and beats Mathias on 31/41 shared heliostats
+# (3.84 vs 4.56). It is NOT the median-for-mean trade-off the single-heliostat
+# AA23 study suggested; that heliostat is well behaved, so l2 had little to be
+# robust against. Set to "l2" to reproduce pre-2026-07-21 runs.
+STAGE1_REDUCTION      = "soft_l1"
+STAGE1_HUBER_DELTA    = 1.5      # mrad, for "huber" / "soft_l1"
+STAGE1_TRIM_FRACTION  = 0.25     # for "trimmed"
+# Which quantity picks the best Stage-1 epoch to restore:
+#   "mrad"      — mean alignment mrad (DEFAULT; safe, and identical across configs
+#                 so a reduction sweep stays a controlled comparison)
+#   "objective" — the training objective itself. UNSAFE for "trimmed": the
+#                 discarded fraction is unpenalized, so the optimizer can minimize
+#                 the objective by abandoning it and this rule then locks that in
+#                 (AA23: trimmed-40% diverges to 21.5 mrad vs 3.4 under "mrad").
+STAGE1_SELECT_ON      = "mrad"
+
+# ----------------------------------------------------------------------------
+# Stage-2 loss selection
+# ----------------------------------------------------------------------------
+#   "focal_spot" — DEFAULT. Squared metre distance between the predicted-flux
+#                  COM and the parsed centroid c_gt (UTIS). All existing
+#                  baselines were produced with this.
+#   "contour"    — Wortberg (2025) upper-contour loss (artist_extensions/
+#                  contour_loss.py): matches the occlusion-robust upper edge of
+#                  the measured flux image instead of its centroid. Stage 1 is
+#                  the alignment warm-up that puts the beam on target, so the
+#                  contour loss runs from Stage-2 epoch 1 (no in-stage ramp);
+#                  a guardrail falls back to ForwardAimLoss on divergence.
+STAGE2_LOSS = "focal_spot"
+
+# ----------------------------------------------------------------------------
+# Stage-2 structure (focal_spot loss)
+# ----------------------------------------------------------------------------
+# Which parameters Stage 2 may move:
+#   "all"              — every group (DEFAULT, historical). Because the
+#                        geometric-init Stage 1 pins translation / base position /
+#                        offset / pivot at lr=0, Stage 2 is the ONLY place those
+#                        are ever trained.
+#   "orientation_only" — the same free set Stage 1 uses (orientation + a/b), so
+#                        Stage 2 refines pointing on the ray-traced objective
+#                        without the landing DOFs that can drift the direction
+#                        metric.
+# DEFAULT "all", confirmed by the field matrix. The two stages deliberately use
+# DIFFERENT parameter sets, and the metrics show why: freezing the landing DOFs
+# protects the pointing fit (direction median -0.02 vs +0.03) while opening them
+# is what lets Stage 2 move the beam on the target plane (centroid median -0.27
+# vs -0.18). Stage 1 therefore stays restricted (GEOMETRIC_INIT_ORIENTATION_ONLY)
+# and Stage 2 opens everything — so Stage 2 is the ONLY place translation, base
+# position, offset and pivot are ever trained. Choosing "orientation_only" here
+# would leave those four at nominal for the entire pipeline, which is close to
+# Mathias's free set (a/b + mount orientation) if a more parsimonious model is
+# wanted; it costs ~0.05-0.09 mrad of centroid accuracy.
+STAGE2_PARAM_SET = "all"
+
+# Robust aggregation of the focal-spot residual, same idea as STAGE1_REDUCTION.
+# The residual is a miss distance in metres; the delta below is given in mrad and
+# converted per heliostat using its own distance to the target.
+#   "l2" (DEFAULT, historical) | "huber" | "soft_l1" | "trimmed"
+# DEFAULT since the 3x2 field matrix (outputs/new_mapping_function/stage2_matrix/):
+# the reduction is what makes Stage 2 work at all. Under l2, Stage 2 is a near
+# no-op (centroid mean -0.02 mrad) that degrades the direction median (+0.22) and
+# helps only 37/63 heliostats. Under soft_l1 it gives a real centroid gain
+# (median -0.23) on 54/63, with direction left neutral.
+STAGE2_REDUCTION         = "soft_l1"
+STAGE2_HUBER_DELTA_MRAD  = 3.0
+STAGE2_TRIM_FRACTION     = 0.25
+
+# Contour extraction (thesis §4.2.3). τ/η are the Bayesian-optimized values for
+# simulated STJ flux — the thesis says to RETUNE on other data (our real PAINT
+# flux is noisier; revisit τ, η, q, σ after the first results).
+CONTOUR_TAU              = 0.58   # soft-threshold centre on [0,1] flux
+CONTOUR_ETA              = 70.0   # sigmoid sharpness
+CONTOUR_SMOOTHING_ROUNDS = 2      # q bilinear up/down denoising passes
+# Denoising σ/kernel: the thesis default (σ=1, k=5) is too weak for OUR
+# predicted flux — at TRAIN_RAYS=10 the Monte-Carlo speckle survives, the soft
+# mask is full of holes, and the Sobel fires all over the blob interior instead
+# of only the upper edge. A fragmented predicted contour vs the clean GT arc
+# biases coarse+gravity toward "move the beam up" (verified: one such epoch
+# moved AA23 2.0 → 8.4 mrad). σ=3 closes the speckle holes; both sides use the
+# same extractor, so the GT contour thickens/shifts symmetrically.
+CONTOUR_GAUSS_SIGMA      = 3.0
+CONTOUR_GAUSS_KSIZE      = 13
+
+# Term weights (eq. 4.41): Fine (DICE) gets 1 − β − γ. The raw coarse term is
+# an unnormalized pixel sum (~1e3–1e5 on 256² images), hence the small β.
+# The thesis tuned β/γ by Bayesian optimization but does not print them —
+# these are starting points, sweep on the simplex later.
+CONTOUR_BETA  = 1e-4              # β — coarse (soft distance field)
+CONTOUR_GAMMA = 0.3               # γ — gravity (COM distance, metres)
+
+# Divide raw Coarse/Gravity by these before weighting (default 1.0 = no-op,
+# exact prior behavior). Set to a representative empirical magnitude (e.g.
+# ~1200 for coarse, ~0.1 for gravity, from this project's own runs) to turn
+# beta/gamma into genuine 0-1 mixing weights before a beta/gamma sweep --
+# see contour_beta_gamma_sweep.py.
+CONTOUR_COARSE_SCALE  = 1.0
+CONTOUR_GRAVITY_SCALE = 1.0
+
+# Optional post-hoc Gaussian blur (std dev, px) widening the extracted
+# upper-contour band beyond its native ~1-2 px Sobel width (default 0.0 =
+# no-op). See HybridFocalContourLoss / STAGE2_LOSS="hybrid" below for the
+# other structural fix in the same direction.
+CONTOUR_BAND_SIGMA = 0.0
+
+# STAGE2_LOSS="hybrid": blend FocalSpotLoss (whole image) with
+# WortbergContourLoss, total = HYBRID_FOCAL_WEIGHT*focal + (1-...)*contour.
+# HYBRID_FOCAL_SCALE normalizes the raw (squared-metres) focal term the same
+# way CONTOUR_COARSE_SCALE/GRAVITY_SCALE do for the other two terms.
+HYBRID_FOCAL_WEIGHT = 0.5
+HYBRID_FOCAL_SCALE  = 1.0
+
+# Guardrail (eq. 4.45): if the Stage-2 val centroid error exceeds
+# max(MIN_MRAD, FACTOR × post-Stage-1 val error), train on ForwardAimLoss until
+# it recovers (release at 0.8× the threshold). Per-sample empty-flux rescue:
+# samples whose predicted flux misses the target entirely also fall back.
+CONTOUR_GUARDRAIL_FACTOR   = 3.0
+CONTOUR_GUARDRAIL_MIN_MRAD = 2.0
+CONTOUR_EMPTY_FLUX_EPS     = 1e-6
+
+# ----------------------------------------------------------------------------
 # Aim-point / motor-position formulation  (see CALIBRATION_FORMULATION.md)
 # ----------------------------------------------------------------------------
 # The formulation is hardcoded centre-free: the motor position m_c and the
@@ -185,6 +321,17 @@ ACTUATOR_STROKE_LR_MULT = 20.0
 
 BASE_LR         = 1e-4
 PLOT_EVERY      = 1              # capture trail snapshot every N epochs (1 = all epochs)
+
+# Ray-traced trail snapshots during STAGE 1 (diagnostics only).
+# Stage 1 optimizes a purely kinematic objective (ForwardAimLoss: forward normal
+# vs the sun<->c_gt bisector) — no surface, no ray tracing, no flux image — so
+# these snapshots never affect the trained parameters. They only add points to
+# the trail / flux-GIF plots, at a cost that scales with the SQUARE of
+# SURFACE_POINTS_PER_FACET: ~0.3 s/epoch at 25x25 but ~5 s/epoch at 100x100,
+# which is what made a 500-epoch Stage 1 take 45 min instead of 3.
+# OFF by default; enable with --stage1-trail-plots. A single snapshot of the
+# final (restored) Stage-1 state is always taken so the plots stay connected.
+STAGE1_TRAIL_PLOTS = False
 
 # ----------------------------------------------------------------------------
 # Geometric initialization (Stage 1)  — see AA23_METHOD_STUDY.md
