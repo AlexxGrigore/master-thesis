@@ -118,6 +118,11 @@ def _parse_args() -> argparse.Namespace:
         "--daic", action="store_true",
         help="Use DAIC cluster paths instead of local paths.",
     )
+    p.add_argument(
+        "--fixed-perturbations", default=None, metavar="PATH",
+        help="Replay mode: path to a committed perturbations.json — use exactly "
+             "these perturbations instead of sampling (cross-machine replay).",
+    )
     return p.parse_args()
 
 
@@ -148,6 +153,8 @@ def main() -> None:
 
     # Bulk generation always uses random perturbations, one per heliostat.
     cfg.DATA_MODE = "random_synthetic"
+    if args.fixed_perturbations:
+        cfg.FIXED_PERTURBATIONS_JSON = args.fixed_perturbations
 
     # Override PAINT paths for the selected split type.
     benchmark_name      = _SPLIT_BENCHMARK[args.split_type]

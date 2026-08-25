@@ -20,8 +20,27 @@ cd /home/nfs/agrigore/projects/githubProjects/master-thesis/src
 
 SIF=/tudelft.net/staff-umbrella/StudentsCVlab/agrigore/artist-local.sif
 CKPT_DIR=../outputs/fine_error_learning/all63_stage1_synth
+DATA_DIR=/tudelft.net/staff-umbrella/StudentsCVlab/agrigore/datasets/paint/synthetic/balanced_dataset/dataset
 
-# Step 0 (once, ~6 min): synthetic stage-1 checkpoints, skipped if present.
+# Pre-flight 1: scenarios come from git (committed). Abort if missing.
+N_SCEN=$(ls ../scenarios/one_heliostat_scenarios/*/scenario.h5 2>/dev/null | wc -l)
+if [ "$N_SCEN" -lt 62 ]; then
+    echo "ERROR: only $N_SCEN scenario files found — run 'git pull' first"
+    echo "(scenarios/one_heliostat_scenarios is committed to the repo)."
+    exit 1
+fi
+
+# Pre-flight 2: synthetic dataset — regenerate from the committed
+# perturbations.json if absent (~15-30 min on GPU, identical perturbations).
+if [ ! -f "$DATA_DIR/perturbations.json" ]; then
+    echo "Synthetic dataset missing — generating from committed perturbations.json"
+    apptainer exec --nv --bind /tudelft.net:/tudelft.net $SIF \
+        python one_heliostat_demo/generate_all.py --split-type balanced --daic \
+            --fixed-perturbations ../datasets/synthetic/balanced_dataset/dataset/perturbations.json
+fi
+
+# Step 0 (normally skipped): stage-1 checkpoints are committed to git; generate
+# only as a fallback.
 if [ ! -f "$CKPT_DIR/AB43/stage1_checkpoint.pt" ]; then
     apptainer exec --nv --bind /tudelft.net:/tudelft.net $SIF \
         python one_heliostat_demo/run_all.py --daic \

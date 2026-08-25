@@ -177,6 +177,28 @@ def generate(
     # -------------------------------------------------------------------------
     # Resample loop: fast scan first, then full-quality generation.
     # -------------------------------------------------------------------------
+    # Fixed perturbations (committed perturbations.json replay): use exactly the
+    # given values instead of sampling — keeps regenerated datasets identical to
+    # the original across machines.
+    fixed_pert_tensors = None
+    fixed_json = getattr(cfg, "FIXED_PERTURBATIONS_JSON", None)
+    if fixed_json:
+        with open(fixed_json) as fh:
+            spec = json.load(fh).get(heliostat_id)
+        if spec is None:
+            raise KeyError(
+                f"{heliostat_id} not found in FIXED_PERTURBATIONS_JSON ({fixed_json})"
+            )
+        fixed_pert_tensors = {
+            "rotation":        torch.tensor([spec["rotation_rad"]], dtype=torch.float32, device=device),
+            "actuator_angle":  torch.tensor([spec["actuator_angle_rad"]], dtype=torch.float32, device=device),
+            "actuator_stroke": torch.tensor([spec["actuator_stroke_m"]], dtype=torch.float32, device=device),
+            "actuator_offset": torch.tensor([spec["actuator_offset_m"]], dtype=torch.float32, device=device),
+            "translation":     torch.tensor([spec["translation_m"]], dtype=torch.float32, device=device),
+            "base_position":   torch.tensor([spec["base_position_m"]], dtype=torch.float32, device=device),
+        }
+        log.info(f"Using fixed perturbations from {fixed_json}")
+
     chosen_pert      = None
     chosen_flux      = None
     chosen_centroids = None
@@ -187,7 +209,9 @@ def generate(
     for attempt in range(max_attempts):
         seed = cfg.RANDOM_SEED + seed_offset * (max_attempts + 1) + attempt
 
-        if cfg.DATA_MODE == "random_synthetic":
+        if fixed_pert_tensors is not None:
+            pert_tensors = fixed_pert_tensors
+        elif cfg.DATA_MODE == "random_synthetic":
             pert_tensors = sample_perturbations(
                 n_heliostats=1, ranges=cfg.RANDOM_PERT_BOUNDS, seed=seed
             )

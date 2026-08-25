@@ -428,6 +428,12 @@ RANDOM_PERT_BOUNDS = {
 
 RANDOM_SEED = 42
 
+# Replay mode: path to a perturbations.json (as saved next to a generated
+# dataset). When set, generate() uses exactly these per-heliostat perturbations
+# instead of sampling — used to regenerate the identical synthetic dataset on
+# another machine (e.g. DAIC) from the committed JSON.
+FIXED_PERTURBATIONS_JSON = None
+
 # Used when DATA_MODE == "synthetic".
 CUSTOM_PERTURBATIONS_SPEC = {
     "rotation":        [ 0.0028902976773679256, -0.002185862511396408,
