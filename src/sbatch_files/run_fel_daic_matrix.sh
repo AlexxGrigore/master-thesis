@@ -2,7 +2,7 @@
 #SBATCH --job-name=fel_daic_matrix
 #SBATCH --output=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/fel_daic_matrix_out_%j.log
 #SBATCH --error=/home/nfs/agrigore/projects/githubProjects/master-thesis/logs/fel_daic_matrix_err_%j.log
-#SBATCH --time=24:00:00
+#SBATCH --time=06:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:a40:1
@@ -54,10 +54,12 @@ for SPEC in \
     "fel_daic_pix30:--pixel-loss 0.3:"
 do
     NAME="${SPEC%%:*}"; REST="${SPEC#*:}"; EXTRA="${REST%%:*}"
+    echo "=== $NAME started $(date --iso-8601=seconds) ==="
     apptainer exec --nv --bind /tudelft.net:/tudelft.net $SIF \
         python fine_error_learning/main.py --daic \
             --run-name "$NAME" --epochs 300 $EXTRA
     apptainer exec --nv --bind /tudelft.net:/tudelft.net $SIF \
         python fine_error_learning/main.py --daic \
             --evaluate "../outputs/fine_error_learning/$NAME" --eval-split test
+    echo "=== $NAME finished $(date --iso-8601=seconds) ==="
 done

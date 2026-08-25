@@ -20,7 +20,9 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import os
 import pathlib
+import socket
 import time
 
 import matplotlib
@@ -158,6 +160,7 @@ def run(cfg, device: torch.device, output_dir: pathlib.Path) -> dict:
     # ------------------------------------------------------------------ #
     history: list[dict] = []
     delta_norm_history: list[float] = []
+    epoch_times: list[float] = []
     best_val_mrad = float("inf")
     t0 = time.time()
     query_mode = getattr(cfg, "QUERY_DECODER", False)
@@ -171,6 +174,7 @@ def run(cfg, device: torch.device, output_dir: pathlib.Path) -> dict:
         return q.view(1, 1, 3)
 
     for epoch in tqdm(range(1, cfg.EPOCHS + 1), desc="FEL training"):
+        t_epoch = time.time()
         model.train()
         generator = torch.Generator(device=device)
         generator.manual_seed(cfg.RANDOM_SEED + epoch)
@@ -383,6 +387,7 @@ def run(cfg, device: torch.device, output_dir: pathlib.Path) -> dict:
         if val_mrad < best_val_mrad:
             best_val_mrad = val_mrad
             torch.save(model.state_dict(), output_dir / "fel_model_best.pt")
+        epoch_times.append(time.time() - t_epoch)
 
     # ------------------------------------------------------------------ #
     # Outputs                                                              #
@@ -418,6 +423,26 @@ def run(cfg, device: torch.device, output_dir: pathlib.Path) -> dict:
         "final_val_mrad": history[-1]["val_mrad"],
         "delta_norm_history": delta_norm_history,
         "total_time_min": (time.time() - t0) / 60.0,
+        # Runtime/environment record — used to size future sbatch jobs.
+        "timing": {
+            "epochs": len(epoch_times),
+            "epoch_mean_s": sum(epoch_times) / max(1, len(epoch_times)),
+            "epoch_min_s": min(epoch_times) if epoch_times else None,
+            "epoch_max_s": max(epoch_times) if epoch_times else None,
+            "total_train_min": sum(epoch_times) / 60.0,
+        },
+        "environment": {
+            "device": str(device),
+            "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+            "peak_gpu_mem_gb": (
+                round(torch.cuda.max_memory_allocated() / 1e9, 2)
+                if torch.cuda.is_available() else None
+            ),
+            "torch_version": torch.__version__,
+            "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+            "slurm_node": os.environ.get("SLURM_NODELIST"),
+            "hostname": socket.gethostname(),
+        },
         "on_target": {
             hid: states[hid].on_target_fraction for hid in heliostat_ids
         },
@@ -456,6 +481,21 @@ def run(cfg, device: torch.device, output_dir: pathlib.Path) -> dict:
         f"best: {best_val_mrad:.3f} mrad",
         f"- |Δθ| (val, eval mode) per epoch: "
         + ", ".join(f"{d:.4f}" for d in delta_norm_history),
+        "",
+        "## Runtime / environment",
+        "",
+        f"- Total wall time: {results['total_time_min']:.1f} min  |  "
+        f"train loop: {results['timing']['total_train_min']:.1f} min  |  "
+        f"epoch mean/min/max: {results['timing']['epoch_mean_s']:.1f} / "
+        f"{results['timing']['epoch_min_s']:.1f} / "
+        f"{results['timing']['epoch_max_s']:.1f} s",
+        f"- Device: {results['environment']['device']}"
+        + (f" ({results['environment']['gpu_name']}, peak GPU mem "
+           f"{results['environment']['peak_gpu_mem_gb']} GB)"
+           if results['environment']['gpu_name'] else ""),
+        f"- Node: {results['environment']['hostname']}  |  "
+        f"SLURM job: {results['environment']['slurm_job_id']}  |  "
+        f"torch {results['environment']['torch_version']}",
         "",
         "See `loss_curves.png`, `history.csv`, `on_target.json`, `fel_model_best.pt`.",
     ]
