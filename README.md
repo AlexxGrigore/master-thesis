@@ -19,6 +19,7 @@ inverse problem).
 | Run Fine Error Learning (FEL transformer) | [`src/fine_error_learning/`](#experiment-4--fine_error_learning--fine-error-learning) |
 | Understand ARTIST extensions | [`src/artist_extensions/`](#artist-extensions) |
 | Submit to DAIC cluster | [`src/sbatch_files/`](#daic--sbatch-files) |
+| Access DAIC / paths / gotchas | [`DAIC.md`](DAIC.md) |
 
 > **Note:** the live training loop now lives in `src/one_heliostat_demo/single_heliostat/train.py`;
 > Experiments 1–3 below are referenced at their historical paths but currently run from
