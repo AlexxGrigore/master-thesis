@@ -30,10 +30,10 @@ import torch
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "src"))
 
 from artist import ARTIST_ROOT
-from artist.core.loss_functions import FocalSpotLoss
-from artist.data_parser.paint_calibration_parser import PaintCalibrationDataParser
+from artist.optim.loss import FocalSpotLoss
+from artist.io.paint_calibration_parser import PaintCalibrationDataParser
 from artist.scenario.scenario import Scenario
-from artist.util import config_dictionary, index_mapping
+from artist.util import constants as config_dictionary, indices as index_mapping
 
 from artist_extensions.kinematic_reconstructors import WortbergKinematicReconstructor
 
