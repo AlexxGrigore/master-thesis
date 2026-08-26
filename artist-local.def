@@ -6,6 +6,7 @@ From: python:3.10
     /home/nfs/agrigore/projects/PAINT /opt/PAINT
 
 %post
+    apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
     pip install --upgrade pip
     # Pre-install typing_extensions from PyPI: the cu124 index carries a
     # 4.16.0 wheel with broken metadata (inconsistent Name), and building the
