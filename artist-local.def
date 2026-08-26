@@ -6,7 +6,13 @@ From: python:3.10
     /home/nfs/agrigore/projects/PAINT /opt/PAINT
 
 %post
-    pip install torch --index-url https://download.pytorch.org/whl/cu124
+    pip install --upgrade pip
+    # Pre-install typing_extensions from PyPI: the cu124 index carries a
+    # 4.16.0 wheel with broken metadata (inconsistent Name), and building the
+    # sdist fails because flit_core is not in that index.
+    pip install typing_extensions
+    # Pin torch to the version all previous DAIC results were produced with.
+    pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
     cd /opt/PAINT
     pip install -e ".[dev]"
     cd /opt/ARTIST
